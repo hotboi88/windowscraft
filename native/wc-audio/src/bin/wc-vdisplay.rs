@@ -3612,20 +3612,39 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
         *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
         Err((why, true))
     };
+    // (Windows can show a new monitor under a passing display name first and settle on its real
+    // one a moment later: wait for the one it switches on)
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut device = None;
+    let mut seen: Option<Instant> = None;
     while Instant::now() < deadline {
         if let Some(d) = device_for_index(idx) {
-            device = Some(d);
-            break;
+            let since = *seen.get_or_insert_with(Instant::now);
+            if attached(&d).0 || since.elapsed() > Duration::from_millis(1500) {
+                device = Some(d);
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let Some(device) = device else { return give_back("Windows didn't show the new monitor".into()) };
+    let Some(mut device) = device else { return give_back("Windows didn't show the new monitor".into()) };
     let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
     let r = match place(&device, w, h, hz, &ours) {
         Ok(r) => r,
-        Err(why) => return give_back(why),
+        Err(why) => {
+            // it may have moved to its real name meanwhile (and be on already)
+            match device_for_index(idx).filter(|d| !d.eq_ignore_ascii_case(&device)) {
+                Some(d2) => {
+                    eprintln!("info=the new monitor is {d2} now (not {device})");
+                    device = d2;
+                    match place(&device, w, h, hz, &ours) {
+                        Ok(r) => r,
+                        Err(why) => return give_back(why),
+                    }
+                }
+                None => return give_back(why),
+            }
+        }
     };
     eprintln!("info={}", fit_scale(&device, (r.bottom - r.top) as u32));
     // (now and then Windows lets a brand-new monitor go again a moment later — most of all the
