@@ -436,9 +436,16 @@ fn main() {
                             let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
                         }
                         let mut mine = Input::new();
-                        for l in rx {
-                            let q: Vec<&str> = l.split_whitespace().collect();
-                            handle(&mut mine, &q);
+                        loop {
+                            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                                Ok(l) => {
+                                    let q: Vec<&str> = l.split_whitespace().collect();
+                                    handle(&mut mine, &q);
+                                }
+                                // (nothing from them: still, the moment you use that app yourself, let go)
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => mine.yield_to_owner(),
+                                Err(_) => break,
+                            }
                         }
                         mine.blur();
                         mine.leave();
