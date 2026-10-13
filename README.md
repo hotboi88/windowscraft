@@ -138,6 +138,15 @@ taskbar and Start menu. Press **U** again to turn it off. **Sneak + U** opens th
 on it (what's open on it, who can use it, its size). Sneak + U on an idle wall shares a window or
 one of your real screens instead, as before.
 
+- **Sit-down view, pixel for pixel**: sit down at your own in-game monitor (**O**) and, once
+  you're seated, it's shown flat on your screen exactly like a real monitor — no 3D wall,
+  shaders or compression in between, about one frame of delay. **Alt + scroll** out (or look
+  around with Alt) to see the room; **Esc** gets you up. Joined monitors: moving onto the next one
+  switches the view to it. Turn it off in the menu (In-game monitors → "Sit-down view").
+- **File Explorer and Task Manager** open on the monitor you open them from, like any app.
+  (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
+  while in-game monitors are on it starts with your normal rights instead — no permission
+  prompt — and goes back to normal when they turn off.)
 - **Its own taskbar**: while an in-game monitor is on, Windows' own setting "show taskbar apps on
   the taskbar where the window is open" is on, so its taskbar only knows the apps on it (Brave
   open on your desk doesn't show as open there, and hovering shows no previews of it) and your
@@ -326,6 +335,21 @@ Cobbleverse's Sodium 0.8.12 + Iris 1.8.14 and Complementary Reimagined.
   None of them slows down the stream other players watch.
 - **No see-through specks**: whatever transparency an app leaves in its pixels is ignored; screens
   are always opaque.
+
+### When your PC or the connection is busy
+
+- **Screens nobody is watching** don't send anything (no encoding, no upload); they start again
+  within a second or two when someone looks at them. Other players only download the screens in
+  front of them or close by.
+- **Your upload is shared** among the screens people are watching (10 Mbit/s in all by default,
+  `uploadKbps` in `config/windowscraft/settings.json`), so several monitors at once don't flood
+  your connection — and Minecraft itself stays smooth for everyone.
+- **Busy guard**: if the game world starts lagging (the server can't keep 20 ticks a second) or
+  your frame rate drops low while your screens are being sent, they send lighter pictures by
+  themselves, and go back up once things are calm.
+- **A lost piece of the picture** costs a short glitch that clears within a second, not a frozen
+  picture. Tested over imitated home connections: on a good or typical connection a film plays
+  without pauses; on a connection barely faster than the stream, the stream steps down.
 
 ## Good to know
 

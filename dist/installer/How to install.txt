@@ -1,4 +1,4 @@
-WindowsCraft 0.14.3 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.14.4 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
 1. Close Minecraft.
 2. Right-click this zip and choose "Extract All...", then open the extracted folder.
@@ -7,15 +7,16 @@ WindowsCraft 0.14.3 (screens, in-game monitors, gaming monitors and tablets for 
 4. Start Cobbleverse and join the server as usual.
 
 The server needs this version too: put the same windowscraft .jar into the server's "mods"
-folder (delete the old windowscraft .jar there) and restart it. Anyone already on 0.14.2 is
-offered this update in chat when they join, and it updates itself (anyone older than 0.14.2
-installs it by hand once, like this).
+folder (delete the old windowscraft .jar there) and restart it. Anyone already on 0.14.2 or
+newer is offered this update in chat when they join, and it updates itself (anyone older than
+0.14.2 installs it by hand once, like this).
 
 U anywhere: the WindowsCraft menu - all your screens (what's open on them, who can use them,
 their size and picture) and the settings.
 In-game monitor: look at a black concrete wall or a gaming monitor block and press U (the first
 time it offers to install a free display driver). Press O to sit down and use it with your real
-mouse and keyboard; Esc gets up. U again turns it off; sneak + U opens the menu on it.
+mouse and keyboard - it's then shown flat on your screen, pixel for pixel, like a real monitor
+(Alt + scroll out to see the room); Esc gets up. U again turns it off; sneak + U opens its menu.
 Gaming monitors and tablets: creative tab "WindowsCraft" (or craft them). A gaming monitor faces
 you when placed (8 directions). Placed against the side, top or bottom of another one it joins it
 (no stand, edge to edge, angled toward you; sneak while placing to keep it flat) - joined monitors
