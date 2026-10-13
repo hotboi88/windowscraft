@@ -39,7 +39,7 @@ jobs:
           gradle-version: '8.14.3'
       - name: Display and build
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb ffmpeg > /dev/null
           nproc
           gradle build -x test --no-daemon -q
           gradle downloadAssets --no-daemon -q
