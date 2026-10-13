@@ -303,7 +303,9 @@ impl Vdd {
     }
 
     fn ping(&self) {
-        let _ = self.ioctl(IOCTL_UPDATE, &[]);
+        if self.ioctl(IOCTL_UPDATE, &[]).is_none() {
+            PING_FAILS.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     fn add(&self) -> Option<i32> {
@@ -991,6 +993,7 @@ fn desk_spot(h: HWND) -> RECT {
 static SEATED: AtomicBool = AtomicBool::new(false);
 static LAST_IOCTL: Mutex<String> = Mutex::new(String::new());
 static IOCTL_GATE: Mutex<()> = Mutex::new(());
+static PING_FAILS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static SERIAL: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_SERIAL").map_or(false, |v| v == "1"));
 static COOLDOWN_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_COOLDOWN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500));
 static PING_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_PING_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50));
@@ -3011,7 +3014,9 @@ fn main() {
                             if g.get(&i).map_or(false, |a| a.device == dev) {
                                 g.remove(&i);
                                 drop(g);
-                                eprintln!("error=in-game monitor {i} ({dev}) went away by itself");
+                                let pings = PING_FAILS.load(Ordering::SeqCst);
+                                eprintln!("error=in-game monitor {i} ({dev}) went away by itself (driver {}, Windows has {} screens, {} failed pings so far, last call: {})",
+                                    driver_status(), monitors().len(), pings, LAST_IOCTL.lock().unwrap());
                                 emit(&format!("gone {i}"));
                             }
                         }
@@ -3071,73 +3076,25 @@ fn main() {
                     say("fail the in-game monitor driver isn't ready");
                     continue;
                 };
-                remove_orphans(&v, &added);
-                // (right after a monitor went away the driver is still busy with it: asking it for
-                // a new one too soon can upset it — so a moment's rest first, and gentle retries)
-                let since_change = LAST_DRIVER_CHANGE.lock().unwrap().map_or(Duration::from_secs(60), |t| t.elapsed());
-                let rest = Duration::from_millis(*COOLDOWN_MS);
-                if since_change < rest {
-                    std::thread::sleep(rest - since_change);
-                }
-                let mut got = None;
-                for attempt in 1..=3u64 {
-                    if let Some(i) = v.add() {
-                        got = Some(i);
-                        break;
-                    }
-                    eprintln!("info=the driver didn't add a monitor (try {attempt}: {}); trying again", LAST_IOCTL.lock().unwrap());
-                    if driver_status() != "ok" {
-                        break; // (it has a problem now: retrying won't help)
-                    }
-                    std::thread::sleep(Duration::from_millis(1500 * attempt));
-                }
-                *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
-                let Some(idx) = got else {
-                    say("fail the driver didn't add a monitor");
-                    continue;
-                };
-                // (the driver gave us a number we still had: that monitor is gone already)
-                let old = added.lock().unwrap().remove(&idx);
-                if let Some(o) = old {
-                    eprintln!("error=in-game monitor {idx} ({}) had gone away by itself", o.device);
-                    emit(&format!("gone {idx}"));
-                }
-                // the keep-alive covers it from now on
-                added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime() });
-                let deadline = Instant::now() + Duration::from_secs(8);
-                let mut device = None;
-                while Instant::now() < deadline {
-                    if let Some(d) = device_for_index(idx) {
-                        device = Some(d);
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                let Some(device) = device else {
-                    v.remove(idx);
-                    added.lock().unwrap().remove(&idx);
-                    say("fail Windows didn't show the new monitor");
-                    continue;
-                };
-                let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
-                match place(&device, w, h, hz, &ours) {
-                    Ok(r) => {
-                        eprintln!("info={}", fit_scale(&device, (r.bottom - r.top) as u32));
-                        let r = rect_of(&device).unwrap_or(r);
-                        let since = added.lock().unwrap().get(&idx).map_or_else(now_filetime, |a| a.since);
-                        added.lock().unwrap().insert(idx, Added { device: device.clone(), since });
-                        taskbars_separate(true);
-                        ensure_placer();
-                        rearrange_with(&added, idx);
-                        let r = rect_of(&device).unwrap_or(r);
-                        say(&format!("added {idx} {device} {} {} {} {}", r.left, r.top, r.right - r.left, r.bottom - r.top));
-                    }
-                    Err(why) => {
-                        v.remove(idx);
-                        added.lock().unwrap().remove(&idx);
-                        say(&format!("fail {why}"));
+                // (a monitor that Windows doesn't switch on, or that goes away again right after,
+                // is given back and a fresh one asked for — once)
+                let mut answer = String::new();
+                for attempt in 1..=2 {
+                    match add_monitor(&v, &added, w, h, hz) {
+                        Ok(a) => {
+                            answer = a;
+                            break;
+                        }
+                        Err((why, again)) => {
+                            answer = format!("fail {why}");
+                            if !again || attempt == 2 {
+                                break;
+                            }
+                            eprintln!("info=trying a fresh monitor ({why})");
+                        }
                     }
                 }
+                say(&answer);
             }
             Some("remove") => {
                 let idx = n(1) as i32;
@@ -3346,6 +3303,75 @@ fn uninstaller_exe(cmd: &str) -> String {
 /// The driver's monitors this helper doesn't know of (left from before: a removal that didn't take,
 /// or an earlier game): they'd stay on as long as we keep the driver alive, and take a screen
 /// Windows could use for a new one.
+/// One new monitor, placed: the "added …" answer, or why not (and whether a fresh one may work).
+fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<String, (String, bool)> {
+    remove_orphans(v, added);
+    // (right after a monitor went away the driver is still busy with it: asking it for a new one
+    // too soon can upset it — so a moment's rest first, and gentle retries)
+    let since_change = LAST_DRIVER_CHANGE.lock().unwrap().map_or(Duration::from_secs(60), |t| t.elapsed());
+    let rest = Duration::from_millis(*COOLDOWN_MS);
+    if since_change < rest {
+        std::thread::sleep(rest - since_change);
+    }
+    let mut got = None;
+    for attempt in 1..=3u64 {
+        if let Some(i) = v.add() {
+            got = Some(i);
+            break;
+        }
+        eprintln!("info=the driver didn't add a monitor (try {attempt}: {}); trying again", LAST_IOCTL.lock().unwrap());
+        if driver_status() != "ok" {
+            break; // (it has a problem now: retrying won't help)
+        }
+        std::thread::sleep(Duration::from_millis(1500 * attempt));
+    }
+    *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
+    let Some(idx) = got else { return Err(("the driver didn't add a monitor".into(), false)) };
+    // (the driver gave us a number we still had: that monitor is gone already)
+    let old = added.lock().unwrap().remove(&idx);
+    if let Some(o) = old {
+        eprintln!("error=in-game monitor {idx} ({}) had gone away by itself", o.device);
+        emit(&format!("gone {idx}"));
+    }
+    // the keep-alive covers it from now on
+    added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime() });
+    let give_back = |why: String| {
+        v.remove(idx);
+        added.lock().unwrap().remove(&idx);
+        *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
+        Err((why, true))
+    };
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut device = None;
+    while Instant::now() < deadline {
+        if let Some(d) = device_for_index(idx) {
+            device = Some(d);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let Some(device) = device else { return give_back("Windows didn't show the new monitor".into()) };
+    let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
+    let r = match place(&device, w, h, hz, &ours) {
+        Ok(r) => r,
+        Err(why) => return give_back(why),
+    };
+    eprintln!("info={}", fit_scale(&device, (r.bottom - r.top) as u32));
+    // (now and then Windows lets a brand-new monitor go again a moment later: make sure it stays)
+    std::thread::sleep(Duration::from_millis(800));
+    if !device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device)) || rect_of(&device).is_none() {
+        eprintln!("error=the new monitor {device} went away again right after it came on");
+        return give_back("Windows switched the new monitor off again".into());
+    }
+    let since = added.lock().unwrap().get(&idx).map_or_else(now_filetime, |a| a.since);
+    added.lock().unwrap().insert(idx, Added { device: device.clone(), since });
+    taskbars_separate(true);
+    ensure_placer();
+    rearrange_with(added, idx);
+    let r = rect_of(&device).unwrap_or(r);
+    Ok(format!("added {idx} {device} {} {} {} {}", r.left, r.top, r.right - r.left, r.bottom - r.top))
+}
+
 fn remove_orphans(v: &Vdd, added: &AddedMap) {
     for i in 0..16 {
         if added.lock().unwrap().contains_key(&i) {

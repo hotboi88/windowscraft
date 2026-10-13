@@ -328,11 +328,11 @@ public final class WinGameTest implements ClientModInitializer {
         StringBuilder sb = new StringBuilder();
         for (Display d : DisplayManager.get().all()) {
             if (!InGameMonitors.isOn(d)) continue;
-            String desc = d.share().describe();
-            var m = java.util.regex.Pattern.compile("capture (\\d+) pictures/s").matcher(desc);
-            double fps = m.find() ? Double.parseDouble(m.group(1)) : 0;
-            if (fps <= 0) ok = false;
-            sb.append(" | ").append(desc);
+            // (a still desktop sends no new pictures: what counts is that it has one)
+            var ses = d.session();
+            boolean has = ses != null && ses.outputWidth() > 0 && ses.state() != dev.windowscraft.capture.CaptureSession.State.ENDED;
+            if (!has) ok = false;
+            sb.append(" | ").append(has ? "has a picture " : "NO PICTURE ").append(ses == null ? "" : ses.state() + " ").append(d.share().describe());
         }
         check(ok, what + sb);
     }
