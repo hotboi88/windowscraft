@@ -27,6 +27,8 @@ import net.minecraft.util.math.Direction;
  * wall, receive audio, and measure the audio/video offset.
  */
 public final class MultiplayerTest implements ClientModInitializer {
+    private long[] lossStart;
+
     private String role;
     private int tick = -1;
     private final List<Double> syncOffsets = new ArrayList<>();
@@ -220,6 +222,22 @@ public final class MultiplayerTest implements ClientModInitializer {
             long want = new java.io.File(jar.isEmpty() ? "?" : jar).length();
             check(mc, got.size() == 1 && size > 0 && size == want, "an update from the server was downloaded whole (" + got + ", " + size + " of " + want + " bytes)");
             for (java.nio.file.Path p : got) p.toFile().delete(); // (a test: nothing to put in place)
+        }
+        // a bad connection: pieces get lost on the way (more than resending can make up for).
+        // The picture must keep going (the last good one held, never smeared), and Alice's
+        // stream should be asked to send less
+        if (tick == 760 && sub != null) {
+            lossStart = new long[]{sub.framesDecoded(), sub.skippedPieces()};
+            dev.windowscraft.relay.UdpReceiver.testLoss = 0.25;
+            log("losing a quarter of the picture packets on the way");
+        }
+        if (tick == 820) shot(mc, "mp_viewer_lossy");
+        if (tick == 860 && sub != null && lossStart != null) {
+            dev.windowscraft.relay.UdpReceiver.testLoss = 0;
+            long frames = sub.framesDecoded() - lossStart[0], lost = sub.skippedPieces() - lossStart[1];
+            check(mc, lost > 0, "the lossy connection really lost pieces: " + lost + " (" + sub.transport() + ")");
+            check(mc, frames > 20, "the picture kept going through it: " + frames + " pictures in 5 s");
+            check(mc, sub.lossTroubleSent(), "the owner was asked for a lighter stream");
         }
         if (tick == 900) shot(mc, "mp_viewer_front");
         if (tick == 910 && r != null) mc.setScreen(new dev.windowscraft.ui.RemoteOptionsScreen(r));

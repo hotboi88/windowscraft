@@ -38,6 +38,9 @@ public final class UdpReceiver implements AutoCloseable {
     private long lastPing, lastAck, lastHello;
 
     public volatile long received, recovered, skipped;
+    /** Tests: this share of incoming picture packets is "lost on the way" (0..1). */
+    public static volatile double testLoss;
+    private final java.util.Random lossDice = new java.util.Random(7);
 
     public UdpReceiver(InetSocketAddress relay, long session) throws IOException {
         this.session = session;
@@ -64,10 +67,10 @@ public final class UdpReceiver implements AutoCloseable {
 
     /** How long a gap may hold the stream up before it's skipped. */
     public long latencyMs() {
-        // enough for one resend of a lost piece (a round trip) with room to spare — no more: every
-        // millisecond here is a millisecond everyone watching (and using it) is behind
+        // time for a lost piece to be asked for and sent again — twice — before giving up on it
+        // (a piece given up on costs a frozen picture until the next keyframe: worth a little delay)
         double r = rttMs < 0 ? 150 : rttMs;
-        return (long) Math.max(90, Math.min(800, r * 1.6 + 50));
+        return (long) Math.max(140, Math.min(1000, r * 2.5 + 70));
     }
 
     /** The stream, in order. Ends when this receiver is closed. */
@@ -146,6 +149,7 @@ public final class UdpReceiver implements AutoCloseable {
         switch (type) {
             case UdpLink.DATA -> {
                 if (len < UdpLink.HEADER) return;
+                if (testLoss > 0 && lossDice.nextDouble() < testLoss) return;
                 int seq = b.getInt();
                 b.getInt(); // (sender time: unused)
                 received++;

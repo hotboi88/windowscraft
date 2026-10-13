@@ -107,6 +107,13 @@ public final class StreamSubscriber implements FrameSource {
         return u != null ? String.format(Locale.ROOT, "UDP (round trip %.0f ms, %d lost bits recovered, %d skipped)", u.rttMs(), u.recovered, u.skipped) : "TCP";
     }
 
+    /** Picture pieces given up on (they never arrived in time). */
+    public long skippedPieces() { var u = udp; return u == null ? 0 : u.skipped; }
+    private volatile boolean lossTroubleSent;
+    private volatile long lastLossTroubleNanos;
+    /** Tests: has this viewer asked the owner for a lighter stream because pieces got lost? */
+    public boolean lossTroubleSent() { return lossTroubleSent; }
+
     /** Tests: behave as if this PC had just fallen behind. */
     public void testFallBehind() { fellBehind(); }
 
@@ -225,8 +232,9 @@ public final class StreamSubscriber implements FrameSource {
         ArrayDeque<RelayServer.Chunk> queue = new ArrayDeque<>();
         long[] queuedBytes = {0};
         double[] byteRate = {0}; // incoming bytes/s, smoothed
+        TsSplitter splitter = new TsSplitter();
+        dev.windowscraft.relay.UdpReceiver rxNow = udp;
         daemon("viewer net", () -> {
-            TsSplitter splitter = new TsSplitter();
             byte[] buf = new byte[64 * 1024];
             long t0 = System.nanoTime(), windowBytes = 0;
             try {
@@ -254,6 +262,11 @@ public final class StreamSubscriber implements FrameSource {
         });
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
+            // a piece of the picture never arrived: the pictures after it would be smeared and
+            // streaky until the next keyframe — show the last good one until then instead (the
+            // sound carries on), and if it keeps happening, ask the owner to send less
+            boolean lostUntilKey = false;
+            long seenSkipped = rxNow != null ? rxNow.skipped : 0, lossWindowStart = System.nanoTime(), lossesInWindow = 0;
             try {
                 while (running) {
                     RelayServer.Chunk c;
@@ -271,6 +284,28 @@ public final class StreamSubscriber implements FrameSource {
                     if (waitForKey) {
                         if (!c.keyframe()) continue;
                         waitForKey = false;
+                    }
+                    if (rxNow != null && rxNow.skipped != seenSkipped) {
+                        lossesInWindow += rxNow.skipped - seenSkipped;
+                        seenSkipped = rxNow.skipped;
+                        lostUntilKey = true;
+                        long now = System.nanoTime();
+                        if (now - lossWindowStart > 10_000_000_000L) { lossWindowStart = now; lossesInWindow = 0; }
+                        else if (lossesInWindow >= 6 && reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
+                            lastLossTroubleNanos = now;
+                            WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way; asking for a lighter stream", streamId.substring(0, 8));
+                            ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_NETWORK);
+                            lossTroubleSent = true;
+                        }
+                    }
+                    if (lostUntilKey && c.keyframe()) lostUntilKey = false;
+                    if (lostUntilKey) {
+                        byte[] rest = TsSplitter.without(c.data(), splitter.videoPid());
+                        if (rest.length > 0) {
+                            ffIn.write(rest);
+                            ffIn.flush();
+                        }
+                        continue;
                     }
                     ffIn.write(c.data());
                     ffIn.flush();

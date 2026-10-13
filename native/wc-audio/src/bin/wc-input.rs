@@ -89,6 +89,15 @@ impl Input {
         }
     }
 
+    /// The person at the PC is using this app right now (it's in front): our shared key state
+    /// mustn't mix into their typing (a guest's held Shift would be theirs too), so we let go of
+    /// it — the guest's input then goes as messages only.
+    fn yield_to_owner(&mut self) {
+        if self.attached && self.valid() && unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) } == self.thread {
+            self.detach();
+        }
+    }
+
     fn detach(&mut self) {
         if self.attached {
             unsafe {
@@ -468,6 +477,7 @@ fn main() {
 /// One command for one person's input.
 fn handle(input: &mut Input, p: &[&str]) {
     let f = |i: usize| p.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    input.yield_to_owner();
     match p.first().copied() {
         Some("target") => {
             let h = p.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);

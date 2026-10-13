@@ -1208,6 +1208,26 @@ fn guests(rep: &mut Report, dir: &std::path::Path, rb: &RECT) {
             rep.check("…and one clicking never lets go of the other's held button", held, format!("{l1:?}"));
             rep.check("…and your own cursor and window never moved", cursor() == my_cursor && foreground_root() == my_front,
                 format!("cursor {:?} → {:?}; front {} → {}", my_cursor, cursor(), title(my_front), title(foreground_root())));
+            // a guest still holds Shift on their window when you sit down and type there yourself:
+            // your typing is yours (no stuck Shift from them)
+            {
+                let s = inp.stdin.as_mut().unwrap();
+                let _ = writeln!(s, "slot 1 key down 42"); // left Shift, held
+                let _ = s.flush();
+            }
+            sleep(300);
+            bring_forward(w1);
+            let r1 = rect_of(w1);
+            unsafe {
+                let _ = SetCursorPos((r1.left + r1.right) / 2, (r1.top + r1.bottom) / 2);
+            }
+            click(false);
+            sleep(200);
+            LOG.lock().unwrap().clear();
+            key(VK_A);
+            sleep(400);
+            let chars: Vec<usize> = LOG.lock().unwrap().iter().filter(|(h, m, _)| *h == w1.0 as isize && *m == WM_CHAR).map(|(_, _, c)| *c).collect();
+            rep.check("a guest's held key never mixes into your own typing", chars == vec![0x61], format!("you typed a, the app got {chars:?}"));
             drop(inp.stdin.take());
             let _ = inp.wait();
         }

@@ -746,6 +746,8 @@ public final class AutoTest implements ClientModInitializer {
         mc.getServer().execute(() -> {
             sw.getGameRules().get(GameRules.DO_DAYLIGHT_CYCLE).set(false, mc.getServer());
             sw.setTimeOfDay(6000);
+            // (what the joined-monitors part built last time goes: it stands in front of the wall)
+            for (BlockPos q : BlockPos.iterate(-3, ground + 1, -7, 4, ground + 5, -5)) sw.setBlockState(q, Blocks.AIR.getDefaultState());
             // 7×4 wall facing south (toward the player)
             for (int x = -3; x <= 3; x++) for (int y = 1; y <= 4; y++)
                 sw.setBlockState(new BlockPos(x, ground + y, -8), Blocks.BLACK_CONCRETE.getDefaultState());
@@ -755,6 +757,7 @@ public final class AutoTest implements ClientModInitializer {
             for (int z = -7; z <= -2; z++) for (int y = 1; y <= 3; y++)
                 sw.setBlockState(new BlockPos(9, ground + y, z), Blocks.BLACK_CONCRETE.getDefaultState());
             ServerPlayerEntity p = mc.getServer().getPlayerManager().getPlayerList().get(0);
+            p.getInventory().clear(); // (a tablet left in hand from last time would turn itself on)
             p.teleport(sw, 0.5, ground + 1, 0.5, 180f, 0f);
             try { // no slime or rain spoiling the run
                 mc.getServer().setDifficulty(net.minecraft.world.Difficulty.PEACEFUL, true);

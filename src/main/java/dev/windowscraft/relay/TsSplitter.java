@@ -72,6 +72,20 @@ public final class TsSplitter {
         if (run.size() >= MAX_RUN) flush(out);
     }
 
+    /** The video's PID once the tables have been seen (-1 before). */
+    public int videoPid() { return videoPid; }
+
+    /** The same run of packets without the ones of that PID (the sound and tables stay). */
+    public static byte[] without(byte[] data, int pid) {
+        if (pid < 0) return new byte[0];
+        ByteArrayOutputStream o = new ByteArrayOutputStream(data.length);
+        for (int i = 0; i + PACKET <= data.length; i += PACKET) {
+            int p = ((data[i + 1] & 0x1F) << 8) | (data[i + 2] & 0xFF);
+            if (p != pid) o.write(data, i, PACKET);
+        }
+        return o.toByteArray();
+    }
+
     private void flush(List<RelayServer.Chunk> out) {
         if (run.size() == 0) return;
         out.add(new RelayServer.Chunk(run.toByteArray(), runIsKey));
