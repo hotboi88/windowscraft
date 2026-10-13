@@ -40,6 +40,7 @@ public final class MultiplayerTest implements ClientModInitializer {
     public void onInitializeClient() {
         role = System.getProperty("windowscraft.autotest.role");
         if (role == null) return;
+        dev.windowscraft.client.BusyGuard.enabled = false; // (test machines draw slowly on purpose; the stream checks are about the network)
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
     }
 
