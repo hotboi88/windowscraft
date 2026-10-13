@@ -49,7 +49,7 @@ public final class VDisplayHelper implements MonitorBackend {
             // never wait forever: a helper that stops answering is restarted (everything waiting
             // on it gets an error to show, instead of U silently doing nothing)
             Process proc = process;
-            long secs = command.startsWith("install") || command.startsWith("uninstall") ? 600 : command.startsWith("add") ? 90
+            long secs = command.startsWith("install") || command.startsWith("uninstall") || command.startsWith("repair") ? 600 : command.startsWith("add") ? 90
                     : command.startsWith("setmode") || command.startsWith("seat") || command.startsWith("remove") ? 40 : 20;
             CompletableFuture.delayedExecutor(secs, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
                 if (f.isDone()) return;
@@ -258,6 +258,14 @@ public final class VDisplayHelper implements MonitorBackend {
 
     @Override public void unpoint() { send("unpoint"); }
     @Override public void release() { send("release"); }
+
+    @Override
+    public CompletableFuture<Driver> repair() {
+        return call("repair", "repair").thenApply(l -> {
+            String[] p = last(l).split(" ");
+            return p.length > 1 && p[1].equals("ok") ? Driver.OK : p.length > 2 && p[2].equals("restart") ? Driver.RESTART : Driver.ERROR;
+        });
+    }
 
     @Override
     public CompletableFuture<Void> arrange(String spec) {

@@ -660,7 +660,14 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // ---- the driver
     match h.call("status", "status", 15000) {
         Ok(l) => {
-            let s = l.last().cloned().unwrap_or_default();
+            let mut s = l.last().cloned().unwrap_or_default();
+            if s.starts_with("status error") {
+                // the driver got into trouble (in an earlier round, or earlier on this PC): Repair
+                let r = h.call("repair", "repair", 120000);
+                rep.check("\"Repair driver\" brings a driver with a problem back", r.as_ref().map_or(false, |l| l.last().map_or(false, |x| x.starts_with("repair ok"))),
+                    format!("{r:?}"));
+                s = h.call("status", "status", 15000).ok().and_then(|l| l.last().cloned()).unwrap_or_default();
+            }
             let ok = s.starts_with("status ok");
             rep.check("driver", ok, &s);
             if !ok {

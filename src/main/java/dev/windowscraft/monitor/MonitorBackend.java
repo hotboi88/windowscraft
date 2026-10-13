@@ -116,6 +116,9 @@ public interface MonitorBackend {
      */
     default CompletableFuture<Void> arrange(String spec) { return CompletableFuture.completedFuture(null); }
 
+    /** The driver got into trouble: restart it (Windows asks for permission). Completes with its state after. */
+    default CompletableFuture<Driver> repair() { return CompletableFuture.completedFuture(Driver.ERROR); }
+
     /** You're the one pointing (your clicks reach the monitor), or not (they're the game's). */
     default void pointMe(boolean me) {}
 

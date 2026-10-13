@@ -882,6 +882,13 @@ public final class InGameMonitors {
      * as administrator — Windows asks you first. Progress goes to {@code progress}; completes with
      * the driver's state afterwards. Any thread.
      */
+    /** Restarts the driver when Windows shows it with a problem. */
+    public static CompletableFuture<Driver> repairDriver() {
+        MonitorBackend b = backend();
+        if (b == null) return CompletableFuture.completedFuture(Driver.UNSUPPORTED);
+        return b.repair().thenApply(d -> driver = d);
+    }
+
     public static CompletableFuture<Driver> installDriver(Consumer<String> progress) {
         MonitorBackend b = backend();
         if (b == null) return CompletableFuture.completedFuture(Driver.UNSUPPORTED);

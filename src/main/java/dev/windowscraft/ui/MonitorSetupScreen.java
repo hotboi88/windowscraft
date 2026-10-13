@@ -74,8 +74,9 @@ public final class MonitorSetupScreen extends Screen {
                 l.add("(Display adapters), then press " + dev.windowscraft.WindowsCraftClient.keyName() + " again.");
             }
             default -> {
-                l.add("The display driver isn't working right now.");
-                l.add("Installing it again usually fixes that.");
+                l.add("The display driver isn't working right now (Windows shows it");
+                l.add("with a problem). \"Repair driver\" restarts it - Windows asks for");
+                l.add("permission. If that doesn't help, install it again.");
             }
         }
         return l;
@@ -95,14 +96,15 @@ public final class MonitorSetupScreen extends Screen {
         }
         if (busy) return;
         int by = py + ph - 28, bh = 20, x = px + pw - PAD;
-        String primary = state == Driver.RESTART || state == Driver.DISABLED ? null : "Install driver";
+        boolean repairFirst = state == Driver.ERROR && !repairTried;
+        String primary = state == Driver.RESTART || state == Driver.DISABLED ? null : repairFirst ? "Repair driver" : "Install driver";
         if (primary != null) {
             int w = textRenderer.getWidth(primary) + 22;
             x -= w;
             boolean hov = UiKit.inside(mx, my, x, by, w, bh);
             UiKit.round(g, x, by, w, bh, 3, hov ? UiKit.ACCENT_HOVER : UiKit.ACCENT);
             UiKit.text(g, textRenderer, primary, x + 11, by + 6, UiKit.TEXT);
-            hits.add(new Hit(x, by, w, bh, this::install));
+            hits.add(new Hit(x, by, w, bh, repairFirst ? this::repair : this::install));
             x -= 6;
         }
         if (existing == null || !existing.tablet) { // (a tablet only ever is an in-game monitor)
@@ -121,6 +123,26 @@ public final class MonitorSetupScreen extends Screen {
         if (chov) UiKit.round(g, cx, by, cw, bh, 3, UiKit.SURFACE_HOVER);
         UiKit.text(g, textRenderer, cancel, cx + 9, by + 6, chov ? UiKit.TEXT : UiKit.TEXT_2);
         hits.add(new Hit(cx, by, cw, bh, this::close));
+    }
+
+    private boolean repairTried;
+
+    private void repair() {
+        busy = true;
+        error = null;
+        repairTried = true;
+        progress = "Restarting the display driver… (Windows asks for permission)";
+        MinecraftClient mc = MinecraftClient.getInstance();
+        InGameMonitors.repairDriver().whenComplete((st, err) -> mc.execute(() -> {
+            busy = false;
+            if (err == null && st == Driver.OK) {
+                close();
+                InGameMonitors.turnOn(mc, dimension, rect, existing);
+                return;
+            }
+            if (err == null) state = st;
+            error = "That didn't fix it. Installing the driver again usually does.";
+        }));
     }
 
     private void install() {

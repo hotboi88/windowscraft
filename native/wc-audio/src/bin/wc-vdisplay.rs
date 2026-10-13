@@ -144,6 +144,39 @@ fn driver_status() -> &'static str {
     }
 }
 
+/// The driver's device instance id (ROOT\DISPLAY\0000), to restart it with.
+fn vdd_instance_id() -> Option<String> {
+    unsafe {
+        let set = SetupDiGetClassDevsW(Some(&DISPLAY_CLASS), PCWSTR::null(), None, DIGCF_PRESENT).ok()?;
+        let want = VDD_HARDWARE_ID.to_ascii_lowercase();
+        let mut i = 0;
+        let mut out = None;
+        loop {
+            let mut info = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+            if SetupDiEnumDeviceInfo(set, i, &mut info).is_err() {
+                break;
+            }
+            i += 1;
+            let mut buf = vec![0u8; 4096];
+            let mut ty = 0u32;
+            if SetupDiGetDeviceRegistryPropertyW(set, &info, SPDRP_HARDWAREID, Some(&mut ty), Some(&mut buf), None).is_err() {
+                continue;
+            }
+            let ids: Vec<u16> = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            if !ids.split(|&c| c == 0).any(|s| String::from_utf16_lossy(s).to_ascii_lowercase() == want) {
+                continue;
+            }
+            let mut id = [0u16; 512];
+            if CM_Get_Device_IDW(info.DevInst, &mut id, 0) == CR_SUCCESS {
+                out = Some(from_wide(&id));
+            }
+            break;
+        }
+        let _ = SetupDiDestroyDeviceInfoList(set);
+        out
+    }
+}
+
 /// The driver's control handle (opened for overlapped I/O, like the Parsec app does). Every
 /// call has its own OVERLAPPED, so the keep-alive never waits behind a slow call.
 struct Vdd {
@@ -3177,6 +3210,24 @@ fn main() {
                 let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
                 let ok = launch(idx, f.get(2).copied().unwrap_or(""), f.get(3).copied().unwrap_or(""), f.get(4).copied().unwrap_or(""));
                 say(if ok { "launched ok" } else { "launched failed" });
+            }
+            Some("repair") => {
+                // the driver got into trouble (Windows shows it with a problem): restart it, the
+                // way Device Manager's "disable, enable" would (Windows asks for permission)
+                shutdown_monitors(&vdd, &added, &homes);
+                *vdd.lock().unwrap() = None;
+                match vdd_instance_id() {
+                    None => say("repair failed missing"),
+                    Some(id) => {
+                        let (r, code) = run_elevated("pnputil.exe", &format!("/restart-device \"{id}\""));
+                        let t0 = Instant::now();
+                        while r == "ok" && driver_status() != "ok" && t0.elapsed() < Duration::from_secs(15) {
+                            std::thread::sleep(Duration::from_millis(250));
+                        }
+                        eprintln!("info=restarting the display driver ({id}): {r} {code}, now {}", driver_status());
+                        say(&format!("repair {} {}", if driver_status() == "ok" { "ok" } else { r }, driver_status()));
+                    }
+                }
             }
             Some("install") => {
                 let file = line.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
