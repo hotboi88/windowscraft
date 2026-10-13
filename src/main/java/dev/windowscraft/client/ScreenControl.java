@@ -184,7 +184,7 @@ public final class ScreenControl {
             pointed = seat;
         } else if (seatR != null) {
             pointedRemote = seatR;
-        } else if (mc.currentScreen == null) {
+        } else if (mc.currentScreen == null && !onOwnTablet(mc)) {
             Camera cam = mc.gameRenderer.getCamera();
             Vector3f f = cam.getHorizontalPlane();
             Vec3d from = cam.getPos(), dir = new Vec3d(f.x(), f.y(), f.z());
@@ -397,8 +397,11 @@ public final class ScreenControl {
             if (c.op() == Payloads.OP_STAND || !g.seated) dropGuest(d, m.from());
             return;
         }
-        if (g == null) {
-            guests.put(m.from(), g = new Guest(m.fromName()));
+        if (g == null) guests.put(m.from(), g = new Guest(m.fromName()));
+        // "… is using your screen" only once they really do something with it (a click, a key,
+        // sitting down) — never for just looking at it or pointing past it
+        boolean doing = c.op() == Payloads.OP_BUTTON_DOWN || c.op() == Payloads.OP_WHEEL || c.op() == Payloads.OP_SIT || c.op() == Payloads.OP_KEY_DOWN;
+        if (doing) {
             Long last = ANNOUNCED.get(m.from());
             if (mc.player != null && (last == null || System.nanoTime() - last > 60_000_000_000L)) {
                 ANNOUNCED.put(m.from(), System.nanoTime());
@@ -750,6 +753,17 @@ public final class ScreenControl {
     }
 
     private static boolean sneaking(MinecraftClient mc) { return mc.player != null && mc.player.isSneaking(); }
+
+    /**
+     * Holding your tablet (or using it): the walls around you aren't yours to point at — your
+     * clicks and Alt belong to the tablet, and nobody's screen thinks you're using it.
+     */
+    static boolean onOwnTablet(MinecraftClient mc) {
+        if (Tablet.raised()) return true;
+        if (dev.windowscraft.monitor.InGameMonitors.seated() != null && TheaterMode.controlled() == null) return true;
+        return mc.player != null && (dev.windowscraft.block.Monitors.isTablet(mc.player.getMainHandStack())
+                || dev.windowscraft.block.Monitors.isTablet(mc.player.getOffHandStack()));
+    }
 
     public static boolean onMouseButton(MinecraftClient mc, int button, int action) {
         // letting go always reaches the app that's holding the button, wherever you look now

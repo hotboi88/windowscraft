@@ -215,7 +215,11 @@ impl Vdd {
                 Some(&mut ov),
             );
             let mut n = 0u32;
-            let mut ok = GetOverlappedResultEx(self.handle, &ov, &mut n, 5000, false).is_ok();
+            let first = GetOverlappedResultEx(self.handle, &ov, &mut n, 5000, false);
+            if let Err(e) = &first {
+                *LAST_IOCTL.lock().unwrap() = format!("{code:#x}: {e}");
+            }
+            let mut ok = first.is_ok();
             if !ok {
                 // never return while the driver may still write into `out` / `ov`
                 let _ = CancelIoEx(self.handle, Some(&ov));
@@ -893,6 +897,9 @@ fn desk_spot(h: HWND) -> RECT {
 // never write to the game directly: they hand events to a writer thread.
 
 static SEATED: AtomicBool = AtomicBool::new(false);
+static LAST_IOCTL: Mutex<String> = Mutex::new(String::new());
+/// When you last used the Start menu or taskbar of the monitor you sit at.
+static SEAT_SHELL_AT: Mutex<Option<Instant>> = Mutex::new(None);
 static ALT: AtomicBool = AtomicBool::new(false);
 static ESC_HELD: AtomicBool = AtomicBool::new(false);
 static SEAT_DEVICE: Mutex<String> = Mutex::new(String::new());
@@ -957,6 +964,9 @@ const LLKHF_EXTENDED_BIT: u32 = 0x01;
 
 const LLKHF_INJECTED_BIT: u32 = 0x10;
 const LLMHF_INJECTED_BIT: u32 = 0x01;
+/// Marks the input this helper makes itself (so its hooks pass it by). Input other programs
+/// make — remote-desktop apps, accessibility tools, the self-test — counts like your own.
+const OUR_INPUT: usize = 0x5743_4D4F; // "WCMO"
 const WM_APP_RELEASE: u32 = WM_APP + 1;
 const MASK_KEY: u16 = 0xFF; // "no key": keeps a lone Alt from opening the app's menu bar
 
@@ -1025,7 +1035,7 @@ fn tap_mask_key() {
     let key = |up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
-            ki: KEYBDINPUT { wVk: VIRTUAL_KEY(MASK_KEY), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 },
+            ki: KEYBDINPUT { wVk: VIRTUAL_KEY(MASK_KEY), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: OUR_INPUT },
         },
     };
     unsafe {
@@ -1048,7 +1058,7 @@ fn release_from_hook(to_game: bool) {
 unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && SEATED.load(Ordering::SeqCst) {
         let k = unsafe { &*(l.0 as *const KBDLLHOOKSTRUCT) };
-        if k.flags.0 & LLKHF_INJECTED_BIT == 0 {
+        if k.flags.0 & LLKHF_INJECTED_BIT == 0 || k.dwExtraInfo != OUR_INPUT {
             let msg = w.0 as u32;
             let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             let vk = k.vkCode as u16;
@@ -1127,7 +1137,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
         // pointing with Alt: Alt was let go for the apps already; your real Alt's release ends it
         let k = unsafe { &*(l.0 as *const KBDLLHOOKSTRUCT) };
         let vk = k.vkCode as u16;
-        if k.flags.0 & LLKHF_INJECTED_BIT == 0 && ALT_SWALLOW.load(Ordering::SeqCst) && (vk == VK_LMENU.0 || vk == VK_RMENU.0 || vk == VK_MENU.0) {
+        if (k.flags.0 & LLKHF_INJECTED_BIT == 0 || k.dwExtraInfo != OUR_INPUT) && ALT_SWALLOW.load(Ordering::SeqCst) && (vk == VK_LMENU.0 || vk == VK_RMENU.0 || vk == VK_MENU.0) {
             let msg = w.0 as u32;
             if msg == WM_KEYUP || msg == WM_SYSKEYUP {
                 ALT_SWALLOW.store(false, Ordering::SeqCst);
@@ -1164,7 +1174,7 @@ fn button_of(msg: u32, data: u32) -> Option<(u8, bool)> {
 unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && POINTING.load(Ordering::SeqCst) && !SEATED.load(Ordering::SeqCst) {
         let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
-        if m.flags & LLMHF_INJECTED_BIT == 0 {
+        if m.flags & LLMHF_INJECTED_BIT == 0 || m.dwExtraInfo != OUR_INPUT {
             let msg = w.0 as u32;
             if msg == WM_MOUSEMOVE {
                 // your mouse keeps turning your view — measured from the mouse itself (raw input,
@@ -1207,7 +1217,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
     }
     if code == HC_ACTION as i32 && SEATED.load(Ordering::SeqCst) && ALT.load(Ordering::SeqCst) {
         let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
-        if m.flags & LLMHF_INJECTED_BIT == 0 {
+        if m.flags & LLMHF_INJECTED_BIT == 0 || m.dwExtraInfo != OUR_INPUT {
             match w.0 as u32 {
                 WM_MOUSEMOVE => {
                     let mut cur = POINT::default();
@@ -1432,7 +1442,7 @@ fn hook_thread() {
                 let known = seat_known().lock().unwrap().clone();
                 for h in app_windows() {
                     if !known.contains(&(h.0 as isize)) && !IsIconic(h).as_bool() && !on_area(h, &clip) {
-                        on_window_shown(h);
+                        on_window_shown(h, false);
                     }
                 }
             }
@@ -1619,14 +1629,14 @@ fn seat(idx: i32, device: &str, area: RECT, u: f64, v: f64, game: HWND) -> Resul
 fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: OUR_INPUT } },
     }
 }
 
 fn mouse_input(flags: MOUSE_EVENT_FLAGS, data: i32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: OUR_INPUT } },
     }
 }
 
@@ -2337,7 +2347,7 @@ fn monitor_area(idx: i32) -> Option<RECT> {
 }
 
 /// A window that just appeared: does it belong on a monitor? Then it goes there, not activated.
-fn on_window_shown(h: HWND) {
+fn on_window_shown(h: HWND, fresh: bool) {
     unsafe {
         if GetAncestor(h, GA_ROOT) != h || !IsWindowVisible(h).as_bool() {
             return;
@@ -2352,22 +2362,30 @@ fn on_window_shown(h: HWND) {
     }
     let p = pid(h);
     let mut target: Option<i32> = None;
-    // 1. started for a monitor by WindowsCraft (its Start menu, "Own Brave"…): there
-    {
+    let at = cursor_monitor();
+    let on_desk = at.is_none() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) && !game_in_front();
+    // 1. started for a monitor by WindowsCraft (its Start menu, "Own Brave"…): its first window
+    // goes there — once (what you open yourself afterwards follows the rules below)
+    if fresh && !on_desk {
         let mut launches = LAUNCHES.lock().unwrap();
         launches.retain(|l| Instant::now() < l.until);
         if !launches.is_empty() {
             if let Some((created, exe)) = process_info(p) {
-                for l in launches.iter() {
-                    if created >= l.since && exe != "explorer.exe" {
-                        owned().lock().unwrap().insert(p, l.idx); // a program started for that monitor: its windows live there
-                        target = Some(l.idx);
-                        break;
+                let hit = launches.iter().position(|l| {
+                    let same_exe = !l.exe.is_empty() && exe == l.exe;
+                    // a program started since (its own process: for Store apps, whose program we
+                    // don't know, any program that isn't part of Windows' shell)
+                    (created >= l.since && exe != "explorer.exe" && (same_exe || (l.exe.is_empty() && !is_shell(h))))
+                        // or one already running, opening the window for this start
+                        || (same_exe && !l.before.contains(&(h.0 as isize)))
+                });
+                if let Some(i) = hit {
+                    let l = launches.remove(i);
+                    if created >= l.since {
+                        owned().lock().unwrap().insert(p, l.idx); // a program started for that monitor: it lives there
                     }
-                    if !l.exe.is_empty() && exe == l.exe && !l.before.contains(&(h.0 as isize)) {
-                        target = Some(l.idx); // already running: the window it opened for this start
-                        break;
-                    }
+                    target = Some(l.idx);
+                    eprintln!("info=\"{}\" is the app started for in-game monitor {}", title(h), l.idx);
                 }
             }
         }
@@ -2375,9 +2393,7 @@ fn on_window_shown(h: HWND) {
     // 2. where YOU opened it: your real cursor is on an in-game monitor (you sit at it, or point
     // at it) → that monitor; it's on your own screens (Start, taskbar, desktop) → your desk, even
     // for an app that also has windows on a monitor, or one that remembers it was last on one
-    let at = cursor_monitor();
-    let on_desk = target.is_none() && at.is_none() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) && !game_in_front();
-    if target.is_none() {
+    if target.is_none() && fresh {
         if let Some(i) = at {
             let mut r = RECT::default();
             let big = unsafe { GetWindowRect(h, &mut r).is_ok() } && r.right - r.left >= 160 && r.bottom - r.top >= 120;
@@ -2388,19 +2404,24 @@ fn on_window_shown(h: HWND) {
     }
     // 3. you're playing (the game in front): something on a monitor opened it — a person using
     // it, or the app itself — so it stays with the monitor its program lives on
-    if target.is_none() && !on_desk {
+    if target.is_none() && !on_desk && fresh {
         target = owned().lock().unwrap().get(&p).copied().or_else(|| {
             let mine = monitor_of_window(h)?;
             let area = monitor_area(mine)?;
             app_windows().into_iter().any(|o| o != h && pid(o) == p && on_area(o, &area)).then_some(mine)
         });
     }
+    if fresh && monitor_of_window(h).is_some() != target.is_some() {
+        eprintln!("info=new window \"{}\" ({}): {} (cursor on {:?}, seated {}, pointing {}, game in front {}, on your desk {})", title(h), class_name(h),
+            target.map_or("your desk".to_string(), |i| format!("in-game monitor {i}")), at, SEATED.load(Ordering::SeqCst),
+            POINTING.load(Ordering::SeqCst), game_in_front(), on_desk);
+    }
     match target {
         Some(idx) => place_on(h, idx),
         None => {
             // nothing says it belongs on an in-game monitor, yet it opened on one (an app putting
             // itself back where it was last time): it goes to your desk
-            if monitor_of_window(h).is_some() && !is_overlay(h) && !is_shell(h) {
+            if fresh && monitor_of_window(h).is_some() && !is_overlay(h) && !is_shell(h) {
                 let home = primary_area();
                 eprintln!("info=\"{}\" opened on an in-game monitor by itself: moving it to your desk", title(h));
                 place_window(h, &home);
@@ -2474,6 +2495,11 @@ fn on_window_activated(h: HWND) {
     if cursor_monitor() != Some(idx) {
         return; // (you're on your own screens: what you bring forward there stays there)
     }
+    // only when you started it from the monitor's own Start or taskbar just now (not Alt+Tab,
+    // not an app bringing itself forward)
+    if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
+        return;
+    }
     let Some(area) = monitor_area(idx) else { return };
     if on_area(h, &area) || !app_windows().contains(&h) {
         return;
@@ -2515,11 +2541,14 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     if event == 0x0003 {
         let root = unsafe { GetAncestor(h, GA_ROOT) };
         if !root.0.is_null() && SEATED.load(Ordering::SeqCst) {
-            on_window_shown(root);
+            if is_shell(root) && on_area(root, &*CLIP.lock().unwrap()) {
+                *SEAT_SHELL_AT.lock().unwrap() = Some(Instant::now()); // (you're using the monitor's own Start or taskbar)
+            }
+            on_window_shown(root, false);
             on_window_activated(root);
         }
     } else if obj == 0 && child == 0 {
-        on_window_shown(h);
+        on_window_shown(h, true);
     }
 }
 
@@ -2891,7 +2920,18 @@ fn main() {
                     continue;
                 };
                 remove_orphans(&v, &added);
-                let Some(idx) = v.add() else {
+                // (right after a monitor went away the driver can still be busy: give it a moment)
+                let mut got = None;
+                for attempt in 1..=4 {
+                    if let Some(i) = v.add() {
+                        got = Some(i);
+                        break;
+                    }
+                    eprintln!("info=the driver didn't add a monitor (try {attempt}: {}); trying again", LAST_IOCTL.lock().unwrap());
+                    std::thread::sleep(Duration::from_millis(600 * attempt));
+                    v.ping();
+                }
+                let Some(idx) = got else {
                     say("fail the driver didn't add a monitor");
                     continue;
                 };

@@ -789,7 +789,10 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     let t0 = Instant::now();
     click(false);
     let got = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_LBUTTONUP));
-    rep.check("clicking on a monitor reaches the app under the cursor", got, format!("{:.0} ms", t0.elapsed().as_secs_f64() * 1000.0));
+    let under = root_at(tx, ty);
+    rep.check("clicking on a monitor reaches the app under the cursor", got, format!("{:.0} ms; under the cursor: {} \"{}\"; it got {:?}",
+        t0.elapsed().as_secs_f64() * 1000.0, class_name(under), title(under),
+        LOG.lock().unwrap().iter().filter(|(w, _, _)| *w == target.0 as isize).map(|(_, m, _)| *m).collect::<Vec<_>>()));
     // typing reaches it too
     LOG.lock().unwrap().clear();
     let t0 = Instant::now();

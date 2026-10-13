@@ -81,6 +81,7 @@ public final class Tablet {
         }
         Display d = DisplayManager.get().tablet(mc);
         if (d == null) return;
+        offByYou = sneaking;
         if (sneaking) {
             raiseWhenOn = false;
             if (InGameMonitors.isOn(d)) {
@@ -144,7 +145,25 @@ public final class Tablet {
     }
 
     /** Client tick. */
+    /** You turned it off yourself (sneak + right-click): it waits for your next right-click. */
+    private static boolean offByYou;
+    private static long heldSince, autoTriedAt;
+
     public static void tick(MinecraftClient mc) {
+        // your tablet is yours alone, and it's there whenever you hold one: holding a tablet for a
+        // moment turns your tablet's monitor on (one per person, whichever tablet you hold)
+        long now = System.nanoTime();
+        if (mc.player != null && mc.world != null && held(mc) != null && !offByYou && InGameMonitors.supported()) {
+            if (heldSince == 0) heldSince = now;
+            else if (now - heldSince > 1_000_000_000L && now - autoTriedAt > 30_000_000_000L) {
+                Display t = DisplayManager.get().tablet(mc);
+                if (t != null && !InGameMonitors.isOn(t) && !InGameMonitors.starting(t)) {
+                    autoTriedAt = now;
+                    follow(mc, t);
+                    InGameMonitors.turnOn(mc, t.dimension, t.rect, t);
+                }
+            }
+        } else heldSince = 0;
         Display d = display();
         if (d == null) {
             lower();
