@@ -96,6 +96,8 @@ public final class RelayServer implements AutoCloseable {
         long skips;
         final long connectedNanos = System.nanoTime();
         long lastSkipNanos;
+        volatile boolean udp;
+        volatile long lastTakenNanos = System.nanoTime();
         Subscriber(Socket socket) { this.socket = socket; }
 
         /**
@@ -255,12 +257,13 @@ public final class RelayServer implements AutoCloseable {
                         RelayProtocol.writeLine(out, "ERR not your screen");
                         return;
                     }
-                    publish(s, in, out, streamId, parts[1].equals("PUB2"));
+                    boolean tell = parts[1].equals("PUB2");
+                    onOwnThread("relay in " + streamId.substring(0, 8), () -> publish(s, in, out, streamId, tell));
                 }
                 case "SUB" -> subscribe(s, out, streamId);
                 case "SUBU" -> {
                     if (udp == null) RelayProtocol.writeLine(out, "ERR no UDP here");
-                    else subscribeUdp(s, in, out, streamId);
+                    else onOwnThread("relay out " + streamId.substring(0, 8), () -> subscribeUdp(s, in, out, streamId));
                 }
                 default -> RelayProtocol.writeLine(out, "ERR bad role");
             }
@@ -331,9 +334,13 @@ public final class RelayServer implements AutoCloseable {
                 if (!c.keyframe()) continue; // start everyone on a clean keyframe
                 sub.started = true;
             }
-            if (c.keyframe() && sub.keyframesQueued.get() > 0) {
+            // (over UDP the viewer has its own way to catch up: only skip it ahead when it's two
+            // whole start points behind)
+            if (c.keyframe() && sub.keyframesQueued.get() > (sub.udp ? 1 : 0)) {
+                long held = sub.queuedBytes.get();
                 sub.clear();
-                if (++sub.skips % 10 == 1) LOG.info("Viewer {} can't keep up with {}, skipping ahead (x{})", sub.socket.getRemoteSocketAddress(), streamId.substring(0, 8), sub.skips);
+                if (++sub.skips % 10 == 1) LOG.info("Viewer {} can't keep up with {}, skipping ahead (x{}; {} KB waiting, last sent {} ms ago)", sub.socket.getRemoteSocketAddress(),
+                        streamId.substring(0, 8), sub.skips, held / 1024, (System.nanoTime() - sub.lastTakenNanos) / 1_000_000L);
                 if (sub.skippedForReal()) viewerBehind.accept(streamId);
             }
             if (sub.queuedBytes.get() + c.data().length > SUBSCRIBER_BYTE_BUDGET || !sub.queue.offer(c)) {
@@ -378,6 +385,7 @@ public final class RelayServer implements AutoCloseable {
                 }
                 if (chunk == POISON_CHUNK) break;
                 idleSince = System.nanoTime();
+                sub.lastTakenNanos = idleSince;
                 sub.queuedBytes.addAndGet(-chunk.data().length);
                 if (chunk.keyframe()) sub.keyframesQueued.updateAndGet(k -> Math.max(0, k - 1));
                 out.write(chunk.data());
@@ -404,6 +412,7 @@ public final class RelayServer implements AutoCloseable {
             return;
         }
         Subscriber sub = new Subscriber(s);
+        sub.udp = true;
         UdpLink.Session ses = udp.open(() -> {
             LOG.info("Viewer {} keeps losing much of {} over UDP", s.getRemoteSocketAddress(), streamId.substring(0, 8));
             viewerBehind.accept(streamId);
@@ -439,6 +448,7 @@ public final class RelayServer implements AutoCloseable {
                 }
                 if (chunk == POISON_CHUNK) break;
                 idleSince = System.nanoTime();
+                sub.lastTakenNanos = idleSince;
                 sub.queuedBytes.addAndGet(-chunk.data().length);
                 if (chunk.keyframe()) sub.keyframesQueued.updateAndGet(k -> Math.max(0, k - 1));
                 ses.write(chunk.data());
@@ -452,6 +462,34 @@ public final class RelayServer implements AutoCloseable {
             control.interrupt();
             LOG.info("UDP viewer {} of {} left: {} packets, {} sent again", s.getRemoteSocketAddress(), streamId.substring(0, 8), ses.totalSent, ses.totalRetx);
         }
+    }
+
+    interface IoTask { void run() throws IOException; }
+
+    /**
+     * The live picture's own path through the relay runs on a thread of its own, first in line
+     * for the processor: the relay lives in the server, and a busy server (lots of players,
+     * mods, world generation) must never hold the picture up — a hold-up of a second means the
+     * viewer skips ahead, and that's a frozen moment on their screen.
+     */
+    private static void onOwnThread(String name, IoTask task) throws IOException {
+        IOException[] failed = {null};
+        Thread t = new Thread(() -> {
+            try {
+                task.run();
+            } catch (IOException e) {
+                failed[0] = e;
+            }
+        }, "WindowsCraft " + name);
+        t.setDaemon(true);
+        t.setPriority(Thread.MAX_PRIORITY);
+        t.start();
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            t.interrupt();
+        }
+        if (failed[0] != null) throw failed[0];
     }
 
     private static void closeQuietly(Socket s) {

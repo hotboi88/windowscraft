@@ -650,7 +650,10 @@ public final class StreamPublisher {
     private volatile boolean lossyViewer;
 
     /** Seconds between fresh start points (keyframes). */
-    private double keyEvery() { return lossyViewer ? 0.5 : 1.0; }
+    // (no more often for a lossy viewer: each start point is a big picture, and on a connection
+    // that's already struggling more of them only makes it worse — a lost piece now costs a
+    // short glitch that the next start point clears, not a frozen picture)
+    private double keyEvery() { return 1.0; }
 
     /** Turns the stream down one step and rebuilds it right away (the backlog goes with the old one). */
     private void lower(String why) throws IOException {

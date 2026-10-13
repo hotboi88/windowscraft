@@ -58,6 +58,7 @@ public final class UdpLink implements AutoCloseable {
         }
         Thread t = new Thread(this::receiveLoop, "WindowsCraft relay UDP");
         t.setDaemon(true);
+        t.setPriority(Thread.MAX_PRIORITY); // (resend requests answered at once, however busy the server)
         t.start();
     }
 
