@@ -65,6 +65,15 @@ loom {
             }
             programArgs "--quickPlaySingleplayer", "autotest", "--width", "1600", "--height", "900"
         }
+        // The real thing on Windows (the Windows game test on GitHub): real helper, real driver
+        wintest {
+            client()
+            name "Windows game test"
+            source sourceSets.testmod
+            runDir "run-wintest"
+            vmArg "-Dwindowscraft.wintest=true"
+            programArgs "--quickPlaySingleplayer", "wintest", "--width", "1280", "--height", "720"
+        }
         // Same world, with Cobbleverse's Sodium + Iris and a shader pack in run-iris/ (see README)
         irisTest {
             client()

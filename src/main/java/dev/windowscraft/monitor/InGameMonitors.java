@@ -937,11 +937,18 @@ public final class InGameMonitors {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
     }
 
+    /** Tests: every message these show you. */
+    public static volatile java.util.function.Consumer<String> testMessages;
+
     private static void hint(MinecraftClient mc, String msg) {
+        var t = testMessages;
+        if (t != null) t.accept(msg);
         if (mc.player != null) mc.player.sendMessage(Text.literal(msg).formatted(Formatting.GRAY), true);
     }
 
     private static void say(MinecraftClient mc, String msg, Formatting f) {
+        var t = testMessages;
+        if (t != null) t.accept(msg);
         if (mc.player != null) mc.player.sendMessage(Text.literal(msg).formatted(f), false);
     }
 
