@@ -50,9 +50,19 @@ public final class MultiplayerTest implements ClientModInitializer {
         else { log("CHECK FAILED: " + what); failed = true; }
     }
 
+    private boolean lightened;
+
     private void onTick(MinecraftClient mc) {
         if (mc.world == null || mc.player == null) return;
         tick++;
+        // the movie test measures the stream, not the game: the test players draw few frames so a
+        // small test machine has room for the encoder and decoder
+        if (!lightened && new java.io.File(mc.runDirectory.getParentFile(), "run-bob/movie.txt").exists()) {
+            lightened = true;
+            mc.options.getMaxFps().setValue(10);
+            mc.options.getViewDistance().setValue(2);
+            log("movie test: game drawing kept light (10 fps, view distance 2)");
+        }
         if (role.equals("sharer")) sharer(mc); else viewer(mc);
     }
 

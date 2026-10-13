@@ -8,11 +8,11 @@ OUT=${OUT:-build/movie}
 mkdir -p "$OUT"
 rm -f run-alice/config/windowscraft/displays.json run-bob/viewer-* run-bob/mods/*.wcupdate
 echo "$1" > run-bob/movie.txt
-gradle runMpServer --offline -q > "$OUT/server-$2.log" 2>&1 &
+gradle runMpServer ${GRADLE_FLAGS---offline} -q > "$OUT/server-$2.log" 2>&1 &
 for i in $(seq 1 240); do grep -q "Done (" "$OUT/server-$2.log" 2>/dev/null && break; sleep 1; done
-gradle runMpSharer -Pxdisplay="$DISPLAY" --offline -q > "$OUT/alice-$2.log" 2>&1 &
+gradle runMpSharer -Pxdisplay="$DISPLAY" ${GRADLE_FLAGS---offline} -q > "$OUT/alice-$2.log" 2>&1 &
 sleep 5
-gradle runMpViewer -Pxdisplay="$DISPLAY" --offline -q > "$OUT/bob-$2.log" 2>&1 &
+gradle runMpViewer -Pxdisplay="$DISPLAY" ${GRADLE_FLAGS---offline} -q > "$OUT/bob-$2.log" 2>&1 &
 BOB=$!
 wait $BOB
 for i in $(seq 1 60); do grep -q "SHARER DONE" "$OUT/alice-$2.log" 2>/dev/null && break; sleep 1; done

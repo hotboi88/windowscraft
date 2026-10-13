@@ -6,6 +6,12 @@ name: Windows self-test
 on:
   push:
     branches: [main]
+    paths:
+      - 'native/**'
+      - 'src/main/resources/windowscraft/natives/**'
+      - 'src/main/java/dev/windowscraft/monitor/**'
+      - 'src/main/java/dev/windowscraft/capture/**'
+      - '.github/workflows/windows-selftest.yml'
   workflow_dispatch:
 
 jobs:

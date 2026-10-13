@@ -6,6 +6,12 @@ name: Movie over a home link
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/main/java/dev/windowscraft/stream/**'
+      - 'src/main/java/dev/windowscraft/relay/**'
+      - 'src/testmod/java/dev/windowscraft/autotest/MultiplayerTest.java'
+      - 'tools/movie/**'
+      - '.github/workflows/movie-test.yml'
   workflow_dispatch:
 
 jobs:
@@ -35,11 +41,12 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
           nproc
           gradle build -x test --no-daemon -q
+          gradle downloadAssets --no-daemon -q
       - name: Movie
         run: |
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
-          DISPLAY=:99 OUT=build/movie tools/movie/run.sh "${{ matrix.link.cfg }} ${{ matrix.freeze }}" "${{ matrix.link.name }}-freeze-${{ matrix.freeze }}"
+          DISPLAY=:99 GRADLE_FLAGS= OUT=build/movie tools/movie/run.sh "${{ matrix.link.cfg }} ${{ matrix.freeze }}" "${{ matrix.link.name }}-freeze-${{ matrix.freeze }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

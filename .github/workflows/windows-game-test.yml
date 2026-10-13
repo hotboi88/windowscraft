@@ -7,6 +7,15 @@ name: Windows game test
 on:
   push:
     branches: [main]
+    paths:
+      - 'native/**'
+      - 'src/main/resources/windowscraft/natives/**'
+      - 'src/main/java/dev/windowscraft/monitor/**'
+      - 'src/main/java/dev/windowscraft/capture/**'
+      - '.github/workflows/windows-game-test.yml'
+      - 'src/main/java/**'
+      - 'src/testmod/java/dev/windowscraft/autotest/WinGameTest.java'
+      - 'tools/wintest/**'
   workflow_dispatch:
 
 jobs:
