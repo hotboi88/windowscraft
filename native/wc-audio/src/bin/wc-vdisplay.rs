@@ -3201,7 +3201,7 @@ fn main() {
                         }
                         let n = missing.entry(i).or_insert(0);
                         *n += 1;
-                        if *n >= 3 {
+                        if *n >= 4 {
                             missing.remove(&i);
                             let mut g = added.lock().unwrap();
                             if g.get(&i).map_or(false, |a| a.device == dev) {
@@ -3559,11 +3559,23 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     // first one in a while, while Windows sets itself up for monitors: make sure it stays)
     let first = added.lock().unwrap().values().all(|a| a.device.is_empty());
     let watch = Duration::from_millis(if first { 3000 } else { 800 });
+    // (while Windows rearranges its screens, a monitor can drop out of its lists for a moment
+    // and come straight back: only one that stays gone for over a second has really gone)
     let t_watch = Instant::now();
-    while t_watch.elapsed() < watch {
+    let mut missing_since: Option<Instant> = None;
+    while t_watch.elapsed() < watch || missing_since.is_some() {
         std::thread::sleep(Duration::from_millis(200));
-        if !device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device)) || rect_of(&device).is_none() {
-            eprintln!("error=the new monitor {device} went away again right after it came on");
+        let listed = device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device));
+        let placed_ = rect_of(&device).is_some();
+        if listed && placed_ {
+            if missing_since.take().is_some() {
+                eprintln!("info=the new monitor {device} dropped out of Windows' list for a moment and came back");
+            }
+            continue;
+        }
+        let since = *missing_since.get_or_insert_with(Instant::now);
+        if since.elapsed() > Duration::from_millis(1200) {
+            eprintln!("error=the new monitor {device} went away again right after it came on (listed {listed}, on the desktop {placed_})");
             return give_back("Windows switched the new monitor off again".into());
         }
     }
