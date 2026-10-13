@@ -7,9 +7,11 @@ cd "$(dirname "$0")/../.."
 OUT=${OUT:-build/movie}
 mkdir -p "$OUT"
 rm -f run-alice/config/windowscraft/displays.json run-bob/viewer-* run-bob/mods/*.wcupdate
-echo "$1" > run-bob/movie.txt
 # (the test server: offline names, the flat test world)
+mkdir -p run-mp-server run-alice run-bob
 [ -f run-mp-server/server.properties ] || cp tools/movie/server.properties run-mp-server/server.properties
+[ -f run-mp-server/eula.txt ] || echo "eula=true" > run-mp-server/eula.txt
+echo "$1" > run-bob/movie.txt
 gradle runMpServer ${GRADLE_FLAGS---offline} -q > "$OUT/server-$2.log" 2>&1 &
 for i in $(seq 1 240); do grep -q "Done (" "$OUT/server-$2.log" 2>/dev/null && break; sleep 1; done
 gradle runMpSharer -Pxdisplay="$DISPLAY" ${GRADLE_FLAGS---offline} -q > "$OUT/alice-$2.log" 2>&1 &
