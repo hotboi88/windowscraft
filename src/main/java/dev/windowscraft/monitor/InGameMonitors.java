@@ -57,6 +57,7 @@ public final class InGameMonitors {
     private static final Map<String, Integer> NUMBER = new ConcurrentHashMap<>();
     private static final Set<UUID> STARTING = new HashSet<>();
     private static final Set<String> RESTARTING = new HashSet<>();
+    private static final Map<UUID, List<Long>> REVIVED = new ConcurrentHashMap<>();
     private static final Map<String, Integer> MISSES = new ConcurrentHashMap<>();
     private static volatile Driver driver;
 
@@ -174,6 +175,11 @@ public final class InGameMonitors {
                     Throwable why = err instanceof java.util.concurrent.CompletionException && err.getCause() != null ? err.getCause() : err;
                     WindowsCraftClient.LOGGER.warn("In-game monitor couldn't be made", why);
                     say(mc, "Couldn't turn on the in-game monitor: " + why.getMessage(), Formatting.YELLOW);
+                    // the driver got into trouble? then the setup screen offers to repair it
+                    driver().thenAccept(now -> mc.execute(() -> {
+                        if (now != Driver.OK && mc.currentScreen == null)
+                            mc.setScreen(new dev.windowscraft.ui.MonitorSetupScreen(dimension, rect, existing, now));
+                    }));
                     return;
                 }
                 if (!DisplayManager.get().all().contains(d) || d.isLive() || mc.world == null) {
@@ -774,6 +780,35 @@ public final class InGameMonitors {
                     seatedOn = d;
                     TheaterMode.glideTo(d); // (your view goes along to it)
                     return;
+                }
+            });
+        }
+        @Override public void monitorGone(int index) {
+            onGame(() -> {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                for (Display d : List.copyOf(DisplayManager.get().all())) {
+                    Mon m = monitorOf(d);
+                    if (m == null || m.index() != index) continue;
+                    WindowsCraftClient.LOGGER.warn("In-game monitor {} ({}) went away by itself; turning it on again", index, m.device());
+                    if (seatedMon != null && seatedMon.index() == index) unseat();
+                    if (pointMon != null && pointMon.index() == index) { pointMon = null; pointOn = null; pointMe = false; pointReady = false; }
+                    SourceInfo src = d.share().source();
+                    LIVE.remove(src.id()); // (first: it's gone already, nothing to remove)
+                    NUMBER.remove(src.id());
+                    DisplayManager.get().stop(d);
+                    // the wall/monitor/tablet gets a fresh monitor of its own, as if you pressed U again
+                    long now = System.currentTimeMillis();
+                    List<Long> recent = REVIVED.computeIfAbsent(d.id, k -> new ArrayList<>());
+                    recent.removeIf(t -> now - t > 120_000);
+                    if (recent.size() >= 2) { // (it keeps happening: don't fight it)
+                        say(mc, "An in-game monitor keeps getting dropped by Windows. Press U on it to try again.", Formatting.YELLOW);
+                        continue;
+                    }
+                    recent.add(now);
+                    if (mc.world != null && DisplayManager.get().all().contains(d)) {
+                        hint(mc, "Windows dropped an in-game monitor - turning it back on…");
+                        turnOn(mc, d.dimension, d.rect, d);
+                    }
                 }
             });
         }

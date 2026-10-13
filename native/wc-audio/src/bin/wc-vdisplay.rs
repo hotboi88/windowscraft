@@ -273,6 +273,14 @@ impl Vdd {
                 let _ = CloseHandle(ev);
                 return Some(c.out);
             }
+            if let Err(e) = &first {
+                // the driver answered "no" (rather than not answering): the call is over
+                let code_ = (e.code().0 as u32) & 0xFFFF;
+                if code_ != WAIT_TIMEOUT.0 && code_ != ERROR_IO_INCOMPLETE.0 && code_ != ERROR_IO_PENDING.0 {
+                    let _ = CloseHandle(ev);
+                    return None;
+                }
+            }
             let _ = CancelIoEx(self.handle, Some(&c.ov));
             match GetOverlappedResultEx(self.handle, &c.ov, &mut n, 3000, false) {
                 Ok(()) => {
@@ -296,10 +304,6 @@ impl Vdd {
 
     fn ping(&self) {
         let _ = self.ioctl(IOCTL_UPDATE, &[]);
-    }
-
-    fn version(&self) -> u32 {
-        self.ioctl(IOCTL_VERSION, &[]).unwrap_or(0)
     }
 
     fn add(&self) -> Option<i32> {
@@ -2969,14 +2973,50 @@ fn main() {
     // behind another call: each has its own OVERLAPPED)
     {
         let (vdd, added) = (vdd.clone(), added.clone());
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(*PING_MS));
-            if added.lock().unwrap().is_empty() {
-                continue;
+        std::thread::spawn(move || {
+            // (first in line for the processor: a busy PC — a game drawing flat out — must never
+            // starve the pings, or the driver quietly drops a monitor)
+            unsafe {
+                let _ = windows::Win32::System::Threading::SetThreadPriority(
+                    windows::Win32::System::Threading::GetCurrentThread(), windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL);
             }
-            let v = vdd.lock().unwrap().clone();
-            if let Some(v) = v {
-                v.ping();
+            let mut missing: HashMap<i32, u32> = HashMap::new();
+            let mut last_look = Instant::now();
+            loop {
+                std::thread::sleep(Duration::from_millis(*PING_MS));
+                if added.lock().unwrap().is_empty() {
+                    missing.clear();
+                    continue;
+                }
+                let v = vdd.lock().unwrap().clone();
+                if let Some(v) = v {
+                    v.ping();
+                }
+                // a monitor of ours that Windows doesn't have any more went away by itself: say so
+                // (never let a new one quietly take its place under the old one's name)
+                if last_look.elapsed() >= Duration::from_millis(700) {
+                    last_look = Instant::now();
+                    let ours: Vec<(i32, String)> = added.lock().unwrap().iter().filter(|(_, a)| !a.device.is_empty()).map(|(i, a)| (*i, a.device.clone())).collect();
+                    for (i, dev) in ours {
+                        let now = device_for_index(i);
+                        if now.as_deref().map_or(false, |d| d.eq_ignore_ascii_case(&dev)) {
+                            missing.remove(&i);
+                            continue;
+                        }
+                        let n = missing.entry(i).or_insert(0);
+                        *n += 1;
+                        if *n >= 3 {
+                            missing.remove(&i);
+                            let mut g = added.lock().unwrap();
+                            if g.get(&i).map_or(false, |a| a.device == dev) {
+                                g.remove(&i);
+                                drop(g);
+                                eprintln!("error=in-game monitor {i} ({dev}) went away by itself");
+                                emit(&format!("gone {i}"));
+                            }
+                        }
+                    }
+                }
             }
         });
     }
@@ -3009,7 +3049,14 @@ fn main() {
                 let mut ver = 0;
                 if st == "ok" {
                     match driver_handle(&vdd) {
-                        Some(v) => ver = v.version(),
+                        // (a driver that doesn't answer is in trouble even if Windows says it's fine)
+                        Some(v) => match v.ioctl(IOCTL_VERSION, &[]) {
+                            Some(x) => ver = x,
+                            None => {
+                                say("status error 0");
+                                continue;
+                            }
+                        },
                         None => {
                             say("status error 0");
                             continue;
@@ -3049,6 +3096,12 @@ fn main() {
                     say("fail the driver didn't add a monitor");
                     continue;
                 };
+                // (the driver gave us a number we still had: that monitor is gone already)
+                let old = added.lock().unwrap().remove(&idx);
+                if let Some(o) = old {
+                    eprintln!("error=in-game monitor {idx} ({}) had gone away by itself", o.device);
+                    emit(&format!("gone {idx}"));
+                }
                 // the keep-alive covers it from now on
                 added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime() });
                 let deadline = Instant::now() + Duration::from_secs(8);

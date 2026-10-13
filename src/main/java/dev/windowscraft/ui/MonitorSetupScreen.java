@@ -74,9 +74,9 @@ public final class MonitorSetupScreen extends Screen {
                 l.add("(Display adapters), then press " + dev.windowscraft.WindowsCraftClient.keyName() + " again.");
             }
             default -> {
-                l.add("The display driver isn't working right now (Windows shows it");
-                l.add("with a problem). \"Repair driver\" restarts it - Windows asks for");
-                l.add("permission. If that doesn't help, install it again.");
+                l.add("The display driver isn't answering right now (it got stuck).");
+                l.add("\"Repair driver\" restarts it - Windows asks for permission.");
+                l.add("If that doesn't help, restart your PC or install it again.");
             }
         }
         return l;
@@ -141,7 +141,7 @@ public final class MonitorSetupScreen extends Screen {
                 return;
             }
             if (err == null) state = st;
-            error = "That didn't fix it. Installing the driver again usually does.";
+            error = "That didn't fix it. Restarting your PC (or installing again) does.";
         }));
     }
 

@@ -30,6 +30,8 @@ public interface MonitorBackend {
         void recenter();
         /** The helper stopped: every monitor it made is gone. */
         void lost();
+        /** That one monitor went away by itself (Windows or the driver dropped it). */
+        default void monitorGone(int index) {}
         /** Pointing: your own click (or release) while someone else points — it belongs to the game. */
         default void mouseButton(int button, boolean down) {}
         /** Pointing: your own wheel while someone else points — it belongs to the game. */

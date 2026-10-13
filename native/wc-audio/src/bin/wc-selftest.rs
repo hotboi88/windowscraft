@@ -376,7 +376,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 14] = ["esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 15] = ["gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -661,6 +661,7 @@ fn windows_version() -> String {
 fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: RECT, me: &std::path::Path, shot: &dyn Fn(&str)) {
     let vexe = dir.join("wc-vdisplay.exe");
     let Ok(h) = Helper::start(&vexe).map_err(|e| rep.check("helper starts", false, e)) else { return };
+    let t_round = Instant::now();
     // ---- the driver
     match h.call("status", "status", 15000) {
         Ok(l) => {
@@ -1029,6 +1030,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     rep.check("adding and removing a monitor five times in a row", cycle_errors.is_empty(), format!("{cycle_errors:?}"));
     let left = monitors().len();
     rep.check("…leaves no monitor behind", left == real.len() + 1, format!("{left} screens now: yours + B"));
+    let gone: Vec<String> = h.events_since(t_round).into_iter().filter(|e| e.starts_with("gone")).collect();
+    rep.check("no monitor ever went away by itself (or it was noticed)", gone.is_empty() && left == real.len() + 1, format!("{gone:?}"));
     // a new monitor is new: Windows mustn't bring back what an old one had (its size, scale, spot)
     match add(&h, 1920, 1080) {
         Ok(m) => {
@@ -1354,6 +1357,7 @@ fn stress(dir: &std::path::Path, n: u32, with_b: bool, pause: u64) {
         println!("STRESS driver was {st:?}; repair: {r:?}");
     }
     let b = if with_b { add(&h, 1920, 1080).ok() } else { None };
+    println!("STRESS other monitor: {:?}", b.map(|b| b.idx));
     let t_all = Instant::now();
     let mut times = Vec::new();
     let mut failed_at = None;
@@ -1362,6 +1366,8 @@ fn stress(dir: &std::path::Path, n: u32, with_b: bool, pause: u64) {
         match add(&h, 1920, 1080) {
             Ok(m) => {
                 times.push(t.elapsed().as_millis());
+                let b_now = b.map(|b| now_rect(&h, b.idx).is_some());
+                println!("STRESS #{i}: got monitor {} in {} ms; other monitor there: {b_now:?}", m.idx, t.elapsed().as_millis());
                 sleep(pause);
                 if h.call(&format!("remove {}", m.idx), "removed", 30000).is_err() {
                     failed_at = Some(format!("#{i}: remove didn't answer"));
