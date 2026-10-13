@@ -9,3 +9,4 @@ out/
 native/wc-audio/target/
 dist/*.zip
 run-iris/
+logs/
