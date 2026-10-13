@@ -379,7 +379,7 @@ public final class StreamPublisher {
                     "-fps_mode:v", "passthrough",
                     // pictures only come when the screen changes: a fresh start point for viewers
                     // at least every second of them, counted in time rather than pictures
-                    "-force_key_frames:v", "expr:if(isnan(prev_forced_t),1,gte(t-prev_forced_t,1))"));
+                    "-force_key_frames:v", "expr:if(isnan(prev_forced_t),1,gte(t-prev_forced_t," + keyEvery() + "))"));
         } else {
             String sizeFilter = (ew == (w & ~1) && eh == (h & ~1)) ? "crop=" + ew + ":" + eh + ":0:0" : "scale=" + ew + ":" + eh;
             cmd.addAll(List.of(
@@ -391,7 +391,7 @@ public final class StreamPublisher {
                     "-vf", sizeFilter + ",format=" + (enc.name().equals("h264_qsv") ? "nv12" : "yuv420p")));
         }
         cmd.addAll(enc.args());
-        cmd.addAll(List.of("-b:v", kb + "k", "-maxrate", kb + "k", "-bufsize", (kb / 2) + "k", "-g", Integer.toString(fps), "-bf", "0",
+        cmd.addAll(List.of("-b:v", kb + "k", "-maxrate", kb + "k", "-bufsize", (kb / 2) + "k", "-g", Integer.toString(Math.max(1, (int) Math.round(fps * keyEvery()))), "-bf", "0",
                 "-c:a", "aac", "-b:a", "192k",
                 // never let the muxer hold one stream back waiting for the other (default: up to 10 s)
                 "-max_interleave_delta", "100000",
@@ -493,6 +493,7 @@ public final class StreamPublisher {
                 // someone watching can't keep up. Give each step 15 s to show its effect first
                 int vt = viewerTrouble;
                 viewerTrouble = 0;
+                if (vt == dev.windowscraft.net.Payloads.TROUBLE_NETWORK) lossyViewer = true;
                 if (vt != 0 && now - levelSince > 15_000_000_000L && now - pipelineStart > 5_000_000_000L)
                     lower(vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE ? "a viewer's PC can't play it fast enough" : "it doesn't reach a viewer fast enough");
                 // a while without trouble: try one step better (once; if that fails it stays down)
@@ -528,6 +529,12 @@ public final class StreamPublisher {
         }
         if (running) throw new IOException("FFmpeg stopped (exit " + (ff.isAlive() ? "?" : ff.exitValue()) + ")");
     }
+
+    /** A viewer's connection loses pieces: fresh start points come twice as often then, so a lost piece costs half as long a pause. */
+    private volatile boolean lossyViewer;
+
+    /** Seconds between fresh start points (keyframes). */
+    private double keyEvery() { return lossyViewer ? 0.5 : 1.0; }
 
     /** Turns the stream down one step and rebuilds it right away (the backlog goes with the old one). */
     private void lower(String why) throws IOException {

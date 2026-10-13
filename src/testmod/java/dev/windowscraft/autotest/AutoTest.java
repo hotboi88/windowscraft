@@ -702,6 +702,46 @@ public final class AutoTest implements ClientModInitializer {
                 dev.windowscraft.capture.win.WinGeom.testWindowAt = null;
                 dev.windowscraft.apps.InputBridge.testSink = null;
             }
+            case 1746 -> {
+                // someone you allowed is in the middle of using your monitor (sitting there, holding
+                // a button) — and you sit down at it yourself: you always can
+                String dim = mc.world.getRegistryKey().getValue().toString();
+                Display a = DisplayManager.get().findAt(dim, JOIN, Direction.NORTH);
+                java.util.UUID dave = java.util.UUID.randomUUID();
+                DisplayManager.get().setController(a, dave, "Dave", true);
+                dev.windowscraft.capture.win.WinGeom.testWindowAt = (x, y) -> new dev.windowscraft.capture.win.WinGeom.At(3003, 0, 0, 100000, 100000);
+                dev.windowscraft.apps.InputBridge.testSink = sent::add;
+                for (int op : new int[]{dev.windowscraft.net.Payloads.OP_SIT, dev.windowscraft.net.Payloads.OP_BUTTON_DOWN})
+                    dev.windowscraft.client.ScreenControl.fromGuest(mc, new dev.windowscraft.net.Payloads.ControlFrom(dave, "Dave",
+                            new dev.windowscraft.net.Payloads.Control(a.id, op, 0.5f, 0.5f, 0, 0)));
+                guestDave = dave;
+                var c = a.rect.center();
+                double ex = 0.5, ey = ground + 1, ez = JOIN.getZ() + 2.4;
+                double dx = c.x - ex, dy = c.y - (ey + 1.62), dz = c.z - ez;
+                look(mc, ex, ey, ez, (float) Math.toDegrees(Math.atan2(-dx, dz)), (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz))));
+            }
+            case 1748 -> {
+                // (straight at its middle, from where you stand now)
+                String dim = mc.world.getRegistryKey().getValue().toString();
+                var c = DisplayManager.get().findAt(dim, JOIN, Direction.NORTH).rect.center();
+                mc.player.setPosition(0.5, ground + 1, JOIN.getZ() + 2.4); // (in front of it, whatever the server has done yet)
+                var to = c.subtract(mc.player.getEyePos());
+                mc.player.setYaw((float) Math.toDegrees(Math.atan2(-to.x, to.z)));
+                mc.player.setPitch((float) -Math.toDegrees(Math.atan2(to.y, Math.hypot(to.x, to.z))));
+                dev.windowscraft.client.TheaterMode.toggle(mc); // (O: sit down at the one you look at)
+            }
+            case 1749 -> {
+                String dim = mc.world.getRegistryKey().getValue().toString();
+                Display a = DisplayManager.get().findAt(dim, JOIN, Direction.NORTH);
+                check(dev.windowscraft.client.TheaterMode.controlled() == a && dev.windowscraft.monitor.InGameMonitors.seated() == a,
+                        "with a guest using your monitor, you can still sit down at it yourself (want " + a.rect.min() + ", controlled " + (dev.windowscraft.client.TheaterMode.controlled() == null ? null : dev.windowscraft.client.TheaterMode.controlled().rect.min())
+                                + " looking " + mc.player.getYaw() + "/" + mc.player.getPitch() + " from " + mc.player.getEyePos()
+                                + ", seated " + dev.windowscraft.monitor.InGameMonitors.seated() + ", calls " + fakeMonitors.calls + ")");
+                dev.windowscraft.client.TheaterMode.leaveNow();
+                dev.windowscraft.client.ScreenControl.dropGuest(a, guestDave);
+                dev.windowscraft.capture.win.WinGeom.testWindowAt = null;
+                dev.windowscraft.apps.InputBridge.testSink = null;
+            }
             case 1750 -> shot(mc, "19b_joined_side");
             case 1752 -> look(mc, 0.5, ground + 1, JOIN.getZ() + 2.2, 180, 25);
             case 1760 -> shot(mc, "19c_joined_close");
@@ -770,6 +810,7 @@ public final class AutoTest implements ClientModInitializer {
 
     /** Where the joined-monitors test builds its row. */
     private BlockPos JOIN = BlockPos.ORIGIN;
+    private java.util.UUID guestDave;
 
     /** Right-clicks that side of that block with what's in your hand (a real placement, client and server). */
     private void place(MinecraftClient mc, BlockPos on, Direction side) {

@@ -234,6 +234,7 @@ public final class StreamSubscriber implements FrameSource {
         double[] byteRate = {0}; // incoming bytes/s, smoothed
         TsSplitter splitter = new TsSplitter();
         dev.windowscraft.relay.UdpReceiver rxNow = udp;
+        WindowsCraftClient.LOGGER.info("Viewer for {}: pictures over {}", streamId.substring(0, 8), rxNow != null ? "UDP" : "TCP");
         daemon("viewer net", () -> {
             byte[] buf = new byte[64 * 1024];
             long t0 = System.nanoTime(), windowBytes = 0;
@@ -267,6 +268,7 @@ public final class StreamSubscriber implements FrameSource {
             // sound carries on), and if it keeps happening, ask the owner to send less
             boolean lostUntilKey = false;
             long seenSkipped = rxNow != null ? rxNow.skipped : 0, lossWindowStart = System.nanoTime(), lossesInWindow = 0;
+            long recoveredAtWindow = rxNow != null ? rxNow.recovered : 0, receivedAtWindow = rxNow != null ? rxNow.received : 0;
             try {
                 while (running) {
                     RelayServer.Chunk c;
@@ -285,17 +287,30 @@ public final class StreamSubscriber implements FrameSource {
                         if (!c.keyframe()) continue;
                         waitForKey = false;
                     }
-                    if (rxNow != null && rxNow.skipped != seenSkipped) {
-                        lossesInWindow += rxNow.skipped - seenSkipped;
-                        seenSkipped = rxNow.skipped;
-                        lostUntilKey = true;
+                    if (rxNow != null) {
                         long now = System.nanoTime();
-                        if (now - lossWindowStart > 10_000_000_000L) { lossWindowStart = now; lossesInWindow = 0; }
-                        else if (lossesInWindow >= 6 && reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
-                            lastLossTroubleNanos = now;
-                            WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way; asking for a lighter stream", streamId.substring(0, 8));
-                            ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_NETWORK);
-                            lossTroubleSent = true;
+                        if (rxNow.skipped != seenSkipped) {
+                            lossesInWindow += rxNow.skipped - seenSkipped;
+                            seenSkipped = rxNow.skipped;
+                            lostUntilKey = true;
+                        }
+                        // every 2 s: was the connection lossy — pieces given up on, or a lot of them
+                        // needing a resend (more than 1 in 20)? Then the stream should be lighter
+                        if (now - lossWindowStart > 2_000_000_000L) {
+                            long rec = rxNow.recovered - recoveredAtWindow, got = Math.max(1, rxNow.received - receivedAtWindow);
+                            boolean lossy = lossesInWindow >= 1 || (rec >= 20 && rec * 20 > got);
+                            if (lossy) WindowsCraftClient.LOGGER.info("[loss] {}: given up {}, resent {} of {} → lossy {} (report as {})", streamId.substring(0, 8), lossesInWindow, rec, got, lossy, reportAs);
+                            lossWindowStart = now;
+                            lossesInWindow = 0;
+                            recoveredAtWindow = rxNow.recovered;
+                            receivedAtWindow = rxNow.received;
+                            if (lossy && reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
+                                lastLossTroubleNanos = now;
+                                WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way ({} resent of {}); asking for a lighter stream",
+                                        streamId.substring(0, 8), rec, got);
+                                ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_NETWORK);
+                                lossTroubleSent = true;
+                            }
                         }
                     }
                     if (lostUntilKey && c.keyframe()) lostUntilKey = false;

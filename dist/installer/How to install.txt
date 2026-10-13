@@ -1,4 +1,4 @@
-WindowsCraft 0.14.1 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.14.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
 1. Close Minecraft.
 2. Right-click this zip and choose "Extract All...", then open the extracted folder.
@@ -18,8 +18,16 @@ In-game monitor: look at a black concrete wall or a gaming monitor block and pre
 time it offers to install a free display driver). Press O to sit down and use it with your real
 mouse and keyboard; Esc gets up. U again turns it off; sneak + U opens the menu on it.
 Gaming monitors and tablets: creative tab "WindowsCraft" (or craft them). A gaming monitor faces
-you when placed (8 directions). A tablet: right-click to turn it on and hold it up, Esc to put it
-down (it keeps playing in your hand), sneak + right-click to turn it off.
+you when placed (8 directions). Placed against the side, top or bottom of another one it joins it
+(no stand, edge to edge, angled toward you; sneak while placing to keep it flat) - joined monitors
+are joined in Windows too, so windows drag across them.
+A tablet: holding it turns it on; right-click holds it up (it fills your screen), Esc puts it
+down (it keeps playing in your hand), sneak + right-click turns it off.
 To share a window or your screen instead: sneak + U on a wall, pick one, Go Live.
 On someone else's screen, U opens listening options (3D or direct sound, volume, mute).
 Press O while looking at a live screen for theater mode.
+
+If something about in-game monitors misbehaves: close Minecraft, open the "Windows self-test"
+folder and double-click "Run self-test.bat". It takes a couple of minutes (your screens blink and
+the mouse moves - leave the PC alone meanwhile) and puts "WindowsCraft self-test" on your desktop:
+send that folder's report.

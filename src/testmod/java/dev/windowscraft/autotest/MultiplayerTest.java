@@ -226,13 +226,13 @@ public final class MultiplayerTest implements ClientModInitializer {
         // a bad connection: pieces get lost on the way (more than resending can make up for).
         // The picture must keep going (the last good one held, never smeared), and Alice's
         // stream should be asked to send less
-        if (tick == 760 && sub != null) {
+        if (tick == 1600 && sub != null) {
             lossStart = new long[]{sub.framesDecoded(), sub.skippedPieces()};
-            dev.windowscraft.relay.UdpReceiver.testLoss = 0.25;
-            log("losing a quarter of the picture packets on the way");
+            dev.windowscraft.relay.UdpReceiver.testLoss = 0.35;
+            log("losing 35 % of the picture packets on the way (resends too)");
         }
-        if (tick == 820) shot(mc, "mp_viewer_lossy");
-        if (tick == 860 && sub != null && lossStart != null) {
+        if (tick == 1660) shot(mc, "mp_viewer_lossy");
+        if (tick == 1700 && sub != null && lossStart != null) {
             dev.windowscraft.relay.UdpReceiver.testLoss = 0;
             long frames = sub.framesDecoded() - lossStart[0], lost = sub.skippedPieces() - lossStart[1];
             check(mc, lost > 0, "the lossy connection really lost pieces: " + lost + " (" + sub.transport() + ")");

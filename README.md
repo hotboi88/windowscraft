@@ -143,9 +143,13 @@ one of your real screens instead, as before.
   open on your desk doesn't show as open there, and hovering shows no previews of it) and your
   main taskbar doesn't list what's on the monitor. Your own setting comes back when the last
   monitor turns off (after a crash: the next time the game starts).
-- **Apps open where you start them**: while you sit at the monitor, anything that opens goes
-  onto it (an app from its Start menu, a new Brave window) at its own normal size, like on your
-  desk, and never pops up on your main screen. An app that only ever runs once (Discord, Spotify, WhatsApp…) and is
+- **Apps open where you start them**: a new window opens where your real cursor was when you
+  opened it. Sitting at a monitor (or pointing at it), anything you open goes onto it (an app from
+  its Start menu, a new Brave window) at its own normal size, like on your desk. From your own
+  taskbar, Start menu or desktop it opens on your desk — even an app that also has windows on a
+  monitor, or one that remembers it was last on one (that one is moved back to your desk). While
+  you play, a window opened by something on a monitor (a person using it clicking a link) stays
+  with that monitor. An app that only ever runs once (Discord, Spotify, WhatsApp…) and is
   open on your desk already brings its window over instead (it can't open a second one); it goes
   back to its spot on your desk when the monitor turns off, and isn't closed. (Windows 11 keeps pinned taskbar icons on your main
   taskbar in this mode, so start apps from the monitor's Start button.)
@@ -169,18 +173,33 @@ one of your real screens instead, as before.
   walking and looking around. The game gets the keyboard straight back after each click.
 - **Other players you allow each get their own pointer** (drawn as a Windows arrow): their
   pointing, clicks, scrolling and typing go straight to the window under their pointer, as the
-  messages Windows itself would send it — never through your real cursor or keyboard. So you can
-  each work on a different monitor (or the same one) at the same time without moving each other's
-  mouse, and you keep playing normally. Anything they hold is let go when they stop. (A few
+  messages Windows itself would send it — never through your real cursor or keyboard. Each person
+  has their own input (their own window, held buttons and keys), so several people at once never
+  let go of each other's clicks or type into each other's window, and the moment you use that app
+  yourself, nothing of theirs (a held Shift) mixes into your typing. You keep playing normally, and
+  you can always sit down at your own monitor. Anything they hold is let go when they stop. (A few
   programs only listen to the real mouse and keyboard — most games, apps running as
   administrator — those only you can use.)
 - **Its size**: 1920 × 1080 to start with; the menu's **Picture** tab changes it while it's on
-  (its apps stay open) and it's remembered for that wall.
+  (its apps stay open) and it's remembered for that wall. Windows' **Scale** follows the size
+  (1440p 125 %, 4K 200 %…), so text and the cursor stay the same size — a higher resolution is
+  sharper, never tinier. On your own PC an in-game monitor is drawn at its full resolution and up
+  to 60 pictures a second, whatever the stream to others is set to.
+- **Each monitor is a station of its own**: monitors that aren't joined never touch each other or
+  your own screens on the Windows desktop (only at a corner), so a window or the cursor can't
+  slip onto one by accident. **Joined** gaming monitors (see below) sit edge to edge: drag a
+  window from one to the next, and while you sit at one the cursor goes on to the ones joined to
+  it (your view glides along).
+- **Monitors come and go freely**: a new one is always new (its own size, scale and spot — never
+  an old one's), left-overs from a crash are removed first, and if the driver is still busy from
+  the last one it waits a moment and tries again.
 - **Nothing is left behind**: turning it off, breaking its whole wall, leaving the world or closing
   the game removes the monitor, and everything that was on it goes back to your desk. If the game
   crashes, the driver removes the monitors within a second by itself.
-- **Sound**: only the apps that have a window on the monitor (an app counts as a whole — its other
-  windows' sound comes along).
+- **Sound**: each app is heard from the monitor it's on. Windows gives a program one sound, not
+  each window: the same browser on two monitors plays from the one you used it on last. For a
+  browser of its own on a monitor (its own sound, its own sign-ins, closed with the monitor), use
+  **Own Brave / Own Chrome / Own Edge…** next to it on the monitor's Windows tab.
 - **Setup, once**: the first U offers to install the free, signed *Parsec Virtual Display Driver*
   (downloaded from Parsec, checked byte for byte); Windows asks for permission. Settings shows its
   state and has **Remove driver**. Adding or removing a monitor may make your screens blink for a
@@ -195,14 +214,25 @@ to face you, in any of 8 directions — straight or diagonal. Look at it and pre
 in-game monitor, like a wall (or **sneak + U** to share a window on it). Everything works the same:
 sit down with **O**, Alt-point at it, let others use it, everyone sees it. Breaking it turns it off.
 
+**Multi-monitor setups**: place a monitor against the side, top or bottom of another one and it
+**joins** it — no stand, hanging edge to edge off the other one, turned to face where you stand
+as you place it (a side one angles in toward you, one above tilts down). **Sneak** while placing
+to keep it flat, in line. Join as many as you like, in any direction. Joined monitors are joined
+in Windows too: windows drag across them, the cursor moves on from one to the next.
+
 **Tablets** (32 colours too) are your own hand-held in-game monitor:
-- **Right-click** turns it on (the first time) and holds it up in front of you, big: your real
+- **Holding one** turns your tablet on (one per person, whichever tablet you hold).
+  **Right-click** holds it up, filling your screen with its frame around it: your real
   mouse and keyboard work it, like sitting at a monitor. **Esc** puts it down; **hold Alt** to look
-  around while holding it up; **Alt + scroll** makes it bigger or smaller.
+  around while holding it up; **Alt + scroll** makes it smaller or bigger. Its picture has the
+  shape of its size (the menu's Picture tab), drawn sharp, with your real cursor.
+- Holding your tablet, the screens around you aren't yours to point at: your clicks and Alt are
+  the tablet's, and nobody's screen thinks you're using it.
 - Put down, it keeps going **in your hand** — a video keeps playing, its sound comes from you.
   You hold it like a map: in one hand, or in both when the other hand is free (look down to bring
   it up closer). Other players see it like any small tool in your hand, screen up, its back below.
-- **Sneak + right-click** turns it off (its apps close, like any in-game monitor).
+- **Sneak + right-click** turns it off (its apps close, like any in-game monitor); it stays off
+  until you right-click again.
 - Only you see what's on it. It's in the U menu as *Your tablet* (its windows and size).
 
 Crafting (survival):
@@ -355,6 +385,8 @@ TCP when UDP doesn't get through.
 | "system audio (incl. Minecraft — older Windows)" | Per-app audio capture is officially for Windows 11 / Windows 10 build 20348+ (it often works on older Windows 10 too). Where it doesn't, the mod falls back to all system audio, which includes Minecraft's own sound, so wear headphones or mute remote screens to avoid echo. |
 | A window shows black | That app blocks background capture. Share its screen instead. |
 | An app is very quiet after a crash | The mod puts the volume back by itself the next time the game runs while that app is open. You can also fix it by hand in Windows *Settings → Sound → Volume mixer*. |
+| Someone else's screen freezes for a moment now and then | Pieces of the picture got lost on the way (Wi-Fi, a busy connection). Their screen holds the last good picture until the next clean one (well under a second) instead of smearing, and if it keeps happening their game asks yours to send a lighter stream. `/windowscraft report` on their side shows how many pieces were lost. |
+| Something about in-game monitors misbehaves on your PC | Close Minecraft and run `Windows self-test\Run self-test.bat` from the WindowsCraft zip: in a couple of minutes it checks every part of in-game monitors on your own PC (your screens blink and the mouse moves meanwhile) and puts a report on your desktop. |
 | A yellow border appears around a shared window (Windows 10) | Windows 10 draws it during GPU capture, and it can't be turned off there. Windows 11 doesn't show it. |
 
 Logs are in `logs/latest.log`, in lines tagged `WindowsCraft`, `[ffmpeg-enc]`, `[ffmpeg-dec]` and `[wc-audio]`.
@@ -369,6 +401,16 @@ gradle test                   # unit tests: geometry, 3D audio chain, MPEG-TS ke
 (cd native/wc-audio && cargo build --release --target x86_64-pc-windows-gnu)
 cp native/wc-audio/target/x86_64-pc-windows-gnu/release/wc-audio.exe src/main/resources/windowscraft/natives/
 ```
+
+### Windows self-test
+
+`native/wc-audio/src/bin/wc-selftest.rs` drives the real helpers with real virtual monitors (the
+Parsec driver) and checks what Windows actually does — monitor layout, where windows open, the
+cursor, clicks and typing, several guests at once, Esc and Start, full-screen apps, driver
+add/remove cycles, crash recovery, scale per resolution. `.github/workflows/windows-selftest.yml`
+runs it (three rounds) on a GitHub Windows machine on every push; the report and screenshots are
+attached to the run. On a PC: `wc-selftest.exe --rounds 1 --report report.txt --shots shots`
+(Minecraft closed).
 
 ### Automated in-game tests
 

@@ -58,7 +58,7 @@ public final class ServerHub {
     }
 
     /** Per screen: when its owner was last told someone can't keep up (at most every 5 s). */
-    private static final Map<UUID, Long> troubleSent = new ConcurrentHashMap<>();
+    private static final Map<String, Long> troubleSent = new ConcurrentHashMap<>(); // (per screen and kind of trouble)
 
     /** A viewer can't keep up with a screen: its owner's game sends less. */
     private static void onTrouble(ServerPlayerEntity player, Payloads.StreamTrouble t) {
@@ -71,11 +71,11 @@ public final class ServerHub {
     private static void tellOwner(MinecraftServer server, Live l, int kind) {
         if (server == null) return;
         long now = System.currentTimeMillis();
-        Long last = troubleSent.get(l.info.displayId());
+        Long last = troubleSent.get(l.info.displayId() + "/" + kind);
         if (last != null && now - last < 5000) return;
         ServerPlayerEntity owner = server.getPlayerManager().getPlayer(l.owner);
         if (owner == null || !ServerPlayNetworking.canSend(owner, Payloads.StreamTrouble.ID)) return;
-        troubleSent.put(l.info.displayId(), now);
+        troubleSent.put(l.info.displayId() + "/" + kind, now);
         ServerPlayNetworking.send(owner, new Payloads.StreamTrouble(l.info.displayId(), kind));
     }
 
