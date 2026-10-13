@@ -233,6 +233,18 @@ impl Vdd {
     fn ioctl(&self, code: u32, data: &[u8]) -> Option<u32> {
         // (on the heap: if the driver never finishes a call, these are left to it — never freed
         // under it — and the helper carries on instead of waiting forever)
+        // (WC_VDD_SERIAL=1: one call at a time — an experiment knob)
+        let _gate = if *SERIAL { Some(IOCTL_GATE.lock().unwrap_or_else(|e| e.into_inner())) } else { None };
+        let t0 = Instant::now();
+        let r = self.ioctl_raw(code, data);
+        let ms = t0.elapsed().as_millis();
+        if code != IOCTL_UPDATE && code != IOCTL_VERSION || ms > 500 {
+            eprintln!("info=driver call {code:#x} took {ms} ms");
+        }
+        r
+    }
+
+    fn ioctl_raw(&self, code: u32, data: &[u8]) -> Option<u32> {
         struct Call {
             input: [u8; 32],
             out: u32,
@@ -269,7 +281,7 @@ impl Vdd {
                         // it finished after all, but nobody is waiting for that monitor: take it back
                         let i = c.out as i32;
                         let be = [((i >> 8) & 0xFF) as u8, (i & 0xFF) as u8];
-                        let _ = self.ioctl(IOCTL_REMOVE, &be);
+                        let _ = self.ioctl_raw(IOCTL_REMOVE, &be);
                     }
                     None
                 }
@@ -974,6 +986,10 @@ fn desk_spot(h: HWND) -> RECT {
 
 static SEATED: AtomicBool = AtomicBool::new(false);
 static LAST_IOCTL: Mutex<String> = Mutex::new(String::new());
+static IOCTL_GATE: Mutex<()> = Mutex::new(());
+static SERIAL: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_SERIAL").map_or(false, |v| v == "1"));
+static COOLDOWN_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_COOLDOWN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500));
+static PING_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env::var("WC_VDD_PING_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50));
 /// When a monitor was last added or removed (the driver needs a moment between them).
 static LAST_DRIVER_CHANGE: Mutex<Option<Instant>> = Mutex::new(None);
 /// When you last used the Start menu or taskbar of the monitor you sit at.
@@ -2954,7 +2970,7 @@ fn main() {
     {
         let (vdd, added) = (vdd.clone(), added.clone());
         std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(*PING_MS));
             if added.lock().unwrap().is_empty() {
                 continue;
             }
@@ -3012,8 +3028,9 @@ fn main() {
                 // (right after a monitor went away the driver is still busy with it: asking it for
                 // a new one too soon can upset it — so a moment's rest first, and gentle retries)
                 let since_change = LAST_DRIVER_CHANGE.lock().unwrap().map_or(Duration::from_secs(60), |t| t.elapsed());
-                if since_change < Duration::from_millis(1500) {
-                    std::thread::sleep(Duration::from_millis(1500) - since_change);
+                let rest = Duration::from_millis(*COOLDOWN_MS);
+                if since_change < rest {
+                    std::thread::sleep(rest - since_change);
                 }
                 let mut got = None;
                 for attempt in 1..=3u64 {

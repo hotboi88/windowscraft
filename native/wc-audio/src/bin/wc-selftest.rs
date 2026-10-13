@@ -622,6 +622,10 @@ fn main() {
         rep.line(format!("{} failed", rep.fails));
         std::process::exit(rep.fails as i32);
     }
+    if let Some(n) = arg("--stress").and_then(|v| v.parse::<u32>().ok()) {
+        stress(&dir, n, args.iter().any(|a| a == "--with-b"), arg("--pause").and_then(|v| v.parse().ok()).unwrap_or(300));
+        return;
+    }
     rep.line(format!("WindowsCraft self-test · {} · helpers in {}", windows_version(), dir.display()));
     let real: Vec<(String, RECT)> = monitors();
     rep.note(format!("your screens: {}", real.iter().map(|(d, r)| format!("{d} {}", fmt(r))).collect::<Vec<_>>().join(", ")));
@@ -1336,4 +1340,54 @@ fn taskbar_on(r: &RECT) -> Option<HWND> {
 
 fn has_taskbar_on(r: &RECT) -> bool {
     taskbar_on(r).is_some()
+}
+
+
+/// An experiment: add and remove a monitor over and over, timing each, until the driver stops answering.
+fn stress(dir: &std::path::Path, n: u32, with_b: bool, pause: u64) {
+    let env: Vec<String> = std::env::vars().filter(|(k, _)| k.starts_with("WC_VDD")).map(|(k, v)| format!("{k}={v}")).collect();
+    println!("STRESS {n} cycles, other monitor on: {with_b}, pause {pause} ms, {env:?}");
+    let Ok(h) = Helper::start(&dir.join("wc-vdisplay.exe")) else { println!("STRESS helper didn't start"); return };
+    let st = h.call("status", "status", 15000).ok().and_then(|l| l.last().cloned()).unwrap_or_default();
+    if !st.starts_with("status ok") {
+        let r = h.call("repair", "repair", 120000);
+        println!("STRESS driver was {st:?}; repair: {r:?}");
+    }
+    let b = if with_b { add(&h, 1920, 1080).ok() } else { None };
+    let t_all = Instant::now();
+    let mut times = Vec::new();
+    let mut failed_at = None;
+    for i in 0..n {
+        let t = Instant::now();
+        match add(&h, 1920, 1080) {
+            Ok(m) => {
+                times.push(t.elapsed().as_millis());
+                sleep(pause);
+                if h.call(&format!("remove {}", m.idx), "removed", 30000).is_err() {
+                    failed_at = Some(format!("#{i}: remove didn't answer"));
+                    break;
+                }
+                sleep(pause);
+            }
+            Err(e) => {
+                failed_at = Some(format!("#{i} after {} ms: {e}", t.elapsed().as_millis()));
+                break;
+            }
+        }
+    }
+    let b_alive = b.map(|b| now_rect(&h, b.idx).is_some());
+    println!("STRESS result: {} ok cycles in {:.0} s; failed: {failed_at:?}; other monitor still there: {b_alive:?}; add times ms {times:?}",
+        times.len(), t_all.elapsed().as_secs_f64());
+    let st = h.call("status", "status", 15000).ok().and_then(|l| l.last().cloned()).unwrap_or_default();
+    println!("STRESS driver now: {st}");
+    if !st.starts_with("status ok") {
+        let r = h.call("repair", "repair", 120000);
+        println!("STRESS repair: {r:?}");
+    }
+    h.stop();
+    sleep(1000);
+    for l in HELPER_LOG.lock().unwrap().iter().filter(|l| l.contains("driver") || l.contains("error")) {
+        println!("  helper: {l}");
+    }
+    HELPER_LOG.lock().unwrap().clear();
 }

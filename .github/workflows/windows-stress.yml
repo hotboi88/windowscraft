@@ -1,0 +1,56 @@
+# An experiment: which way of talking to the Parsec driver keeps it from freezing when monitors
+# are added and removed many times? Each variant runs on its own fresh Windows machine.
+name: Windows driver stress
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  stress:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            env: ""
+            args: "--with-b"
+          - name: serial
+            env: "WC_VDD_SERIAL=1"
+            args: "--with-b"
+          - name: ping100
+            env: "WC_VDD_PING_MS=100"
+            args: "--with-b"
+          - name: cooldown4000
+            env: "WC_VDD_COOLDOWN_MS=4000"
+            args: "--with-b"
+          - name: no-other-monitor
+            env: ""
+            args: ""
+          - name: slow-pause
+            env: ""
+            args: "--with-b --pause 1500"
+    name: stress (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Parsec virtual display driver
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://builds.parsec.app/vdd/parsec-vdd-0.41.0.0.exe -OutFile "$env:RUNNER_TEMP\vdd.exe"
+          $p = Start-Process "$env:RUNNER_TEMP\vdd.exe" -ArgumentList '/S' -Wait -PassThru
+          Start-Sleep -Seconds 5
+          exit 0
+      - name: Stress
+        shell: pwsh
+        run: |
+          $n = "src\main\resources\windowscraft\natives"
+          if ("${{ matrix.env }}" -ne "") { $kv = "${{ matrix.env }}".Split("="); Set-Item -Path "env:$($kv[0])" -Value $kv[1] }
+          $a = "${{ matrix.args }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
+          foreach ($pass in 1..2) {
+            "==== pass $pass"
+            & "$n\wc-selftest.exe" --helpers $n --stress 25 @a
+          }
+          exit 0
