@@ -35,6 +35,8 @@ public final class TheaterMode {
     private static WallRect rect;
     private static String dimension;
     private static BooleanSupplier stillThere;
+    /** The picture's corners as it's shown on the screen (letterboxed): what the seat fits to your view. */
+    private static java.util.function.Supplier<Vec3d[]> picture;
     private static String title;
     private static double distance, fitDistance, allowedMax;
     private static double progress;          // 0 = in your head, 1 = in front of the screen
@@ -135,6 +137,7 @@ public final class TheaterMode {
     private static void targetRemote(RemoteDisplays.Remote r) {
         WallRect at = r.rect;
         target(at, r.info.title(), () -> RemoteDisplays.all().contains(r) && at.equals(r.rect) && r.wallOk);
+        picture = () -> ScreenControl.pictureCorners(r);
         if (ScreenControl.controllable(r)) controlledRemote = r;
     }
 
@@ -142,6 +145,7 @@ public final class TheaterMode {
         rect = r;
         title = t;
         stillThere = alive;
+        picture = () -> r.corners(1, 1);
         controlled = null;
         controlledRemote = null;
     }
@@ -150,6 +154,7 @@ public final class TheaterMode {
     private static void targetOwn(Display d) {
         WallRect at = d.rect;
         target(at, d.share().source().title(), () -> d.isLive() && DisplayManager.get().all().contains(d) && at.equals(d.rect));
+        picture = () -> ScreenControl.pictureCorners(d);
         if (ScreenControl.controllable(d)) controlled = d;
     }
 
@@ -197,13 +202,36 @@ public final class TheaterMode {
         return to.lengthSquared();
     }
 
+    /**
+     * How far back the camera sits for the picture to fill FILL of the part of the window you can
+     * see — from the real field of view of the frame (your FOV and its effects, the window's
+     * shape), and the picture as it's really shown (letterboxed), so at full zoom (× FILL) its
+     * edges touch the edges of what you see, and never go past them.
+     */
     private static double fitDistance(MinecraftClient mc, WallRect r) {
-        double vfov = Math.toRadians(mc.options.getFov().getValue());
-        double aspect = mc.getWindow().getFramebufferWidth() / (double) Math.max(1, mc.getWindow().getFramebufferHeight());
-        double tanV = Math.tan(vfov / 2), tanH = tanV * aspect;
-        double dH = r.height() / 2.0 / (FILL * tanV);
-        double dW = r.width() / 2.0 / (FILL * tanH);
+        double tanV = FrameView.tanV(), tanH = FrameView.tanH();
+        int[] a = view(mc);
+        int fw = Math.max(1, mc.getWindow().getFramebufferWidth()), fh = Math.max(1, mc.getWindow().getFramebufferHeight());
+        Vec3d[] c = picture != null ? picture.get() : r.corners(1, 1);
+        double w = c[1].distanceTo(c[0]), h = c[3].distanceTo(c[0]);
+        double dH = h / 2.0 / (FILL * tanV * a[3] / fh);
+        double dW = w / 2.0 / (FILL * tanH * a[2] / fw);
         return Math.max(MIN_DISTANCE * 0.5 / FILL, Math.max(dH, dW));
+    }
+
+    /** The part of the window the screen is fitted into: all of it, minus your real taskbar where it covers the game. */
+    private static int[] view(MinecraftClient mc) {
+        if (controlled != null && dev.windowscraft.monitor.InGameMonitors.isOn(controlled)) return GameArea.visible();
+        return new int[]{0, 0, Math.max(1, mc.getWindow().getFramebufferWidth()), Math.max(1, mc.getWindow().getFramebufferHeight())};
+    }
+
+    /** The seat is moved sideways/up so the screen is centred in what you see (not under the taskbar). */
+    private static Vec3d seatShift(MinecraftClient mc, Vec3d right, Vec3d up, double dist) {
+        int[] a = view(mc);
+        int fw = Math.max(1, mc.getWindow().getFramebufferWidth()), fh = Math.max(1, mc.getWindow().getFramebufferHeight());
+        double cx = (a[0] + a[2] / 2.0) / fw * 2 - 1, cy = 1 - (a[1] + a[3] / 2.0) / fh * 2;
+        if (Math.abs(cx) < 1e-4 && Math.abs(cy) < 1e-4) return Vec3d.ZERO;
+        return right.multiply(-cx * dist * FrameView.tanH()).add(up.multiply(-cy * dist * FrameView.tanV()));
     }
 
     private static void leave() {
@@ -237,6 +265,14 @@ public final class TheaterMode {
                 || !stillThere.getAsBoolean() || mc.player.isDead()) {
             finish(mc);
             return;
+        }
+        // the window, your FOV, the picture or the taskbar changed: same zoom, refitted
+        // (eased over a few ticks, so the taskbar appearing doesn't make the view jump)
+        double target = fitDistance(mc, rect);
+        if (fitDistance > 0 && Math.abs(target - fitDistance) > 1e-6) {
+            double zoom = distance / fitDistance;
+            fitDistance = Math.abs(target - fitDistance) / fitDistance < 0.002 ? target : fitDistance + (target - fitDistance) * 0.5;
+            distance = fitDistance * zoom;
         }
         // keep the camera in front of anything built between it and the screen
         Vec3d c = center(), n = rect.normal();
@@ -332,7 +368,8 @@ public final class TheaterMode {
         progress = MathHelper.clamp(progress, 0, 1);
         double e = progress * progress * (3 - 2 * progress); // smoothstep
         Vec3d n = rect.normal();
-        Vec3d seat = center().add(n.multiply(distance));
+        MinecraftClient mcc = MinecraftClient.getInstance();
+        Vec3d seat = center().add(n.multiply(distance)).add(seatShift(mcc, rect.rightVector(), rect.upVector(), distance));
         Vec3d facing = n.negate();
         float seatYaw = (float) Math.toDegrees(Math.atan2(-facing.x, facing.z));
         // (a tilted monitor: you look up or down at it, square on)
@@ -357,7 +394,7 @@ public final class TheaterMode {
                 Vec3d c = glideCenter.lerp(center(), s2);
                 Vec3d nn = glideNormal.lerp(n, s2);
                 nn = nn.lengthSquared() < 1e-6 ? n : nn.normalize();
-                pos = c.add(nn.multiply(distance));
+                pos = c.add(nn.multiply(distance)).add(seatShift(mcc, rect.rightVector(), rect.upVector(), distance));
                 Vec3d f = nn.negate();
                 yaw = (float) Math.toDegrees(Math.atan2(-f.x, f.z));
                 pitch = (float) -Math.toDegrees(Math.asin(MathHelper.clamp(f.y, -1, 1)));
@@ -409,13 +446,12 @@ public final class TheaterMode {
     }
 
     /**
-     * Your own in-game monitor shown flat on your screen (DeskView): while you sit at it, fully
-     * zoomed in, looking straight at it — null otherwise (and when it's turned off in settings).
+     * Your own in-game monitor shown flat on your screen (DeskView): while you sit at it looking
+     * straight at it, at any zoom — null otherwise (and when it's turned off in settings).
      */
     public static Display deskViewDisplay() {
         if (!active || leaving || progress < 1 || controlled == null || !dev.windowscraft.config.ClientSettings.deskView()) return null;
         if (Math.abs(lookYaw) > 0.01 || Math.abs(lookPitch) > 0.01) return null;
-        if (distance > fitDistance * MIN_FACTOR * 1.01) return null; // (scrolled out: the room)
         if (System.nanoTime() - glideAt < 400_000_000L) return null; // (gliding to a joined monitor)
         return dev.windowscraft.monitor.InGameMonitors.isOn(controlled) ? controlled : null;
     }

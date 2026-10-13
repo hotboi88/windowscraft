@@ -434,14 +434,40 @@ public final class AutoTest implements ClientModInitializer {
                 check(dev.windowscraft.monitor.InGameMonitors.seated() == south(), "sitting at it hands it the real mouse and keyboard");
                 check(fakeMonitors.calls.contains("seat 0"), "the helper was asked to seat: " + fakeMonitors.calls);
                 check(fakeMonitors.beats > 5, "the game keeps telling the helper it's there while seated (" + fakeMonitors.beats + ")");
+                log("seated: controlled " + (dev.windowscraft.client.TheaterMode.controlled() == south()) + ", seated() " + dev.windowscraft.client.TheaterMode.seated()
+                        + ", desk view " + dev.windowscraft.client.DeskView.showing() + ", setting " + dev.windowscraft.config.ClientSettings.deskView());
+                dev.windowscraft.client.GameArea.testCoveredBottom = 60; // (your real taskbar over the game's bottom)
+            }
+            case 1326 -> {
+                shot(mc, "16a_seated_flat");
+                check(dev.windowscraft.client.DeskView.showing() == south(), "sitting at it shows it flat and sharp on your view");
+                double[] r = seatedPicture(mc);
+                int fw = mc.getWindow().getFramebufferWidth(), fh = mc.getWindow().getFramebufferHeight();
+                check(r != null, "the seated picture is on your view");
+                if (r != null) {
+                    log("seated picture: " + Math.round(r[0]) + "," + Math.round(r[1]) + " – " + Math.round(r[2]) + "," + Math.round(r[3]) + " in " + fw + "×" + fh + " (bottom 60 covered)");
+                    check(r[0] >= -1 && r[1] >= -1 && r[2] <= fw + 1 && r[3] <= fh - 60 + 1, "fully zoomed in, the screen never goes past the window's edges or under your taskbar");
+                    boolean touches = (Math.abs(r[0]) <= 3 && Math.abs(r[2] - fw) <= 3) || (Math.abs(r[1]) <= 3 && Math.abs(r[3] - (fh - 60)) <= 3);
+                    check(touches, "…and it goes right up to them (as big as it can be)");
+                    seatedWidth = r[2] - r[0];
+                }
+                check(dev.windowscraft.client.DeskView.covers(south()), "the flat picture is right over the monitor (the room's own copy isn't drawn under it)");
+                dev.windowscraft.client.TheaterMode.scroll(-3); // (Alt + wheel: further back)
+            }
+            case 1331 -> {
+                shot(mc, "16a2_seated_scrolled_out");
+                double[] r = seatedPicture(mc);
+                check(dev.windowscraft.client.DeskView.showing() == south() && r != null && r[2] - r[0] < seatedWidth * 0.85,
+                        "scrolled out, it's still flat and sharp — smaller, with the room around it" + (r == null ? "" : " (" + Math.round(r[2] - r[0]) + " wide, was " + Math.round(seatedWidth) + ")"));
+                dev.windowscraft.client.GameArea.testCoveredBottom = 0;
                 fakeMonitors.events().esc(); // the helper saw Esc
             }
-            case 1335 -> {
+            case 1339 -> {
                 check(!dev.windowscraft.client.TheaterMode.active(), "Esc (seen by the helper) gets you up");
                 check(dev.windowscraft.monitor.InGameMonitors.seated() == null && fakeMonitors.calls.contains("unseat"), "and the mouse and keyboard come back");
             }
             // Alt-pointing at it (not sitting): your real cursor goes onto it, the game keeps the keyboard
-            case 1338 -> dev.windowscraft.client.ScreenControl.testAlt = true;
+            case 1342 -> dev.windowscraft.client.ScreenControl.testAlt = true;
             case 1350 -> {
                 check(fakeMonitors.calls.contains("point 0") && fakeMonitors.calls.contains("pointme true"),
                         "Alt-pointing at your in-game monitor puts your real cursor on it: " + fakeMonitors.calls);
@@ -863,6 +889,21 @@ public final class AutoTest implements ClientModInitializer {
         Field f = o.getClass().getDeclaredField(name);
         f.setAccessible(true);
         return f.getInt(o);
+    }
+
+    private static double seatedWidth;
+
+    /** Where the seated monitor's picture is on the frame (framebuffer pixels: left, top, right, bottom). */
+    private static double[] seatedPicture(MinecraftClient mc) {
+        Display d = dev.windowscraft.client.DeskView.showing();
+        if (d == null) return null;
+        double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (net.minecraft.util.math.Vec3d p : dev.windowscraft.client.ScreenControl.pictureCorners(d)) {
+            double[] q = dev.windowscraft.client.FrameView.project(p);
+            if (q == null) return null;
+            x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]);
+        }
+        return new double[]{x0, y0, x1, y1};
     }
 
     private void shot(MinecraftClient mc, String name) {

@@ -127,6 +127,82 @@ public final class WinGeom {
         }
     }
 
+    /**
+     * Keeps that window above everything else (or stops): a fullscreen game while you sit at an
+     * in-game monitor — its apps have the keyboard, and Windows would otherwise put your taskbar
+     * over the game, on top of the very screen you're using. Never activates it.
+     */
+    public static void keepOnTop(long handle, boolean on) {
+        if (!WINDOWS || handle == 0) return;
+        try {
+            // SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS
+            Win32.User32.I.SetWindowPos(new HWND(new Pointer(handle)), new HWND(Pointer.createConstant(on ? -1 : -2)), 0, 0, 0, 0,
+                    0x0002 | 0x0001 | 0x0010 | 0x0200 | 0x4000);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** The window in front (its top-level window): {left, top, right, bottom} in physical pixels, or null. */
+    public static int[] foregroundRect() {
+        if (!WINDOWS) return null;
+        try {
+            dpiAware();
+            HWND f = Win32.User32.I.GetForegroundWindow();
+            if (f == null) return null;
+            HWND root = Win32.User32.I.GetAncestor(f, 2); // GA_ROOT
+            RECT r = new RECT();
+            return root != null && Win32.User32.I.GetWindowRect(root, r) ? new int[]{r.left, r.top, r.right, r.bottom} : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The part of that window's inside you can see — minus your Windows taskbar where it's on top
+     * of it: {x, y, width, height} from the inside's top left, then the inside's own {width,
+     * height}; physical pixels. Null if it can't be told.
+     */
+    public static int[] visibleClient(long handle) {
+        if (!WINDOWS || handle == 0) return null;
+        try {
+            dpiAware();
+            var u = Win32.User32.I;
+            HWND game = new HWND(new Pointer(handle));
+            RECT client = new RECT();
+            if (!u.GetClientRect(game, client)) return null;
+            POINT tl = new POINT(0, 0);
+            if (!u.ClientToScreen(game, tl)) return null;
+            int cw = Math.max(1, client.right - client.left), ch = Math.max(1, client.bottom - client.top);
+            int left = tl.x, top = tl.y;
+            int vl = left, vt = top, vr = left + cw, vb = top + ch;
+            for (String cls : new String[]{"Shell_TrayWnd", "Shell_SecondaryTrayWnd"}) {
+                HWND tb = null;
+                for (int guard = 0; guard < 16; guard++) {
+                    tb = u.FindWindowEx(null, tb, cls, null);
+                    if (tb == null) break;
+                    if (!u.IsWindowVisible(tb)) continue;
+                    RECT r = new RECT();
+                    if (!u.GetWindowRect(tb, r)) continue;
+                    int il = Math.max(vl, r.left), it = Math.max(vt, r.top), ir = Math.min(vr, r.right), ib = Math.min(vb, r.bottom);
+                    if (ir <= il || ib <= it) continue; // not over the game
+                    // is it really on top there (not behind the game)?
+                    HWND at = u.WindowFromPoint(new POINT.ByValue((il + ir) / 2, (it + ib) / 2));
+                    HWND root = at == null ? null : u.GetAncestor(at, 2);
+                    if (root == null || !root.equals(tb)) continue;
+                    if (ir - il >= ib - it) { // a strip across: at the bottom or the top
+                        if ((it + ib) / 2 > (vt + vb) / 2) vb = Math.min(vb, r.top); else vt = Math.max(vt, r.bottom);
+                    } else {                  // down a side
+                        if ((il + ir) / 2 > (vl + vr) / 2) vr = Math.min(vr, r.left); else vl = Math.max(vl, r.right);
+                    }
+                }
+            }
+            if (vr - vl < cw / 3 || vb - vt < ch / 3) return null;
+            return new int[]{vl - left, vt - top, vr - vl, vb - vt, cw, ch};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** Where the real mouse pointer is on the desktop (physical pixels), or null. Any thread. */
     public static int[] cursorPos() {
         if (!WINDOWS) return null;

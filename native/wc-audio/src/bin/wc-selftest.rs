@@ -229,6 +229,13 @@ fn click(right: bool) {
     send(&[mouse(u, 0, 0, 0)]);
 }
 
+fn key_state(vk: VIRTUAL_KEY, up: bool) {
+    send(&[INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 } },
+    }]);
+}
+
 fn key(vk: VIRTUAL_KEY) {
     let k = |up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
@@ -250,7 +257,7 @@ static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
-        | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE)
+        | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE | WM_NCACTIVATE)
     {
         LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
     }
@@ -376,7 +383,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 18] = ["single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 19] = ["gkey", "single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -943,30 +950,86 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             key(VK_ESCAPE); // (closes the menu)
             sleep(600);
             // an app that only runs once, open on your desk, comes forward when you start it from
-            // the monitor: it stays on your desk, and you stay at the monitor
+            // the monitor: it comes over to the monitor — centred, a modest size, in one move
             play();
             sleep(300);
             let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
             sleep(500);
-            let t1 = Instant::now();
+            let _t1 = Instant::now();
             unsafe {
                 let _ = SetCursorPos(tbr.left + (tbr.right - tbr.left) * 3 / 4, (tbr.top + tbr.bottom) / 2);
             }
             sleep(100);
             click(false); // (using the monitor's own taskbar…)
             sleep(400);
+            let desk_home = rect_of(desk);
             unsafe {
                 let _ = AllowSetForegroundWindow(ASFW_ANY);
                 let _ = SetForegroundWindow(desk); // (…and the app brings its one window forward)
             }
-            sleep(1200);
-            let (dx, dy) = center(&rect_of(desk));
-            let stayed = inside(&prim, dx, dy);
-            let said = h.events_since(t1).iter().any(|e| e.starts_with("single"));
+            // where it is, every 10 ms: one clean move (no back and forth)
+            let mut spots: Vec<RECT> = vec![rect_of(desk)];
+            let t2 = Instant::now();
+            while t2.elapsed() < Duration::from_millis(1200) {
+                let r = rect_of(desk);
+                if *spots.last().unwrap() != r {
+                    spots.push(r);
+                }
+                sleep(10);
+            }
+            let r = rect_of(desk);
+            let (dx, dy) = center(&r);
+            let wa = work_area_of(&ra);
+            let (wx, wy) = center(&wa);
+            let (aw, ah) = (wa.right - wa.left, wa.bottom - wa.top);
+            let centred = (dx - wx).abs() <= 4 && (dy - wy).abs() <= 4;
+            let modest = r.right - r.left >= aw * 2 / 5 && r.right - r.left <= aw * 3 / 4 && r.bottom - r.top >= ah * 2 / 5 && r.bottom - r.top <= ah * 4 / 5;
+            let home_visits = spots.iter().skip(1).filter(|x| { let (cx, cy) = center(x); inside(&prim, cx, cy) }).count();
             let fg = foreground_root();
-            let (fx, fy) = center(&rect_of(fg));
-            rep.check("an app that only runs once, open on your desk, stays on your desk (the monitor says no) and you stay at the monitor",
-                stayed && said && inside(&ra, fx, fy), format!("desk window at {} · told {said} · front: {} \"{}\" at {}", fmt(&rect_of(desk)), class_name(fg), title(fg), fmt(&rect_of(fg))));
+            rep.check("an app that only runs once, open on your desk, comes over to the monitor when you open it there: centred, a modest size, in front",
+                inside(&ra, dx, dy) && centred && modest && fg == desk,
+                format!("now at {} (monitor's work area {}) · front: {} \"{}\"", fmt(&r), fmt(&wa), class_name(fg), title(fg)));
+            rep.check("…in one clean move (it never jumps back)", home_visits == 0 && spots.len() <= 4,
+                spots.iter().map(fmt).collect::<Vec<_>>().join(" → "));
+            // a Store app (Calculator…): its window already exists, hidden ("cloaked"), and is revealed
+            let _ = h.call("unseat", "unseated", 8000);
+            sleep(300);
+            unsafe {
+                let _ = SetCursorPos(prim.left + 300, prim.top + 300); // (made on your desk, before you sit down)
+            }
+            sleep(200);
+            let hidden = spawn_window("WindowsCraftStoreApp", "Calculator (self-test stand-in)", RECT { left: prim.left + 120, top: prim.top + 120, right: prim.left + 520, bottom: prim.top + 620 }, false);
+            unsafe {
+                let on: windows::core::BOOL = true.into();
+                let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(hidden, windows::Win32::Graphics::Dwm::DWMWA_CLOAK, &on as *const _ as *const _, 4);
+            }
+            sleep(400);
+            // (it was there, hidden, before you sat down — like a Store app's frame)
+            play();
+            let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
+            sleep(500);
+            unsafe {
+                let _ = SetCursorPos(tbr.left + (tbr.right - tbr.left) * 3 / 4, (tbr.top + tbr.bottom) / 2);
+            }
+            sleep(100);
+            click(false); // (Start on the monitor…)
+            sleep(300);
+            unsafe {
+                let off: windows::core::BOOL = false.into();
+                let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(hidden, windows::Win32::Graphics::Dwm::DWMWA_CLOAK, &off as *const _ as *const _, 4);
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+                let _ = SetForegroundWindow(hidden);
+            }
+            let came = wait_for(2000, || { let (x, y) = center(&rect_of(hidden)); inside(&ra, x, y) });
+            rep.check("a Store app (Calculator…) opened from the monitor opens on the monitor", came, format!("its window at {}", fmt(&rect_of(hidden))));
+            close(hidden);
+            // (the desk window goes home for the rest of the test)
+            let _ = h.call("unseat", "unseated", 8000);
+            sleep(4300); // (the monitor keeps a just-placed window there for a few seconds)
+            unsafe {
+                let _ = SetWindowPos(desk, None, desk_home.left, desk_home.top, desk_home.right - desk_home.left, desk_home.bottom - desk_home.top, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            sleep(300);
         }
         None => rep.skip("right-clicking a monitor's taskbar keeps you sitting there", "no taskbar on the monitor"),
     }
@@ -1227,6 +1290,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             (c.0 - target.0).abs() <= 2 && (c.1 - target.1).abs() <= 2
         });
         rep.note(format!("pointer latency (game → cursor on the monitor): {} {:.1} ms", if there { "" } else { "never got there," }, t3.elapsed().as_secs_f64() * 1000.0));
+        point_clicks(rep, &h, &rb, game);
         h.send("unpoint");
         sleep(400);
     } else {
@@ -1410,6 +1474,64 @@ fn guests(rep: &mut Report, dir: &std::path::Path, rb: &RECT) {
     close(w1);
     close(w2);
 
+}
+
+/// Alt held, pointing at an app on the monitor from the game: every click reaches it, the game
+/// isn't flicked back to the front after each one (its title bar stays looking active), your mouse
+/// doesn't jiggle the cursor (hover flicker), and your keys still belong to the game.
+fn point_clicks(rep: &mut Report, h: &Helper, rb: &RECT, game: HWND) {
+    let (cx, cy) = center(rb);
+    let app = spawn_window("WindowsCraftTest", "Point-and-click target (self-test)", RECT { left: cx - 400, top: cy - 250, right: cx + 400, bottom: cy + 250 }, false);
+    sleep(700);
+    let ar = rect_of(app);
+    let (ax, ay) = center(&ar);
+    if !inside(rb, ax, ay) {
+        rep.check("pointing: an app on the monitor to click", false, format!("it's at {}", fmt(&ar)));
+        close(app);
+        return;
+    }
+    key_state(VK_MENU, false); // (you hold Alt to point)
+    sleep(60);
+    h.send("pointme 1");
+    sleep(250);
+    let (u, v) = ((ax - rb.left) as f64 / (rb.right - rb.left) as f64, (ay - rb.top) as f64 / (rb.bottom - rb.top) as f64);
+    h.send(&format!("ptr {u:.4} {v:.4}"));
+    sleep(200);
+    LOG.lock().unwrap().clear();
+    let mut jiggles = 0;
+    for _ in 0..6 {
+        click(false);
+        sleep(140);
+        let c0 = cursor();
+        move_by(4, 0); // (your hand on the mouse)
+        sleep(2);
+        if cursor() != c0 {
+            jiggles += 1;
+        }
+        sleep(60);
+    }
+    sleep(300);
+    let log = LOG.lock().unwrap().clone();
+    let clicks = log.iter().filter(|(w, m, _)| *w == app.0 as isize && *m == WM_LBUTTONDOWN).count();
+    let game_back = log.iter().filter(|(w, m, p)| *w == game.0 as isize && *m == WM_ACTIVATE && (p & 0xFFFF) != 0).count();
+    let last_nc = log.iter().rev().find(|(w, m, _)| *w == game.0 as isize && *m == WM_NCACTIVATE).map(|(_, _, p)| *p);
+    rep.check("pointing with Alt: every click reaches the app on the monitor", clicks == 6, format!("{clicks} of 6 clicks"));
+    rep.check("…the game isn't flicked to the front after each click (no title bar flicker)", game_back == 0, format!("game came to the front {game_back}×"));
+    rep.check("…its title bar keeps looking active meanwhile", last_nc != Some(0), format!("last title bar state sent: {last_nc:?}"));
+    rep.check("…your mouse moving doesn't jiggle the cursor on the monitor (no hover flicker)", jiggles == 0, format!("cursor jumped {jiggles} of 6 times"));
+    // your keys meanwhile: the game's (walking), not typed into the app
+    let t = Instant::now();
+    LOG.lock().unwrap().clear();
+    key(VK_W);
+    sleep(300);
+    let typed = LOG.lock().unwrap().iter().any(|(w, m, p)| *w == app.0 as isize && *m == WM_KEYDOWN && *p == 0x57);
+    let to_game = h.events_since(t).iter().any(|e| e.starts_with("gkey 87 ") && e.ends_with(" 1"));
+    rep.check("…and your keys go to the game, not into the app", to_game && !typed, format!("game got W: {to_game} · app got W: {typed}"));
+    let t = Instant::now();
+    key_state(VK_MENU, true);
+    let up = wait_for(1000, || h.events_since(t).iter().any(|e| e == "altup"));
+    rep.check("…letting go of Alt ends pointing", up, format!("{:?}", h.events_since(t)));
+    close(app);
 }
 
 fn union(a: &RECT, b: &RECT) -> RECT {

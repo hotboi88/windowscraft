@@ -1020,8 +1020,9 @@ fn ensure_seat_scanner() {
                     continue;
                 }
                 unsafe {
+                    // (one Windows didn't tell us about — some Store apps: Calculator… — is new too)
                     if !IsIconic(h).as_bool() && !on_area(h, &clip) {
-                        on_window_shown(h, false);
+                        on_window_shown(h, true);
                     }
                 }
                 checked.insert(k); // (each window looked at once: not again and again)
@@ -1223,6 +1224,23 @@ static HOOKS_OK: AtomicI32 = AtomicI32::new(0); // 0 starting, 1 ok, -1 failed
 static SINK: AtomicIsize = AtomicIsize::new(0);
 static LOOK_X: AtomicI32 = AtomicI32::new(0);
 static LOOK_Y: AtomicI32 = AtomicI32::new(0);
+/// Pointing: your mouse's moves as the hook saw them (held back from the cursor), and whether raw
+/// input arrives too (then that's what turns the view, not these).
+static LOOK_HX: AtomicI32 = AtomicI32::new(0);
+static LOOK_HY: AtomicI32 = AtomicI32::new(0);
+static RAW_SEEN: AtomicBool = AtomicBool::new(false);
+/// Pointing, after a click on the monitor: the game's title bar keeps looking active.
+static KEEP_GAME_LOOK: AtomicBool = AtomicBool::new(false);
+static LAST_FG: AtomicIsize = AtomicIsize::new(0);
+/// Keys handed to the game that way and still held (let go of when pointing ends).
+static GAME_KEYS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+fn release_game_keys() {
+    let held: Vec<u32> = std::mem::take(&mut *GAME_KEYS.lock().unwrap());
+    for vk in held {
+        emit(&format!("gkey {vk} 0 0"));
+    }
+}
 static EVENTS: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
 
 // pointing: the real cursor on a monitor while the game keeps the keyboard
@@ -1279,7 +1297,13 @@ fn event_writer(rx: std::sync::mpsc::Receiver<String>) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => return,
         }
-        let (dx, dy) = (LOOK_X.swap(0, Ordering::SeqCst), LOOK_Y.swap(0, Ordering::SeqCst));
+        let (mut dx, mut dy) = (LOOK_X.swap(0, Ordering::SeqCst), LOOK_Y.swap(0, Ordering::SeqCst));
+        let (hx, hy) = (LOOK_HX.swap(0, Ordering::SeqCst), LOOK_HY.swap(0, Ordering::SeqCst));
+        if !RAW_SEEN.load(Ordering::SeqCst) {
+            // pointing, and no raw input from the mouse: the moves the hook held back turn the view
+            dx += hx;
+            dy += hy;
+        }
         if dx != 0 || dy != 0 {
             say(&format!("look {dx} {dy}"));
         }
@@ -1422,13 +1446,31 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
         // pointing with Alt: Alt was let go for the apps already; your real Alt's release ends it
         let k = unsafe { &*(l.0 as *const KBDLLHOOKSTRUCT) };
         let vk = k.vkCode as u16;
-        if (k.flags.0 & LLKHF_INJECTED_BIT == 0 || k.dwExtraInfo != OUR_INPUT) && ALT_SWALLOW.load(Ordering::SeqCst) && (vk == VK_LMENU.0 || vk == VK_RMENU.0 || vk == VK_MENU.0) {
+        let real = k.flags.0 & LLKHF_INJECTED_BIT == 0 || k.dwExtraInfo != OUR_INPUT;
+        if real && ALT_SWALLOW.load(Ordering::SeqCst) && (vk == VK_LMENU.0 || vk == VK_RMENU.0 || vk == VK_MENU.0) {
             let msg = w.0 as u32;
             if msg == WM_KEYUP || msg == WM_SYSKEYUP {
                 ALT_SWALLOW.store(false, Ordering::SeqCst);
                 POINT_ME.store(false, Ordering::SeqCst);
                 emit("altup");
             }
+            return LRESULT(1);
+        }
+        // you clicked an app on the monitor (it's in front now), but you're still pointing at it
+        // from the game: your keys are the game's — walking, sneaking — not typing into the app
+        if real && POINT_ME.load(Ordering::SeqCst) && KEEP_GAME_LOOK.load(Ordering::SeqCst) && !game_in_front() && vk != VK_LWIN.0 && vk != VK_RWIN.0 {
+            let msg = w.0 as u32;
+            let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+            let mut held = GAME_KEYS.lock().unwrap();
+            if down {
+                if !held.contains(&(vk as u32)) {
+                    held.push(vk as u32);
+                }
+            } else {
+                held.retain(|x| *x != vk as u32);
+            }
+            drop(held);
+            emit(&format!("gkey {} {} {}", vk, k.scanCode, if down { 1 } else { 0 }));
             return LRESULT(1);
         }
     } else if code == HC_ACTION as i32 && ESC_HELD.load(Ordering::SeqCst) {
@@ -1465,8 +1507,20 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                 // your mouse keeps turning your view — measured from the mouse itself (raw input,
                 // see `raw_mouse`), never from where the cursor is: the cursor is moved to where you
                 // look all the time, and counting those moves as yours turned the view further,
-                // which moved the cursor further… (the camera flung itself around). The move
-                // itself goes on; the cursor is put back where you look straight after.
+                // which moved the cursor further… (the camera flung itself around).
+                // The move itself doesn't move the cursor: it jumped there and straight back to
+                // where you look, which made whatever was under it flicker between hovered and not.
+                // (While you hold a button down on the monitor — dragging — it does go on.)
+                let dragging = PASSED.iter().any(|p| p.load(Ordering::SeqCst));
+                if !dragging {
+                    let mut cur = POINT::default();
+                    if unsafe { GetCursorPos(&mut cur) }.is_ok() {
+                        // (if Windows holds raw input back with the move, this is what turns the view)
+                        LOOK_HX.fetch_add(m.pt.x - cur.x, Ordering::SeqCst);
+                        LOOK_HY.fetch_add(m.pt.y - cur.y, Ordering::SeqCst);
+                    }
+                    return LRESULT(1);
+                }
                 return unsafe { CallNextHookEx(None, code, w, l) };
             }
             let me = POINT_ME.load(Ordering::SeqCst);
@@ -1486,16 +1540,18 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                         return LRESULT(1);
                     }
                     PASSED[i].store(true, Ordering::SeqCst); // yours, a real click on the monitor
+                    // the app you click comes to the front, as on a real desktop, and stays there
+                    // until you let go of Alt (bouncing the game back after every click flickered
+                    // its title bar, and a quick next click could land on the game instead). Your
+                    // keys still reach the game meanwhile ("gkey"); its title bar keeps looking active.
+                    KEEP_GAME_LOOK.store(true, Ordering::SeqCst);
                 } else {
                     // a release goes wherever its press went (a press from before pointing: through)
                     if SWALLOWED[i].swap(false, Ordering::SeqCst) {
                         emit(&format!("mbtn {b} 0"));
                         return LRESULT(1);
                     }
-                    if PASSED[i].swap(false, Ordering::SeqCst) {
-                        // once the click is done, the game gets the keyboard back
-                        *GAME_BACK_AT.lock().unwrap() = Some(Instant::now() + Duration::from_millis(80));
-                    }
+                    PASSED[i].store(false, Ordering::SeqCst);
                 }
             }
         }
@@ -1548,6 +1604,7 @@ fn raw_mouse(l: LPARAM) {
             return; // (a pen tablet or a remote desktop: no relative movement to turn by)
         }
         if POINTING.load(Ordering::SeqCst) && !SEATED.load(Ordering::SeqCst) {
+            RAW_SEEN.store(true, Ordering::SeqCst);
             LOOK_X.fetch_add(m.lLastX, Ordering::SeqCst);
             LOOK_Y.fetch_add(m.lLastY, Ordering::SeqCst);
         }
@@ -2192,6 +2249,11 @@ fn point(idx: i32, device: &str, area: RECT, game: HWND) -> Result<&'static str,
     ALT_SWALLOW.store(false, Ordering::SeqCst);
     LOOK_X.store(0, Ordering::SeqCst);
     LOOK_Y.store(0, Ordering::SeqCst);
+    LOOK_HX.store(0, Ordering::SeqCst);
+    LOOK_HY.store(0, Ordering::SeqCst);
+    RAW_SEEN.store(false, Ordering::SeqCst);
+    KEEP_GAME_LOOK.store(false, Ordering::SeqCst);
+    LAST_FG.store(0, Ordering::SeqCst);
     for b in 0..5 {
         PASSED[b].store(false, Ordering::SeqCst);
         SWALLOWED[b].store(false, Ordering::SeqCst);
@@ -2248,6 +2310,13 @@ fn point_upkeep() {
                 let _ = SetCursorPos(t.x, t.y);
             }
         }
+        // (the title bar: also from here, in case the window-event hook isn't running)
+        if KEEP_GAME_LOOK.load(Ordering::SeqCst) {
+            let fg = GetAncestor(GetForegroundWindow(), GA_ROOT).0 as isize;
+            if LAST_FG.swap(fg, Ordering::SeqCst) != fg {
+                keep_game_looking_active(HWND(fg as *mut _));
+            }
+        }
         let due = GAME_BACK_AT.lock().unwrap().map_or(false, |at| Instant::now() >= at);
         if due && !buttons {
             *GAME_BACK_AT.lock().unwrap() = None;
@@ -2267,7 +2336,9 @@ fn point_upkeep() {
 /// Pointing is over: the clip the game had, the cursor back where it was, the game in front.
 fn end_point() {
     release_injected();
+    release_game_keys();
     look_mode(false);
+    KEEP_GAME_LOOK.store(false, Ordering::SeqCst);
     POINT_ME.store(false, Ordering::SeqCst);
     ALT_SWALLOW.store(false, Ordering::SeqCst);
     *TARGET.lock().unwrap() = None;
@@ -2291,6 +2362,8 @@ fn end_point() {
 
 fn end_point_clip_only() {
     release_injected();
+    release_game_keys();
+    KEEP_GAME_LOOK.store(false, Ordering::SeqCst);
     look_mode(false);
     POINT_ME.store(false, Ordering::SeqCst);
     ALT_SWALLOW.store(false, Ordering::SeqCst);
@@ -2691,7 +2764,9 @@ fn show_hidden_trays() {
 fn all_top_windows() -> Vec<isize> {
     unsafe extern "system" fn each(h: HWND, data: LPARAM) -> windows::core::BOOL {
         let list = unsafe { &mut *(data.0 as *mut Vec<isize>) };
-        if unsafe { IsWindowVisible(h) }.as_bool() {
+        // (a "cloaked" window — a Store app's hidden frame, kept for later — isn't really
+        // shown: when it's revealed, that's a window opening)
+        if unsafe { IsWindowVisible(h) }.as_bool() && !cloaked(h) {
             list.push(h.0 as isize);
         }
         windows::core::BOOL(1)
@@ -2919,17 +2994,59 @@ fn on_window_activated(h: HWND) {
     if !app_windows().contains(&h) {
         return;
     }
-    // an app that only runs once (Discord, WhatsApp…), already open on your desk or another
-    // monitor, came forward there instead of opening here: the monitor says no — it stays where
-    // it is, and you stay at your monitor (the menu's "Move here" takes it over on purpose)
+    // an app that only runs once (Discord, WhatsApp, Calculator… any of them), already open on
+    // your desk or another monitor, came forward there instead of opening here: it comes over to
+    // this monitor — in the middle, at a modest size, in front — in one move
     let elsewhere = if monitor_of_window(h).is_some() { "another in-game monitor" } else { "your desk" };
-    eprintln!("info=\"{}\" only runs once and is open on {elsewhere}: it stays there", title(h));
-    emit(&format!("single {}", title(h)));
-    let back = HWND(*LAST_SEAT_FRONT.lock().unwrap() as *mut _);
-    let to = if !back.0.is_null() && unsafe { IsWindow(Some(back)).as_bool() } && on_area(back, &area) { back } else { HWND(SINK.load(Ordering::SeqCst) as *mut _) };
-    if !to.0.is_null() {
-        foreground(to);
+    eprintln!("info=\"{}\" only runs once and was open on {elsewhere}: bringing it over to in-game monitor {idx}", title(h));
+    bring_over(h, idx);
+    *LAST_SEAT_FRONT.lock().unwrap() = h.0 as isize;
+}
+
+/// Brings a window that's somewhere else onto monitor `idx`: centred, a modest size (about
+/// 60 × 65 % of the screen; the app's own minimum if it needs more), not maximized.
+fn bring_over(h: HWND, idx: i32) {
+    let Some(area) = monitor_area(idx) else { return };
+    if admin_window(h) {
+        if ADMIN_TOLD.lock().unwrap().insert(pid(h)) {
+            emit("adminapp");
+        }
+        return;
     }
+    let work = work_area(&area);
+    let (aw, ah) = (work.right - work.left, work.bottom - work.top);
+    let spot = move |w: i32, hh: i32| {
+        let (w, hh) = (w.min(aw), hh.min(ah));
+        let left = work.left + (aw - w) / 2;
+        let top = work.top + (ah - hh) / 2;
+        RECT { left, top, right: left + w, bottom: top + hh }
+    };
+    placed().lock().unwrap().insert(h.0 as isize, idx);
+    {
+        let mut w = watch().lock().unwrap();
+        w.retain(|(x, _, _)| *x != h.0 as isize);
+        w.push((h.0 as isize, idx, Instant::now() + Duration::from_secs(4)));
+    }
+    apply_place(h, &spot(aw * 3 / 5, ah * 13 / 20), false);
+    // once it's there (an app may insist on a bigger minimum, or resize for the monitor's
+    // scaling): centred again by the size it really has
+    let hv = h.0 as isize;
+    std::thread::spawn(move || {
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(120));
+            let h = HWND(hv as *mut _);
+            let mut r = RECT::default();
+            if unsafe { GetWindowRect(h, &mut r) }.is_err() {
+                return;
+            }
+            let s = spot(r.right - r.left, r.bottom - r.top);
+            if (s.left - r.left).abs() > 2 || (s.top - r.top).abs() > 2 {
+                unsafe {
+                    let _ = SetWindowPos(h, None, s.left, s.top, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_ASYNCWINDOWPOS);
+                }
+            }
+        }
+    });
 }
 
 /// The window last in front on the monitor you sit at (where the keyboard goes back to).
@@ -2958,6 +3075,9 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     }
     if event == 0x0003 {
         let root = unsafe { GetAncestor(h, GA_ROOT) };
+        if !root.0.is_null() && POINTING.load(Ordering::SeqCst) && !SEATED.load(Ordering::SeqCst) && KEEP_GAME_LOOK.load(Ordering::SeqCst) {
+            keep_game_looking_active(root);
+        }
         if !root.0.is_null() && SEATED.load(Ordering::SeqCst) {
             if is_shell(root) && on_area(root, &*CLIP.lock().unwrap()) {
                 *SEAT_SHELL_AT.lock().unwrap() = Some(Instant::now()); // (you're using the monitor's own Start or taskbar)
@@ -2970,6 +3090,18 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     }
 }
 
+/// Pointing: an app on the monitor came to the front from your click. The game keeps its active
+/// title bar (it still gets your keys), instead of flashing to the "not in front" colour.
+fn keep_game_looking_active(front: HWND) {
+    let game = GAME.load(Ordering::SeqCst);
+    if game == 0 || front.0 as isize == game {
+        return;
+    }
+    unsafe {
+        let _ = PostMessageW(Some(HWND(game as *mut _)), WM_NCACTIVATE, WPARAM(1), LPARAM(0));
+    }
+}
+
 /// The hook that sees windows appear (started once, lives with the helper).
 fn ensure_placer() {
     if PLACER.swap(true, Ordering::SeqCst) {
@@ -2977,12 +3109,17 @@ fn ensure_placer() {
     }
     std::thread::spawn(|| unsafe {
         const EVENT_OBJECT_SHOW: u32 = 0x8002;
+        const EVENT_OBJECT_UNCLOAKED: u32 = 0x8018;
         const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
         let hook = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, None, Some(win_event), 0, 0,
             0 /* WINEVENT_OUTOFCONTEXT */ | 2 /* WINEVENT_SKIPOWNPROCESS */);
         // a window that comes forward (some apps show a window first and only bring it up later)
         let hook2 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(win_event), 0, 0,
             0 | 2);
+        // Store apps (Calculator, Settings…) keep a hidden "cloaked" frame and reveal it: that's it opening
+        let hook3 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_UNCLOAKED, EVENT_OBJECT_UNCLOAKED, None, Some(win_event), 0, 0,
+            0 | 2);
+        let _ = hook3;
         if hook.is_invalid() || hook2.is_invalid() {
             eprintln!("error=can't watch for new windows");
         }

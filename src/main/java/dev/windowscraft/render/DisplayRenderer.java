@@ -40,6 +40,7 @@ public final class DisplayRenderer {
      * with the world's depth, so anything in front of a screen still covers it.
      */
     public static void renderAfterShaders(net.minecraft.client.render.Camera camera, Matrix4f view, Matrix4f projection) {
+        dev.windowscraft.client.FrameView.capture(view, projection, camera.getPos());
         if (!ShaderCompat.drawAfterShaders()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         mc.getFramebuffer().beginWrite(false);
@@ -115,17 +116,22 @@ public final class DisplayRenderer {
         boolean pauseHidden = dev.windowscraft.config.ClientSettings.offscreenPause();
         boolean limitFar = dev.windowscraft.config.ClientSettings.distanceFpsLimit();
         long now = System.nanoTime();
+        Display looked = null;
+        double lookedPx = 0;
         for (Display d : manager.all()) {
             if (d.tablet || !d.dimension.equals(dim) || !facing(d.rect, cam)) continue;
             boolean seen = view.sees(d.rect, cam);
             double px = view.pixelsTall(d.rect, cam);
             d.noteView(seen, px);
+            if (seen && px > lookedPx && dev.windowscraft.monitor.InGameMonitors.isOn(d)) { lookedPx = px; looked = d; }
             if (pauseHidden && !seen) continue; // off-screen pause: no work at all for a wall you can't see
             long tu = System.nanoTime();
             boolean upload = !limitFar || px >= FAR_PX || due(d.id, now);
             Identifier tex = d.pollTexture(frame, upload);
             if (upload) { statUploads++; statUploadNanos += System.nanoTime() - tu; }
-            if (tex != null) {
+            if (tex != null && dev.windowscraft.client.DeskView.covers(d)) {
+                // (you sit at it: it's drawn flat and sharp on your view, right over this spot)
+            } else if (tex != null) {
                 placed(matrices, immediate, d.rect, tex, d.textureWidth(), d.textureHeight(), d.fit(), cam);
                 // the pointer: only while someone points with Alt, or sits at the wall and moves the mouse
                 if (dev.windowscraft.client.ScreenControl.pointerVisible(d)) {
@@ -142,6 +148,8 @@ public final class DisplayRenderer {
             }
             else quad(matrices, immediate, d.rect, idleTexture(d), 1, 1, cam); // (the card is made in the screen's own shape: edge to edge)
         }
+        // the one of your in-game monitors you're looking at (big on your view): its full picture
+        dev.windowscraft.monitor.InGameMonitors.lookingAt(lookedPx >= 280 ? looked : null);
         for (RemoteDisplays.Remote r : RemoteDisplays.all()) {
             if (!r.dimension().equals(dim) || !r.wallOk || !facing(r.rect, cam)) continue;
             if (pauseHidden && !view.sees(r.rect, cam)) continue;
@@ -361,15 +369,47 @@ public final class DisplayRenderer {
                 h = shape.height();
             }
             var img = tex.getImage();
+            int[] px = bleed(shape.argb(), w, h);
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++) {
-                    int argb = shape.argb()[y * w + x];
+                    int argb = px[y * w + x];
                     img.setColor(x, y, (argb & 0xFF00FF00) | ((argb >> 16) & 0xFF) | ((argb & 0xFF) << 16)); // → ABGR
                 }
             tex.upload();
             handle = shape.handle();
             return id;
         }
+    }
+
+    /**
+     * The see-through pixels around a pointer get the colour of their neighbours (still see-through):
+     * smoothing it on a wall blends each edge pixel with them, and with "black, see-through" that
+     * was a dark fringe and dark specks around the pointer. Also drops the faintest bits of its
+     * shadow, which a wall's drawing would cut off in hard steps anyway.
+     */
+    static int[] bleed(int[] argb, int w, int h) {
+        int[] out = argb.clone();
+        for (int i = 0; i < out.length; i++) if ((out[i] >>> 24) < 26) out[i] = 0;
+        int[] src = out.clone();
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int i = y * w + x;
+                if ((src[i] >>> 24) != 0) continue;
+                long r = 0, g = 0, b = 0, wsum = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int nx = x + dx, ny = y + dy;
+                        if ((dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        int c = src[ny * w + nx], a = c >>> 24;
+                        if (a == 0) continue;
+                        r += (long) ((c >> 16) & 0xFF) * a;
+                        g += (long) ((c >> 8) & 0xFF) * a;
+                        b += (long) (c & 0xFF) * a;
+                        wsum += a;
+                    }
+                if (wsum > 0) out[i] = (int) (r / wsum) << 16 | (int) (g / wsum) << 8 | (int) (b / wsum);
+            }
+        return out;
     }
 
     private static final ShapeTex REAL = new ShapeTex("real-pointer"), ARROW = new ShapeTex("arrow-pointer");

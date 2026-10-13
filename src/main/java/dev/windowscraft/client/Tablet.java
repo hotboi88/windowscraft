@@ -295,6 +295,17 @@ public final class Tablet {
     /** Draws with the full-size picture only (no blurrier smaller copies): sharp, as big as it is on your screen. */
     static void sharp(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_LINEAR, org.lwjgl.opengl.GL11.GL_LINEAR, draw); }
 
+    /** Drawn well smaller than it is: from its smaller copies when it has them (no shimmering text). */
+    static void smallerSharp(Identifier tex, Runnable draw) {
+        var t = MinecraftClient.getInstance().getTextureManager().getTexture(tex);
+        boolean mips = false;
+        if (t != null) {
+            com.mojang.blaze3d.platform.GlStateManager._bindTexture(t.getGlId());
+            mips = org.lwjgl.opengl.GL11.glGetTexLevelParameteri(org.lwjgl.opengl.GL11.GL_TEXTURE_2D, 1, org.lwjgl.opengl.GL11.GL_TEXTURE_WIDTH) > 0;
+        }
+        filtered(tex, mips ? org.lwjgl.opengl.GL11.GL_LINEAR_MIPMAP_LINEAR : org.lwjgl.opengl.GL11.GL_LINEAR, org.lwjgl.opengl.GL11.GL_LINEAR, draw);
+    }
+
     static void sharpNearest(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_NEAREST, org.lwjgl.opengl.GL11.GL_NEAREST, draw); }
 
     static void filtered(Identifier tex, int min, int mag, Runnable draw) {

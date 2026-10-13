@@ -26,7 +26,7 @@ import net.fabricmc.loader.api.FabricLoader;
  * itself within a second — nothing can be left behind.
  */
 public final class VDisplayHelper implements MonitorBackend {
-    private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single");
+    private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single", "gkey");
 
     private record Pending(Set<String> ends, List<String> lines, CompletableFuture<List<String>> done) {}
 
@@ -151,6 +151,7 @@ public final class VDisplayHelper implements MonitorBackend {
                 case "gone" -> e.monitorGone(Integer.parseInt(p[1]));
                 case "adminapp" -> e.adminApp();
                 case "moved" -> e.monitorsMoved();
+                case "gkey" -> e.gameKey(Integer.parseInt(p[1]), Integer.parseInt(p[2]), p[3].equals("1"));
                 case "single" -> e.singleInstance(line.length() > 7 ? line.substring(7) : "That app");
                 default -> {}
             }

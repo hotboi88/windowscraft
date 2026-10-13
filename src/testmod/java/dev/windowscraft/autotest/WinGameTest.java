@@ -248,6 +248,24 @@ public final class WinGameTest implements ClientModInitializer {
                 if (tick < 60) return;
                 shot(mc, "4_seated");
                 check(dev.windowscraft.client.DeskView.showing() != null, "sitting down shows the monitor flat on your screen, pixel for pixel");
+                // never past the game window's edges, never under your real taskbar
+                int[] vis = dev.windowscraft.client.GameArea.visible();
+                double[] pr = null;
+                var shown = dev.windowscraft.client.DeskView.showing();
+                if (shown != null) {
+                    double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+                    for (Vec3d p : dev.windowscraft.client.ScreenControl.pictureCorners(shown)) {
+                        double[] q = dev.windowscraft.client.FrameView.project(p);
+                        if (q == null) { x0 = Double.NaN; break; }
+                        x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]);
+                    }
+                    if (!Double.isNaN(x0)) pr = new double[]{x0, y0, x1, y1};
+                }
+                log("seated: visible part of the game " + java.util.Arrays.toString(vis) + " of " + mc.getWindow().getFramebufferWidth() + "x" + mc.getWindow().getFramebufferHeight()
+                        + ", picture " + (pr == null ? "?" : Math.round(pr[0]) + "," + Math.round(pr[1]) + " - " + Math.round(pr[2]) + "," + Math.round(pr[3])));
+                double[] fpr = pr;
+                check(fpr != null && fpr[0] >= vis[0] - 1 && fpr[1] >= vis[1] - 1 && fpr[2] <= vis[0] + vis[2] + 1 && fpr[3] <= vis[1] + vis[3] + 1,
+                        "fully zoomed in, the screen stays inside what you see of the game (never under your taskbar)");
                 dev.windowscraft.client.TheaterMode.leaveNow();
                 await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
             }

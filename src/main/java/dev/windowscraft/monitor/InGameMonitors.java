@@ -110,7 +110,23 @@ public final class InGameMonitors {
     /** Are you using that in-game monitor right now (sitting at it, or holding it up as your tablet)? */
     public static boolean inUse(SourceInfo s) {
         Mon m = monitorOf(s), at = seatedMon;
-        return m != null && at != null && m.index() == at.index();
+        if (m == null) return false;
+        if (at != null) return m.index() == at.index();
+        // standing: the one you're looking at (and for a few seconds after, so a glance away
+        // doesn't switch its picture back and forth)
+        return m.index() == lookedIndex && System.nanoTime() - lookedAt < 5_000_000_000L;
+    }
+
+    private static volatile int lookedIndex = -1;
+    private static volatile long lookedAt;
+
+    /** Each frame: the in-game monitor (of yours) that's big on your view right now, or null. */
+    public static void lookingAt(Display d) {
+        Mon m = d == null ? null : monitorOf(d);
+        if (m == null) return;
+        if (m.index() != lookedIndex && System.nanoTime() - lookedAt < 1_500_000_000L) return; // (one at a time; no flip-flopping)
+        lookedIndex = m.index();
+        lookedAt = System.nanoTime();
     }
 
     public static Mon monitorOf(Display d) { return d == null || d.share() == null ? null : monitorOf(d.share().source()); }
@@ -488,6 +504,7 @@ public final class InGameMonitors {
             lastCursor = new double[]{u, v};
             if (me && !pointMe) {
                 pointMe = true;
+                freeGameCursor(mc);
                 if (pointReady) b.pointMe(true);
             }
             return true;
@@ -504,8 +521,27 @@ public final class InGameMonitors {
         pointReady = false;
         unfocusedSince = 0;
         holdPause(mc);
+        if (me) freeGameCursor(mc);
         b.point(m, dev.windowscraft.capture.win.WinGeom.gameWindow, u, v);
         return true;
+    }
+
+    /** The game let go of the cursor for your pointing (GLFW's own hold on it is off). */
+    private static boolean gameCursorFreed;
+
+    /**
+     * Your own pointing: the game stops holding the cursor itself (it's in the middle of the game
+     * now, where it's held — so nothing moves). Otherwise, the moment a click on the monitor
+     * brings an app in front, the game would put the cursor back where it once took it from — in
+     * the middle of your click, which then landed somewhere else.
+     */
+    private static void freeGameCursor(MinecraftClient mc) {
+        if (gameCursorFreed || testing) return;
+        try {
+            org.lwjgl.glfw.GLFW.glfwSetInputMode(mc.getWindow().getHandle(), org.lwjgl.glfw.GLFW.GLFW_CURSOR, org.lwjgl.glfw.GLFW.GLFW_CURSOR_HIDDEN);
+            gameCursorFreed = true;
+        } catch (Throwable ignored) {
+        }
     }
 
     /** The cursor goes back to the game. */
@@ -521,9 +557,12 @@ public final class InGameMonitors {
         if (seatedMon == null) restorePause();
         // the game takes the mouse again properly (its hold on the cursor was let go meanwhile)
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (wasReady && mc.currentScreen == null && mc.isWindowFocused() && !testing) {
+        if ((wasReady || gameCursorFreed) && mc.currentScreen == null && mc.isWindowFocused() && !testing) {
             mc.mouse.unlockCursor();
             mc.mouse.lockCursor();
+            gameCursorFreed = false;
+        } else if (gameCursorFreed) {
+            relockUntil = System.nanoTime() + 3_000_000_000L; // (once Windows hands the game the keyboard back)
         }
     }
 
@@ -541,6 +580,14 @@ public final class InGameMonitors {
         MonitorBackend b = backend();
         if (b != null) b.pointMe(false);
         if (!dev.windowscraft.client.ScreenControl.hasGuests(pointOn)) endPoint();
+        else if (gameCursorFreed) { // (they keep pointing; you play on: the game holds the mouse again)
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc.isWindowFocused() && mc.currentScreen == null) {
+                mc.mouse.unlockCursor();
+                mc.mouse.lockCursor();
+                gameCursorFreed = false;
+            } else relockUntil = System.nanoTime() + 3_000_000_000L;
+        }
     }
 
     /** Someone you allowed points at (u, v) of your monitor: your real cursor goes there (shared, like one mouse). */
@@ -580,9 +627,38 @@ public final class InGameMonitors {
     }
 
     private static void holdPause(MinecraftClient mc) {
-        // the game keeps going when a click on the monitor briefly takes the keyboard
+        // the game keeps going when a click on the monitor takes the keyboard (and a fullscreen
+        // game stays on screen instead of minimizing)
         if (savedPause == null) savedPause = mc.options.pauseOnLostFocus;
         mc.options.pauseOnLostFocus = false;
+        try {
+            org.lwjgl.glfw.GLFW.glfwSetWindowAttrib(mc.getWindow().getHandle(), org.lwjgl.glfw.GLFW.GLFW_AUTO_ICONIFY, org.lwjgl.glfw.GLFW.GLFW_FALSE);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Windows' key code → GLFW's (the keys a game uses while you point; -1 for others). */
+    static int glfwKey(int vk) {
+        if (vk >= 0x41 && vk <= 0x5A) return vk;                  // A–Z
+        if (vk >= 0x30 && vk <= 0x39) return vk;                  // 0–9
+        if (vk >= 0x70 && vk <= 0x7B) return 290 + (vk - 0x70);   // F1–F12
+        if (vk >= 0x60 && vk <= 0x69) return 320 + (vk - 0x60);   // keypad 0–9
+        return switch (vk) {
+            case 0x20 -> 32;  // space
+            case 0x1B -> 256; // Esc
+            case 0x0D -> 257; // Enter
+            case 0x09 -> 258; // Tab
+            case 0x08 -> 259; // Backspace
+            case 0x2E -> 261; // Delete
+            case 0x27 -> 262; case 0x25 -> 263; case 0x28 -> 264; case 0x26 -> 265; // arrows
+            case 0x14 -> 280; // Caps Lock
+            case 0xA0, 0x10 -> 340; case 0xA1 -> 344; // shifts
+            case 0xA2, 0x11 -> 341; case 0xA3 -> 345; // ctrls
+            case 0xC0 -> 96;  // `
+            case 0xBD -> 45; case 0xBB -> 61; case 0xDB -> 91; case 0xDD -> 93; case 0xDC -> 92;
+            case 0xBA -> 59; case 0xDE -> 39; case 0xBC -> 44; case 0xBE -> 46; case 0xBF -> 47;
+            default -> -1;
+        };
     }
 
     /** Sat down at an in-game monitor: the pointer goes where the wall's pointer is. Returns false if it isn't one. */
@@ -605,6 +681,9 @@ public final class InGameMonitors {
         seatedMon = m;
         seatedOn = d;
         altLooking = false;
+        // a fullscreen game stays over your taskbar while you sit (it would cover the screen's bottom)
+        onTop = mc.getWindow().isFullscreen() && !testing;
+        if (onTop) dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true);
         b.seat(m, u, v, dev.windowscraft.capture.win.WinGeom.gameWindow).whenComplete((r, e) -> mc.execute(() -> {
             if ("ok".equals(r) || seatedOn != d) return;
             String why = e != null ? e.getMessage() : r;
@@ -618,10 +697,16 @@ public final class InGameMonitors {
     }
 
     /** Got up: the mouse and keyboard come back to the game. */
+    private static boolean onTop;
+
     public static void unseat() {
         if (seatedMon == null) return;
         seatedMon = null;
         seatedOn = null;
+        if (onTop) {
+            onTop = false;
+            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
+        }
         MonitorBackend b = backend();
         if (b != null) b.unseat();
         // the pause-when-you-leave setting comes back only once the game has your keyboard again
@@ -655,6 +740,15 @@ public final class InGameMonitors {
         return new double[]{(p[0] - m.left() + 0.5) / m.width(), (p[1] - m.top() + 0.5) / m.height()};
     }
 
+    /** Is the window in front on that in-game monitor? */
+    private static boolean frontOn(Mon m) {
+        if (m == null) return false;
+        int[] r = dev.windowscraft.capture.win.WinGeom.foregroundRect();
+        if (r == null) return false;
+        int cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2;
+        return cx >= m.left() && cx < m.right() && cy >= m.top() && cy < m.bottom();
+    }
+
     /** Client tick. */
     private static int ticks;
 
@@ -663,7 +757,8 @@ public final class InGameMonitors {
         if (b != null && (seatedMon != null || pointMon != null)) b.beat(); // "the game is still here" (a frozen game never keeps your mouse)
         if (pointMon != null) {
             // you opened a menu, or switched to another window for real: your cursor is yours again
-            if (!focused(mc)) {
+            // (an app on that monitor in front — you clicked it while pointing — isn't "away")
+            if (!focused(mc) && !frontOn(pointMon)) {
                 if (unfocusedSince == 0) unfocusedSince = System.nanoTime();
             } else unfocusedSince = 0;
             boolean away = unfocusedSince != 0 && System.nanoTime() - unfocusedSince > 1_500_000_000L;
@@ -675,7 +770,11 @@ public final class InGameMonitors {
         if (relockUntil != 0) {
             boolean back = mc.isWindowFocused();
             if (back || System.nanoTime() > relockUntil) {
-                if (back && mc.currentScreen == null) mc.mouse.lockCursor();
+                if (back && mc.currentScreen == null) {
+                    if (gameCursorFreed) mc.mouse.unlockCursor(); // (its own hold was off: taken properly again)
+                    mc.mouse.lockCursor();
+                }
+                gameCursorFreed = false;
                 relockUntil = 0;
                 if (seatedMon == null && pointMon == null) restorePause();
             }
@@ -881,6 +980,17 @@ public final class InGameMonitors {
         @Override public void altUp() { onGame(InGameMonitors::ownerStopPointing); }
 
         @Override
+        public void gameKey(int vk, int scancode, boolean down) {
+            int key = glfwKey(vk);
+            if (key < 0) return;
+            onGame(() -> {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                if (down && !ownerPointing()) return; // (letting go always goes through: nothing stays held)
+                mc.keyboard.onKey(mc.getWindow().getHandle(), key, scancode, down ? org.lwjgl.glfw.GLFW.GLFW_PRESS : org.lwjgl.glfw.GLFW.GLFW_RELEASE, 0);
+            });
+        }
+
+        @Override
         public void pointLost() {
             onGame(() -> {
                 pointMon = null;
@@ -927,6 +1037,7 @@ public final class InGameMonitors {
                 boolean wasSeated = seatedMon != null;
                 seatedMon = null;
                 seatedOn = null;
+                if (onTop) { onTop = false; dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false); }
                 restorePause();
                 if (backend instanceof dev.windowscraft.capture.win.VDisplayHelper) dev.windowscraft.capture.win.VDisplayHelper.unclip();
                 if (wasSeated) TheaterMode.leaveNow();

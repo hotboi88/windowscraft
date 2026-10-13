@@ -52,6 +52,8 @@ public interface MonitorBackend {
         default void pointFail(String why) {}
         /** Sitting: your cursor went on to a monitor joined to yours — you sit at that one now. */
         default void seatMoved(int index) {}
+        /** Pointing, with an app on the monitor in front (you clicked it): your key, for the game ({@code vk} Windows' key code). */
+        default void gameKey(int vk, int scancode, boolean down) {}
     }
 
     CompletableFuture<Driver> status();

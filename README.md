@@ -139,13 +139,19 @@ on it (what's open on it, who can use it, its size). Sneak + U on an idle wall s
 one of your real screens instead, as before.
 
 - **Sit-down view, pixel for pixel**: sit down at your own in-game monitor (**O**) and, once
-  you're seated, it's shown flat on your screen exactly like a real monitor — no 3D wall,
-  shaders or compression in between, about one frame of delay. **Alt + scroll** out (or look
-  around with Alt) to see the room; **Esc** gets you up. Joined monitors: moving onto the next one
-  switches the view to it. Turn it off in the menu (In-game monitors → "Sit-down view").
-- **Apps that only run once** (Discord, WhatsApp…): already open on your desk or another
-  monitor, starting one from a monitor leaves it where it is (the monitor says so); "Bring here"
-  in the monitor's menu takes it over on purpose.
+  you're seated, it's drawn flat on your screen like a real monitor — no 3D wall, shaders or
+  compression in between, about one frame of delay — right where the monitor is, with the room
+  around it (no black bars). Fully zoomed in, its edges touch the edges of what you can see of
+  the game window, never further: nothing is cropped, and it never goes under your real Windows
+  taskbar (a fullscreen game stays above the taskbar while you sit). When it fits 1:1 it's exactly
+  pixel for pixel. **Alt + scroll** out and it stays flat and sharp, just smaller; look around with
+  Alt to see the room; **Esc** gets you up. Joined monitors: moving onto the next one switches
+  the view to it. Turn it off in the menu (In-game monitors → "Sit-down view"). Standing in the
+  room, the monitor you're looking at gets its full-resolution picture too (one at a time).
+- **Apps that only run once** (Discord, WhatsApp, Calculator… any app that won't open a second
+  window): already open on your desk or another monitor, opening it from a monitor brings its
+  window over — in the middle of the monitor, at a modest size, in one move.
+- **Store apps** (Calculator, Settings…) open on the monitor you open them from, like any app.
 - **A browser on your desk and on a monitor** shares its sound (Windows can't split one app's
   sound by window), so it stays on your desk. For a browser with its own sound on a monitor, use
   "Own Brave/Chrome/Edge" in the monitor's menu.
@@ -185,7 +191,9 @@ one of your real screens instead, as before.
   hold on the cursor (dragging Roblox's camera) is left alone.
 - **Alt-pointing works like sitting**: hold Alt and look at your monitor, and your real cursor is
   there — real hovering, clicks and scrolling, your real cursor on the wall — while you keep
-  walking and looking around. The game gets the keyboard straight back after each click.
+  walking and looking around. The app you click comes to the front, as on a real desktop, and
+  your keys keep going to the game (walking, sneaking) until you let go of Alt; the game's title
+  bar doesn't flicker, and your mouse moving never jiggles the cursor off what you're hovering.
 - **Other players you allow each get their own pointer** (drawn as a Windows arrow): their
   pointing, clicks, scrolling and typing go straight to the window under their pointer, as the
   messages Windows itself would send it — never through your real cursor or keyboard. Each person

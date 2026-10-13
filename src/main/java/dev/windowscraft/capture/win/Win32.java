@@ -85,6 +85,11 @@ final class Win32 {
         boolean GetCursorPos(POINT point);
         boolean AllowSetForegroundWindow(int pid);
         boolean ClipCursor(RECT rect);
+        HWND GetForegroundWindow();
+        HWND GetAncestor(HWND hwnd, int flags);
+        HWND WindowFromPoint(com.sun.jna.platform.win32.WinDef.POINT.ByValue p);
+        HWND FindWindowEx(HWND parent, HWND after, String cls, String title);
+        boolean SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int cy, int flags);
     }
 
     interface Gdi32 extends StdCallLibrary {
