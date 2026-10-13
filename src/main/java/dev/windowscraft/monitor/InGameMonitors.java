@@ -802,7 +802,7 @@ public final class InGameMonitors {
         }
         @Override public void singleInstance(String title) {
             onGame(() -> say(MinecraftClient.getInstance(), "\"" + (title.length() > 40 ? title.substring(0, 40) + "…" : title)
-                    + "\" only runs once and is already open elsewhere, so it stays there. To move it here: sneak + U → Windows → Move here.", Formatting.GRAY));
+                    + "\" only runs once and is already open elsewhere, so it stays there. To bring it here: sneak + U on this monitor → Bring here.", Formatting.GRAY));
         }
 
         @Override public void monitorsMoved() { onGame(() -> refreshRects(MinecraftClient.getInstance())); }

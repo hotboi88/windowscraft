@@ -376,8 +376,19 @@ public final class HubScreen extends Screen {
                 + " at " + c.getX() + ", " + c.getY() + ", " + c.getZ() + " · " + whereOf(d);
         UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, sub, w - 4), x, py + 28, UiKit.TEXT_MUTED);
 
+        // its volume on your speakers (0 – 500 %): the share's own, and the next one's too
+        var share = d.share();
+        double vol = share != null ? share.localVolume : ClientSettings.ownVolume();
+        int sw = Math.min(220, w - 70);
+        if (volSlider.dragging()) setScreenVolume(share, volSlider.valueAt(mx));
+        volSlider.render(g, textRenderer, x, py + 45, sw, vol, false);
+        hit(x + VolumeSlider.ICON_W - 4, py + 39, sw - VolumeSlider.ICON_W + 8, 16, () -> {
+            volSlider.startDrag();
+            setScreenVolume(share, volSlider.valueAt(mx));
+        });
+
         // tabs on the left, what you can do with it on the right
-        int ty = py + 44;
+        int ty = py + 58;
         List<String> names = new ArrayList<>();
         List<Integer> ids = new ArrayList<>();
         if (on) { names.add("Windows"); ids.add(TAB_WINDOWS); }
@@ -891,9 +902,18 @@ public final class HubScreen extends Screen {
         return super.mouseClicked(mx, my, button);
     }
 
+    private final VolumeSlider volSlider = new VolumeSlider();
+
+    private static void setScreenVolume(dev.windowscraft.display.Share share, double v) {
+        v = Math.max(0, Math.min(VolumeSlider.MAX, v));
+        if (share != null) share.localVolume = v;
+        ClientSettings.setOwnVolume(v);
+    }
+
     @Override
     public boolean mouseReleased(double mx, double my, int button) {
         speedDrag = false;
+        volSlider.stopDrag();
         return super.mouseReleased(mx, my, button);
     }
 
