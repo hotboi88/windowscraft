@@ -61,6 +61,7 @@ public final class MultiplayerTest implements ClientModInitializer {
             lightened = true;
             mc.options.getMaxFps().setValue(10);
             mc.options.getViewDistance().setValue(2);
+            dev.windowscraft.client.BusyGuard.enabled = false; // (the low frame rate here is on purpose)
             log("movie test: game drawing kept light (10 fps, view distance 2)");
         }
         if (role.equals("sharer")) sharer(mc); else viewer(mc);

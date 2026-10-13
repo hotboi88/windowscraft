@@ -66,6 +66,7 @@ public final class WindowsCraftClient implements ClientModInitializer {
             dev.windowscraft.client.ScreenControl.tick(mc);
             dev.windowscraft.monitor.InGameMonitors.tick(mc);
             dev.windowscraft.client.Tablet.tick(mc);
+            dev.windowscraft.client.BusyGuard.tick(mc);
             if (dev.windowscraft.capture.win.WinGeom.gameWindow == 0 && dev.windowscraft.capture.win.WinGeom.available()) {
                 try {
                     dev.windowscraft.capture.win.WinGeom.gameWindow = org.lwjgl.glfw.GLFWNativeWin32.glfwGetWin32Window(mc.getWindow().getHandle());

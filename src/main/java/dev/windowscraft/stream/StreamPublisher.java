@@ -594,6 +594,9 @@ public final class StreamPublisher {
                 skipSeconds = videoSkips > 0 && now - pipelineStart > 5_000_000_000L ? skipSeconds + 1 : 0;
                 videoSkips = 0;
                 if (skipSeconds >= 4) lower("this PC couldn't encode it fast enough");
+                String bw = busyWhy;
+                busyWhy = null;
+                if (bw != null && now - pipelineStart > 5_000_000_000L) lower(bw);
                 // someone watching can't keep up. Give each step 15 s to show its effect first
                 int vt = viewerTrouble;
                 viewerTrouble = 0;
@@ -669,6 +672,15 @@ public final class StreamPublisher {
 
     /** Through the server: someone watching can't keep up (a {@code Payloads.TROUBLE_*}). Any thread. */
     public void viewerTrouble(int kind) { viewerTrouble = kind; }
+
+    /** BusyGuard: the PC or the server is struggling — one step lighter (true if there was a step left). */
+    public boolean busy(String why) {
+        if (level >= MAX_LEVEL) return false;
+        busyWhy = why;
+        return true;
+    }
+
+    private volatile String busyWhy;
 
     /** GPU capture needs Windows, a real window or monitor, and a hardware encoder that takes D3D11 frames. */
     private boolean gpuEligible(Ffmpeg.Encoder enc) {
