@@ -1131,6 +1131,45 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         None => rep.skip("\"Own browser\"", "Edge isn't installed"),
     }
 
+    // ---- 16. the monitor's picture: Windows Graphics Capture sees it (what your wall shows)
+    let cap = dir.join("wc-capture.exe");
+    if cap.exists() {
+        let hmon = unsafe { MonitorFromRect(&rb, MONITOR_DEFAULTTONULL) };
+        let name = format!("Local\\wc-selftest-{}", std::process::id());
+        match Command::new(&cap).args(["--hmonitor", &(hmon.0 as usize).to_string(), "--cpu", &name, "--box", "full", "--fps", "30", "--cursor", "0",
+            "--parent-pid", &std::process::id().to_string()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+            Ok(mut c) => {
+                let out = c.stdout.take().unwrap();
+                let err = c.stderr.take().unwrap();
+                let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+                let (l1, l2) = (lines.clone(), lines.clone());
+                std::thread::spawn(move || for l in BufReader::new(out).lines().map_while(Result::ok) { l1.lock().unwrap().push(l); });
+                std::thread::spawn(move || for l in BufReader::new(err).lines().map_while(Result::ok) { l2.lock().unwrap().push(format!("(log) {l}")); });
+                let first = wait_for(6000, || lines.lock().unwrap().iter().any(|l| l.starts_with("frame ")));
+                // something changes on the monitor: more pictures come
+                let w = spawn_window("WindowsCraftTestWin", "Changing (self-test)", RECT { left: rb.left + 200, top: rb.top + 200, right: rb.left + 900, bottom: rb.top + 700 }, false);
+                let n0 = lines.lock().unwrap().iter().filter(|l| l.starts_with("frame ")).count();
+                for i in 0..10 {
+                    unsafe {
+                        let _ = SetWindowPos(w, None, rb.left + 200 + i * 30, rb.top + 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    sleep(100);
+                }
+                sleep(500);
+                let n1 = lines.lock().unwrap().iter().filter(|l| l.starts_with("frame ")).count();
+                let shown: Vec<String> = lines.lock().unwrap().iter().take(8).cloned().collect();
+                rep.check("a monitor's picture is captured (what your wall shows)", first, format!("{shown:?}"));
+                rep.check("…and new pictures come as it changes", n1 > n0, format!("{n0} → {n1} pictures"));
+                close(w);
+                drop(c.stdin.take());
+                let _ = c.kill();
+            }
+            Err(e) => rep.check("a monitor's picture is captured", false, format!("couldn't start wc-capture: {e}")),
+        }
+    } else {
+        rep.skip("a monitor's picture is captured", "wc-capture.exe isn't next to the self-test");
+    }
+
     // ---- 15. a crash leaves nothing behind: the next start is clean
     let _ = h.call(&format!("remove {}", b.idx), "removed", 15000);
     let c = add(&h, 1920, 1080);
