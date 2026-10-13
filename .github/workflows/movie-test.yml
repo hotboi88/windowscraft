@@ -11,6 +11,7 @@ on:
       - 'src/main/java/dev/windowscraft/relay/**'
       - 'src/testmod/java/dev/windowscraft/autotest/MultiplayerTest.java'
       - 'tools/movie/**'
+      - 'src/main/java/dev/windowscraft/capture/TestPatternProducer.java'
       - '.github/workflows/movie-test.yml'
   workflow_dispatch:
 

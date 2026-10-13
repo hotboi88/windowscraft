@@ -91,9 +91,9 @@ public final class TestPatternProducer implements FrameProducer {
     private static BufferedImage scene;
     private static int sceneNo = -1;
 
-    private static BufferedImage[] grains;
+    private static long grainSeed = 88172645463325252L;
 
-    private static void paintMovie(Graphics2D g, double t, long frame) {
+    private static void paintMovie(Graphics2D g, BufferedImage img, double t, long frame) {
         int no = (int) (t / 5);
         if (no != sceneNo || scene == null) {
             sceneNo = no;
@@ -106,21 +106,16 @@ public final class TestPatternProducer implements FrameProducer {
             sg.drawImage(small, 0, 0, W * 2, H, null);
             sg.dispose();
         }
-        if (grains == null) { // (film grain, made once: a different one on each picture)
-            grains = new BufferedImage[6];
-            java.util.Random r = new java.util.Random(5);
-            for (int k = 0; k < grains.length; k++) {
-                grains[k] = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
-                int[] px = ((DataBufferInt) grains[k].getRaster().getDataBuffer()).getData();
-                for (int i = 0; i < 40_000; i++) {
-                    int v = r.nextInt(256);
-                    px[r.nextInt(px.length)] = (110 << 24) | (v << 16) | (v << 8) | v;
-                }
-            }
-        }
         int off = (int) ((t % 5) * 120); // panning, 120 px a second
         g.drawImage(scene, -off, 0, null);
-        g.drawImage(grains[(int) (frame % grains.length)], 0, 0, null);
+        // film grain: fresh on every picture, so the encoder works as hard as on a real film
+        int[] px = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+        long x = grainSeed ^ frame * 0x9E3779B97F4A7C15L;
+        for (int i = 0; i < 160_000; i++) {
+            x ^= x << 13; x ^= x >>> 7; x ^= x << 17;
+            int at = (int) ((x >>> 33) % px.length);
+            px[at] ^= (int) (x & 0x1F1F1F);
+        }
     }
 
     private static void paint(BufferedImage img, double t, long frame, int fps) {
@@ -129,7 +124,7 @@ public final class TestPatternProducer implements FrameProducer {
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g.setPaint(new GradientPaint(0, 0, new Color(0x1E1F22), 0, H, new Color(0x111214)));
         g.fillRect(0, 0, W, H);
-        if (MOVIE && fps > 0) paintMovie(g, t, frame);
+        if (MOVIE && fps > 0) paintMovie(g, img, t, frame);
 
         int barW = W / BARS.length;
         for (int i = 0; i < BARS.length; i++) {
