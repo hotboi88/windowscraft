@@ -261,14 +261,41 @@ public final class StreamSubscriber implements FrameSource {
                 synchronized (lock) { queue.add(END); lock.notifyAll(); }
             }
         });
+        // every 2 s, by the clock (not by how fast this PC decodes): was the connection lossy —
+        // pieces given up on, or a lot of them needing a resend (more than 1 in 20)? Then the
+        // stream should be lighter
+        if (rxNow != null) daemon("viewer loss watch", () -> {
+            long skippedAt = rxNow.skipped, recoveredAt = rxNow.recovered, receivedAt = rxNow.received;
+            while (running && udp == rxNow) {
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                long now = System.nanoTime();
+                long given = rxNow.skipped - skippedAt, rec = rxNow.recovered - recoveredAt, got = Math.max(1, rxNow.received - receivedAt);
+                skippedAt = rxNow.skipped;
+                recoveredAt = rxNow.recovered;
+                receivedAt = rxNow.received;
+                boolean lossy = given >= 1 || (rec >= 20 && rec * 20 > got);
+                if (!lossy) continue;
+                WindowsCraftClient.LOGGER.info("[loss] {}: given up {}, resent {} of {} (report as {})", streamId.substring(0, 8), given, rec, got, reportAs);
+                if (reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
+                    lastLossTroubleNanos = now;
+                    WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way ({} resent of {}); asking for a lighter stream",
+                            streamId.substring(0, 8), rec, got);
+                    ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_NETWORK);
+                    lossTroubleSent = true;
+                }
+            }
+        });
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
             // a piece of the picture never arrived: the pictures after it would be smeared and
             // streaky until the next keyframe — show the last good one until then instead (the
             // sound carries on), and if it keeps happening, ask the owner to send less
             boolean lostUntilKey = false;
-            long seenSkipped = rxNow != null ? rxNow.skipped : 0, lossWindowStart = System.nanoTime(), lossesInWindow = 0;
-            long recoveredAtWindow = rxNow != null ? rxNow.recovered : 0, receivedAtWindow = rxNow != null ? rxNow.received : 0;
+            long seenSkipped = rxNow != null ? rxNow.skipped : 0;
             try {
                 while (running) {
                     RelayServer.Chunk c;
@@ -287,31 +314,9 @@ public final class StreamSubscriber implements FrameSource {
                         if (!c.keyframe()) continue;
                         waitForKey = false;
                     }
-                    if (rxNow != null) {
-                        long now = System.nanoTime();
-                        if (rxNow.skipped != seenSkipped) {
-                            lossesInWindow += rxNow.skipped - seenSkipped;
-                            seenSkipped = rxNow.skipped;
-                            lostUntilKey = true;
-                        }
-                        // every 2 s: was the connection lossy — pieces given up on, or a lot of them
-                        // needing a resend (more than 1 in 20)? Then the stream should be lighter
-                        if (now - lossWindowStart > 2_000_000_000L) {
-                            long rec = rxNow.recovered - recoveredAtWindow, got = Math.max(1, rxNow.received - receivedAtWindow);
-                            boolean lossy = lossesInWindow >= 1 || (rec >= 20 && rec * 20 > got);
-                            if (lossy) WindowsCraftClient.LOGGER.info("[loss] {}: given up {}, resent {} of {} → lossy {} (report as {})", streamId.substring(0, 8), lossesInWindow, rec, got, lossy, reportAs);
-                            lossWindowStart = now;
-                            lossesInWindow = 0;
-                            recoveredAtWindow = rxNow.recovered;
-                            receivedAtWindow = rxNow.received;
-                            if (lossy && reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
-                                lastLossTroubleNanos = now;
-                                WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way ({} resent of {}); asking for a lighter stream",
-                                        streamId.substring(0, 8), rec, got);
-                                ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_NETWORK);
-                                lossTroubleSent = true;
-                            }
-                        }
+                    if (rxNow != null && rxNow.skipped != seenSkipped) {
+                        seenSkipped = rxNow.skipped;
+                        lostUntilKey = true;
                     }
                     if (lostUntilKey && c.keyframe()) lostUntilKey = false;
                     if (lostUntilKey) {
