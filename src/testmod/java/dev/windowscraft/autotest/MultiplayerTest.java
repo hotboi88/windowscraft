@@ -217,6 +217,14 @@ public final class MultiplayerTest implements ClientModInitializer {
     private void movieViewer(MinecraftClient mc, java.io.File cfg) {
         RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
         StreamSubscriber sub = r == null ? null : r.subscriber();
+        if (tick % 200 == 0) log("movie: " + (r == null ? "no screen known yet" : sub == null ? "screen known, not watching it" : sub.status() + ", pictures " + sub.framesDecoded()));
+        if (tick > 20 * 240 && movieMeasure == 0) { // (4 minutes and still nothing: say so and stop)
+            log("MOVIE RESULT: none — no picture arrived (" + (r == null ? "no screen known" : sub == null ? "not watching" : sub.status()) + ")");
+            try { new java.io.File(mc.runDirectory, "viewer-done").createNewFile(); } catch (java.io.IOException ignored) {}
+            mc.scheduleStop();
+            movieMeasure = Long.MAX_VALUE / 4;
+            return;
+        }
         if (sub == null || sub.framesDecoded() < 30) return;
         long now = System.nanoTime();
         if (movieStart == 0) {
