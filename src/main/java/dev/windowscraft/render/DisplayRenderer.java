@@ -140,7 +140,7 @@ public final class DisplayRenderer {
                 if (mon != null) for (double[] gp : dev.windowscraft.client.ScreenControl.guestPointers(d))
                     drawArrow(matrices, immediate, dev.windowscraft.client.ScreenControl.pictureCorners(d), mon.width(), mon.height(), gp, cam);
             }
-            else placed(matrices, immediate, d.rect, idleTexture(d), IdleCards.W, IdleCards.H, CaptureSettings.FIT_AUTO, cam);
+            else quad(matrices, immediate, d.rect, idleTexture(d), 1, 1, cam); // (the card is made in the screen's own shape: edge to edge)
         }
         for (RemoteDisplays.Remote r : RemoteDisplays.all()) {
             if (!r.dimension().equals(dim) || !r.wallOk || !facing(r.rect, cam)) continue;
@@ -159,8 +159,7 @@ public final class DisplayRenderer {
             } else {
                 StreamSubscriber sub = r.subscriber();
                 String detail = sub == null ? "Come closer to watch" : sub.status();
-                placed(matrices, immediate, r.rect, IdleCards.get(r.ownerName + "'s screen", detail), IdleCards.W, IdleCards.H,
-                        CaptureSettings.FIT_AUTO, cam);
+                quad(matrices, immediate, r.rect, IdleCards.get(r.ownerName + "'s screen", detail, r.rect.width() / r.rect.height()), 1, 1, cam);
             }
         }
     }
@@ -277,13 +276,14 @@ public final class DisplayRenderer {
 
     private static Identifier idleTexture(Display d) {
         CaptureSession s = d.session();
+        double aspect = d.rect.width() / d.rect.height();
         if (s != null) {
             String why = s.message();
             return IdleCards.get(s.state() == CaptureSession.State.PAUSED ? "Paused" : "Connecting…",
-                    why != null ? why : s.source().title());
+                    why != null ? why : s.source().title(), aspect);
         }
-        if (d.endedMessage() != null) return IdleCards.get("Share ended", d.endedMessage());
-        return IdleCards.get("Ready to share", "Look here and press " + dev.windowscraft.WindowsCraftClient.keyName());
+        if (d.endedMessage() != null) return IdleCards.get("Share ended", d.endedMessage(), aspect);
+        return IdleCards.get("Ready to share", "Look here and press " + dev.windowscraft.WindowsCraftClient.keyName(), aspect);
     }
 
     private static void vertex(VertexConsumer vc, Matrix4f m, Vec3d p, Vec3d cam, float u, float v, int light) {
