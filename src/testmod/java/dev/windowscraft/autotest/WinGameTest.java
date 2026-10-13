@@ -152,17 +152,39 @@ public final class WinGameTest implements ClientModInitializer {
                 if (tick < 40) return;
                 shot(mc, "1_wall_monitor_on");
                 log("live monitors: " + InGameMonitors.all());
-                look(mc, 6.5, ground + 1, -1.5, Vec3d.ofCenter(mon()).add(0, 0.05, 0));
                 stage++;
                 tick = 0;
             }
             case 4 -> {
+                // off and on again, a few times in a row (the "U stopped doing anything" report)
+                if (tick < 20) return;
+                pressU();
+                await("U on a live wall monitor turns it off (round " + (cycle + 1) + ")", 30, () -> !InGameMonitors.isOn(at(mc, wall(0, 0))) && !InGameMonitors.starting(at(mc, wall(0, 0))));
+            }
+            case 5 -> {
+                if (tick < 10) return;
+                pressU();
+                await("…and U turns it back on (round " + (cycle + 1) + ")", 60, () -> InGameMonitors.isOn(at(mc, wall(0, 0))));
+            }
+            case 6 -> {
+                if (tick < 40) return;
+                if (++cycle < 4) {
+                    stage = 4;
+                    tick = 0;
+                    return;
+                }
+                checkPictures(mc, "after turning it off and on 4 times, the wall shows its monitor's picture");
+                look(mc, 6.5, ground + 1, -1.5, Vec3d.ofCenter(mon()).add(0, 0.05, 0));
+                stage++;
+                tick = 0;
+            }
+            case 7 -> {
                 if (tick < 10) return;
                 log("pressing U at the gaming monitor block");
                 pressU();
                 await("U on a gaming monitor block turns it on", 60, () -> InGameMonitors.isOn(DisplayManager.get().findAt(dim(mc), mon(), Direction.SOUTH)));
             }
-            case 5 -> {
+            case 8 -> {
                 if (tick < 40) return;
                 shot(mc, "2_monitor_block_on");
                 // a second monitor joined to its right
@@ -171,7 +193,7 @@ public final class WinGameTest implements ClientModInitializer {
                 stage++;
                 tick = 0;
             }
-            case 6 -> {
+            case 9 -> {
                 if (tick < 10) return;
                 Vec3d hit = Vec3d.ofCenter(mon()).add(0.5, 0, 0);
                 var r = mc.interactionManager.interactBlock(mc.player, net.minecraft.util.Hand.MAIN_HAND,
@@ -182,19 +204,19 @@ public final class WinGameTest implements ClientModInitializer {
                 stage++;
                 tick = 0;
             }
-            case 7 -> {
+            case 10 -> {
                 if (tick < 20) return;
                 look(mc, 7.0, ground + 1, -1.5, DisplayManager.get().findAt(dim(mc), mon(), Direction.SOUTH) != null
                         ? dev.windowscraft.block.MonitorBlock.rectAt(mc.world, mon().east()).center() : Vec3d.ofCenter(mon().east()));
                 stage++;
                 tick = 0;
             }
-            case 8 -> {
+            case 11 -> {
                 if (tick < 10) return;
                 pressU();
                 await("U on the joined monitor turns it on too", 60, () -> InGameMonitors.isOn(DisplayManager.get().findAt(dim(mc), mon().east(), Direction.SOUTH)));
             }
-            case 9 -> {
+            case 12 -> {
                 if (tick < 200) return; // (the layout follows within a few seconds)
                 var all = InGameMonitors.all();
                 log("monitors now: " + all + " · layout asked: " + InGameMonitors.arrangement());
@@ -208,35 +230,57 @@ public final class WinGameTest implements ClientModInitializer {
                         && !(mw.right() == ma.left() && (mw.bottom() == ma.top() || ma.bottom() == mw.top()))
                         && !(ma.right() == mw.left() && (mw.bottom() == ma.top() || ma.bottom() == mw.top()));
                 check(!touches, "the wall's monitor doesn't share an edge with them (" + mw + ")");
+                checkDistinct("three screens, three different monitors (never two showing the same one)");
+                checkPictures(mc, "every screen shows its monitor's picture");
                 shot(mc, "3_joined");
                 // sit down at the wall
                 look(mc, 0.5, ground + 1, -1.5, Vec3d.ofCenter(wall(0, 0)));
                 stage++;
                 tick = 0;
             }
-            case 10 -> {
+            case 13 -> {
                 if (tick < 10) return;
                 dev.windowscraft.client.TheaterMode.toggle(mc);
                 await("O sits you down at it (your mouse and keyboard go to it)", 20, () -> InGameMonitors.seated() != null);
             }
-            case 11 -> {
+            case 14 -> {
                 if (tick < 60) return;
                 shot(mc, "4_seated");
                 dev.windowscraft.client.TheaterMode.leaveNow();
                 await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
             }
-            case 12 -> {
+            case 15 -> {
+                // an app you open from your desk (with monitors on, the game in front) opens on your desk
+                if (tick < 20) return;
+                try {
+                    notepad = new ProcessBuilder("notepad.exe").start();
+                } catch (java.io.IOException e) {
+                    log("couldn't start Notepad: " + e);
+                }
+                await("an app opened from your desk opens on your desk, never on an in-game monitor", 20, () -> {
+                    int[] r = notepadRect();
+                    if (r == null) return false;
+                    var prim = new int[] {0, 0, com.sun.jna.platform.win32.User32.INSTANCE.GetSystemMetrics(0), com.sun.jna.platform.win32.User32.INSTANCE.GetSystemMetrics(1)};
+                    int cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2;
+                    boolean home = cx >= prim[0] && cx < prim[2] && cy >= prim[1] && cy < prim[3];
+                    if (tick % 20 == 0) log("Notepad at " + java.util.Arrays.toString(r) + (home ? " (your desk)" : " (NOT your desk)"));
+                    return home && tick > 60; // (and it stays there a moment)
+                });
+            }
+            case 16 -> {
                 // a tablet: holding one turns it on, right-click holds it up
                 mc.player.getInventory().selectedSlot = 8;
                 mc.getServer().execute(() -> mc.getServer().getPlayerManager().getPlayerList().get(0).getInventory().selectedSlot = 8);
                 await("holding a tablet turns it on", 60, () -> InGameMonitors.isOn(dev.windowscraft.client.Tablet.display()));
             }
-            case 13 -> {
+            case 17 -> {
                 if (tick < 20) return;
+                if (notepad != null) notepad.destroy();
+                checkDistinct("with the tablet on too, every screen has a monitor of its own");
                 mc.interactionManager.interactItem(mc.player, net.minecraft.util.Hand.MAIN_HAND);
                 await("right-click holds it up and you use it", 20, () -> dev.windowscraft.client.Tablet.raised() && InGameMonitors.seated() != null);
             }
-            case 14 -> {
+            case 18 -> {
                 if (tick < 60) return;
                 shot(mc, "5_tablet_up");
                 dev.windowscraft.client.Tablet.lower();
@@ -250,17 +294,56 @@ public final class WinGameTest implements ClientModInitializer {
                 });
                 await("breaking a wall turns its monitor off", 30, () -> InGameMonitors.all().size() == before - 1);
             }
-            case 15 -> {
+            case 19 -> {
                 InGameMonitors.turnOffAll();
                 await("everything turns off", 30, () -> InGameMonitors.all().isEmpty());
             }
-            case 16 -> {
+            case 20 -> {
                 if (tick < 40) return;
                 shot(mc, "6_all_off");
                 finish(mc);
             }
             default -> {}
         }
+    }
+
+    private int cycle;
+    private Process notepad;
+
+    private void checkDistinct(String what) {
+        List<String> seen = new ArrayList<>();
+        boolean ok = true;
+        for (Display d : DisplayManager.get().all()) {
+            var m = InGameMonitors.monitorOf(d);
+            if (m == null) continue;
+            String k = m.index() + " " + m.device();
+            if (seen.contains(k)) ok = false;
+            seen.add(k);
+        }
+        check(ok, what + " " + seen);
+    }
+
+    private void checkPictures(MinecraftClient mc, String what) {
+        boolean ok = true;
+        StringBuilder sb = new StringBuilder();
+        for (Display d : DisplayManager.get().all()) {
+            if (!InGameMonitors.isOn(d)) continue;
+            String desc = d.share().describe();
+            var m = java.util.regex.Pattern.compile("capture (\\d+) pictures/s").matcher(desc);
+            double fps = m.find() ? Double.parseDouble(m.group(1)) : 0;
+            if (fps <= 0) ok = false;
+            sb.append(" | ").append(desc);
+        }
+        check(ok, what + sb);
+    }
+
+    private static int[] notepadRect() {
+        var u = com.sun.jna.platform.win32.User32.INSTANCE;
+        var h = u.FindWindow("Notepad", null);
+        if (h == null) return null;
+        var r = new com.sun.jna.platform.win32.WinDef.RECT();
+        if (!u.GetWindowRect(h, r)) return null;
+        return new int[] {r.left, r.top, r.right, r.bottom};
     }
 
     private void finish(MinecraftClient mc) {
