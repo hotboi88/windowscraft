@@ -334,12 +334,15 @@ impl Drop for Vdd {
 /// The desktop name (\\.\DISPLAYn) of the virtual monitor with this index, once Windows has it.
 fn device_for_index(index: i32) -> Option<String> {
     let uid = format!("UID{}", 256 + index);
+    // (Windows can list the same monitor under more than one display name — an old, switched-off
+    // one among them: the one that's on the desktop is the one)
+    let mut best: Option<(u32, String)> = None;
     unsafe {
         let mut i = 0;
         loop {
             let mut ad = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
             if !EnumDisplayDevicesW(PCWSTR::null(), i, &mut ad, 0).as_bool() {
-                return None;
+                return best.map(|(_, d)| d);
             }
             i += 1;
             let mut j = 0;
@@ -351,7 +354,11 @@ fn device_for_index(index: i32) -> Option<String> {
                 j += 1;
                 let id = from_wide(&mon.DeviceID).to_ascii_uppercase();
                 if id.contains(VDD_DISPLAY_ID) && id.split(|c| c == '#' || c == '&').any(|p| p == uid) {
-                    return Some(from_wide(&ad.DeviceName));
+                    let score = 1 + if (ad.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP).0 != 0 { 4 } else { 0 }
+                        + if (mon.StateFlags & DISPLAY_DEVICE_ACTIVE).0 != 0 { 2 } else { 0 };
+                    if best.as_ref().map_or(true, |(b, _)| score > *b) {
+                        best = Some((score, from_wide(&ad.DeviceName)));
+                    }
                 }
             }
         }
