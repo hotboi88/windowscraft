@@ -429,7 +429,10 @@ public final class AutoTest implements ClientModInitializer {
             }
             case 1300 -> shot(mc, "16_monitor_menu");
             case 1302 -> mc.currentScreen.close();
-            case 1304 -> KeyBinding.onKeyPressed(InputUtil.fromKeyCode(GLFW.GLFW_KEY_O, 0));
+            case 1304 -> {
+                dev.windowscraft.config.ClientSettings.setSeatZoom(true, -1); // (as if never sat before: fully zoomed in)
+                KeyBinding.onKeyPressed(InputUtil.fromKeyCode(GLFW.GLFW_KEY_O, 0));
+            }
             case 1315 -> {
                 check(dev.windowscraft.monitor.InGameMonitors.seated() == south(), "sitting at it hands it the real mouse and keyboard");
                 check(fakeMonitors.calls.contains("seat 0"), "the helper was asked to seat: " + fakeMonitors.calls);
@@ -463,6 +466,8 @@ public final class AutoTest implements ClientModInitializer {
                 fakeMonitors.events().esc(); // the helper saw Esc
             }
             case 1339 -> {
+                double z = dev.windowscraft.config.ClientSettings.seatZoom(true);
+                check(z > 1.0, "getting up remembers how far back you sat (" + String.format(java.util.Locale.ROOT, "%.2f", z) + ")");
                 check(!dev.windowscraft.client.TheaterMode.active(), "Esc (seen by the helper) gets you up");
                 check(dev.windowscraft.monitor.InGameMonitors.seated() == null && fakeMonitors.calls.contains("unseat"), "and the mouse and keyboard come back");
             }
