@@ -248,9 +248,9 @@ public final class MultiplayerTest implements ClientModInitializer {
         }
         if (movieMeasure != 0 && now - movieMeasure > 60_000_000_000L) {
             double secs = (now - movieMeasure) / 1e9;
-            log(String.format(java.util.Locale.ROOT, "MOVIE RESULT: %.0f s · pictures %.1f/s · pauses over 1/4 s: %d (%.1f s in all, longest %d ms) · damaged pictures %d · pieces lost for good %d · %s · stream %dx%d",
+            log(String.format(java.util.Locale.ROOT, "MOVIE RESULT: %.0f s · pictures %.1f/s · pauses over 1/4 s: %d (%.1f s in all, longest %d ms) · damaged pictures %d · pieces lost for good %d · catch-ups %d · %s · stream %dx%d",
                     secs, (sub.framesDecoded() - movieFrames0) / secs, sub.stalls, sub.stallMs / 1000.0, sub.longestStallMs, sub.damagedFrames,
-                    sub.skippedPieces() - movieSkipped0, sub.transport(), r.info.width(), r.info.height()));
+                    sub.skippedPieces() - movieSkipped0, sub.catchUps(), sub.transport(), r.info.width(), r.info.height()));
             shot(mc, "mp_viewer_movie");
             dev.windowscraft.relay.UdpReceiver.testLink = null;
             try { new java.io.File(mc.runDirectory, "viewer-done").createNewFile(); } catch (java.io.IOException ignored) {}

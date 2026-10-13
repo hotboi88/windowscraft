@@ -425,6 +425,10 @@ public final class StreamSubscriber implements FrameSource {
                     stalls++;
                     stallMs += gap;
                     longestStallMs = Math.max(longestStallMs, gap);
+                    var u = udp;
+                    WindowsCraftClient.LOGGER.info("[pause] {}: {} ms without a new picture (lost for good so far {}, resent {}, catch-ups {}, data {} ms ago)",
+                            streamId.substring(0, 8), gap, u == null ? 0 : u.skipped, u == null ? 0 : u.recovered, catchUps,
+                            (gapNow - lastDataNanos) / 1_000_000L);
                 }
             }
             if (damaged) damagedFrames++;
