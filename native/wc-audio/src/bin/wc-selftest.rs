@@ -1244,8 +1244,11 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         }
     }
     rep.check("adding and removing a monitor five times in a row", cycle_errors.is_empty(), format!("{cycle_errors:?}"));
+    // (Windows takes a moment to drop a removed monitor from its list: a real leftover stays)
+    let t_left = Instant::now();
+    let settled = wait_for(3000, || monitors().len() == real.len() + 1);
     let left = monitors().len();
-    rep.check("…leaves no monitor behind", left == real.len() + 1, format!("{left} screens now: yours + B"));
+    rep.check("…leaves no monitor behind", settled, format!("{left} screens now: yours + B (settled after {} ms)", t_left.elapsed().as_millis()));
     let strays = stray_taskbars(&real);
     rep.check("no monitor's taskbar ever ends up on your own screens", strays.is_empty(), format!("{strays:?}"));
     let gone: Vec<String> = h.events_since(t_round).into_iter().filter(|e| e.starts_with("gone")).collect();

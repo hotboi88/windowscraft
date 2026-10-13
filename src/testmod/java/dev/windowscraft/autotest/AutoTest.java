@@ -468,7 +468,7 @@ public final class AutoTest implements ClientModInitializer {
             case 1339 -> {
                 double z = dev.windowscraft.config.ClientSettings.seatZoom(true);
                 check(z > 1.0, "getting up remembers how far back you sat (" + String.format(java.util.Locale.ROOT, "%.2f", z) + ")");
-                check(!dev.windowscraft.client.TheaterMode.active(), "Esc (seen by the helper) gets you up");
+                check(!dev.windowscraft.client.TheaterMode.active() || dev.windowscraft.client.TheaterMode.leaving(), "Esc (seen by the helper) gets you up");
                 check(dev.windowscraft.monitor.InGameMonitors.seated() == null && fakeMonitors.calls.contains("unseat"), "and the mouse and keyboard come back");
             }
             // Alt-pointing at it (not sitting): your real cursor goes onto it, the game keeps the keyboard

@@ -145,16 +145,24 @@ one of your real screens instead, as before.
   the game window, never further: nothing is cropped, and it never goes under your real Windows
   taskbar (a fullscreen game stays above the taskbar while you sit). When it fits 1:1 it's exactly
   pixel for pixel. **Alt + scroll** out and it stays flat and sharp, just smaller; look around with
-  Alt to see the room; **Esc** gets you up. Joined monitors: moving onto the next one switches
+  Alt to see the room (a hand resting on the mouse doesn't turn the view); **Esc** gets you up.
+  The next time you sit down (or watch a screen in theater mode) you're as close as you were when
+  you left. Someone else's screen you sit at or watch in theater mode is shown flat and sharp the
+  same way, so it looks and feels the same for everyone. Joined monitors: moving onto the next one switches
   the view to it. Turn it off in the menu (In-game monitors → "Sit-down view"). Standing in the
   room, the monitor you're looking at gets its full-resolution picture too (one at a time).
 - **Apps that only run once** (Discord, WhatsApp, Calculator… any app that won't open a second
   window): already open on your desk or another monitor, opening it from a monitor brings its
-  window over — in the middle of the monitor, at a modest size, in one move.
+  window over — in the middle of the monitor, at a modest size, in one move. And the other way:
+  open it from your own Start menu or taskbar while it's on a monitor, and it comes back to your
+  desk the same way.
 - **Store apps** (Calculator, Settings…) open on the monitor you open them from, like any app.
-- **A browser on your desk and on a monitor** shares its sound (Windows can't split one app's
-  sound by window), so it stays on your desk. For a browser with its own sound on a monitor, use
-  "Own Brave/Chrome/Edge" in the monitor's menu.
+- **Each monitor's sound is its own**: a monitor plays only what's on it — never your desk's
+  sound, never another monitor's. Open your browser on a monitor while it's open on your desk too,
+  and the monitor gets its own copy of that browser (its own program, so its own sound; sign in
+  to it once, it remembers). A window a link opens there keeps its page; that one shares your
+  desk browser's sound, which stays on your desk ("Own Brave/Chrome/Edge" in the monitor's menu
+  gives it its own).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.
   (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
   while in-game monitors are on it starts with your normal rights instead — no permission
@@ -182,7 +190,9 @@ one of your real screens instead, as before.
   key** opens that monitor's own Start menu (Windows key + another key: Windows' shortcuts as usual).
 - **Games and full-screen video**: a game that picks its own display (most have a "Display" or
   "Monitor" option in their video settings) needs that set to the in-game monitor once. A
-  full-screen video or game on the monitor stays on top when you get up, so no taskbar covers it.
+  full-screen video or game on the monitor keeps the whole screen when you press Esc to get up:
+  the monitor's taskbar is hidden the moment Windows tries to show it over it. **Alt + Space**
+  while seated only looks straight again — the app never sees it.
 - **Sit down (O) and it's your PC**: your real mouse and keyboard work whatever is on the monitor —
   any app, any game — and the wall shows your real pointer in its real shape (text cursor, hand
   on links…), drawn live from your mouse so it never lags. **Esc** gets up; **left Alt** + mouse looks around, Alt + scroll zooms,
