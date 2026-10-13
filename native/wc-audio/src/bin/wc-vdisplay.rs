@@ -1549,6 +1549,13 @@ fn foreground(h: HWND) -> bool {
             let _ = AttachThreadInput(me, fg_thread, false);
         }
         if GetForegroundWindow() != h {
+            // Windows only hands the foreground to whoever had the last input: a key nobody has
+            // (it does nothing) makes that us, then ask again
+            send(&[key_input(MASK_KEY, 0, KEYBD_EVENT_FLAGS(0)), key_input(MASK_KEY, 0, KEYEVENTF_KEYUP)]);
+            let _ = SetForegroundWindow(h);
+            let _ = BringWindowToTop(h);
+        }
+        if GetForegroundWindow() != h {
             SwitchToThisWindow(h, true);
         }
         GetForegroundWindow() == h

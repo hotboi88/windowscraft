@@ -628,7 +628,15 @@ fn main() {
     let prim = primary();
     let started = Instant::now();
 
-    run(&mut rep, &dir, &real, prim, &me, &shot);
+    // (several rounds: a check that passes only sometimes is a bug too)
+    let rounds = arg("--rounds").and_then(|r| r.parse::<u32>().ok()).unwrap_or(1).max(1);
+    for round in 1..=rounds {
+        if rounds > 1 {
+            rep.line(format!("---- round {round} of {rounds}"));
+        }
+        run(&mut rep, &dir, &real, prim, &me, &shot);
+        sleep(2000);
+    }
 
     rep.line(format!("{} failed · {:.0} s", rep.fails, started.elapsed().as_secs_f64()));
     let log = HELPER_LOG.lock().unwrap().clone();
@@ -715,7 +723,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // sitting at A: the cursor goes on to B (dragging a window across works)
     play();
     let t = Instant::now();
-    let seat = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    let seat = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
     sleep(500);
     let (cx, cy) = cursor();
     let (ax, ay) = center(&ra);
@@ -767,7 +775,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     rep.check("separated again, they don't touch", !edge_contact(&ra, &rb) && !touches_real(&ra) && !touches_real(&rb), format!("A {} B {}", fmt(&ra), fmt(&rb)));
     play();
     let t = Instant::now();
-    let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
     sleep(400);
     for _ in 0..40 {
         move_by(150, 60);
@@ -838,7 +846,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
 
     // ---- 5. Esc gets you up and gives the game back (and Start + Esc doesn't pause it)
     play();
-    let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
     sleep(600);
     let t = Instant::now();
     key(VK_ESCAPE);
@@ -848,7 +856,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         format!("front {} \"{}\" after {:.0} ms", class_name(foreground_root()), title(foreground_root()), t.elapsed().as_secs_f64() * 1000.0));
     rep.check("…and the cursor is free of the monitor", !(c.left == ra.left && c.top == ra.top && c.right == ra.right && c.bottom == ra.bottom), fmt(&c));
     play();
-    let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
     sleep(600);
     key(VK_LWIN); // (a lone tap: the monitor's own Start)
     sleep(1200);
@@ -863,7 +871,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
 
     // ---- 6. a fullscreen app keeps its screen (Esc doesn't bring the taskbar back over it)
     play();
-    let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
     sleep(400);
     let full = spawn_window("WindowsCraftTestWin", "Fullscreen (self-test)", ra, true); // (opened while you sit there)
     sleep(400);

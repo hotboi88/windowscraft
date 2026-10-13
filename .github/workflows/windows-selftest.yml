@@ -11,7 +11,7 @@ on:
 jobs:
   selftest:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +39,7 @@ jobs:
         run: |
           $n = "src\main\resources\windowscraft\natives"
           New-Item -ItemType Directory -Force -Path out\shots | Out-Null
-          & "$n\wc-selftest.exe" --helpers $n --report out\selftest-report.txt --shots out\shots
+          & "$n\wc-selftest.exe" --helpers $n --rounds 3 --report out\selftest-report.txt --shots out\shots
           $code = $LASTEXITCODE
           "self-test exit code: $code"
           exit $code
