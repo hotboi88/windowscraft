@@ -394,6 +394,7 @@ fn sizes(device: &str) -> Vec<(u32, u32, u32)> {
 /// command): joined ones edge to edge, each group of them off on its own — touching nothing else
 /// but at a corner, so a window only ever drags across monitors that are joined in the game.
 static LAST_SPEC: Mutex<String> = Mutex::new(String::new());
+static REFUSED: Mutex<Option<(String, Vec<Option<(i32, i32)>>)>> = Mutex::new(None);
 
 /// After Windows turned a new monitor on (it shuffles the others around when it does): the
 /// last layout again, the new one off on its own.
@@ -509,6 +510,14 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
     if want.iter().all(|(d, x, y)| rect_of(d).map_or(false, |r| r.left == *x && r.top == *y)) {
         return Ok(());
     }
+    // asked for this layout before and Windows put them its own way: don't fight it every few
+    // seconds (each try makes the screens blink)
+    let now_at = |w: &Vec<(String, i32, i32)>| w.iter().map(|(d, _, _)| rect_of(d).map(|r| (r.left, r.top))).collect::<Vec<_>>();
+    if let Some((s0, got)) = REFUSED.lock().unwrap().as_ref() {
+        if s0 == spec && *got == now_at(&want) {
+            return Ok(());
+        }
+    }
     unsafe {
         for (d, x, y) in &want {
             let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
@@ -528,6 +537,12 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
     }
     let list: Vec<String> = want.iter().map(|(d, x, y)| format!("{d}@{x},{y}")).collect();
     eprintln!("info=arranged the in-game monitors: {}", list.join(" "));
+    std::thread::sleep(Duration::from_millis(300));
+    let got = now_at(&want);
+    if want.iter().zip(got.iter()).any(|((_, x, y), g)| *g != Some((*x, *y))) {
+        eprintln!("info=Windows placed them differently ({got:?}); leaving it like that");
+        *REFUSED.lock().unwrap() = Some((spec.to_string(), got));
+    }
     Ok(())
 }
 

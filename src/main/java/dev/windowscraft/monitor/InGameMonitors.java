@@ -102,6 +102,9 @@ public final class InGameMonitors {
 
     public static boolean starting(Display d) { return d != null && STARTING.contains(d.id); }
 
+    /** Is any in-game monitor on its way on right now? */
+    public static boolean anyStarting() { return !STARTING.isEmpty(); }
+
     /** Is that Windows display (\\.\DISPLAYn) one of ours? (Any thread: so pickers never offer it as a screen of yours.) */
     public static boolean ownsDevice(String device) {
         for (Mon m : LIVE.values()) if (m.device().equalsIgnoreCase(device)) return true;
@@ -142,9 +145,20 @@ public final class InGameMonitors {
      */
     public static void turnOn(MinecraftClient mc, String dimension, WallRect rect, Display existing) {
         MonitorBackend b = backend();
-        if (b == null) return;
-        if (existing != null && STARTING.contains(existing.id)) return;
-        driver().thenAccept(st -> mc.execute(() -> {
+        if (b == null) {
+            say(mc, "In-game monitors need Windows", Formatting.YELLOW);
+            return;
+        }
+        if (existing != null && STARTING.contains(existing.id)) {
+            hint(mc, "Turning on an in-game monitor… (still going)");
+            return;
+        }
+        // (U always answers: if the helper takes a moment, you see that it's on its way)
+        CompletableFuture<Driver> asked = driver();
+        CompletableFuture.delayedExecutor(1500, java.util.concurrent.TimeUnit.MILLISECONDS).execute(() -> {
+            if (!asked.isDone()) mc.execute(() -> hint(mc, "Starting the in-game monitor helper…"));
+        });
+        asked.thenAccept(st -> mc.execute(() -> {
             if (st != Driver.OK) {
                 mc.setScreen(new dev.windowscraft.ui.MonitorSetupScreen(dimension, rect, existing, st));
                 return;

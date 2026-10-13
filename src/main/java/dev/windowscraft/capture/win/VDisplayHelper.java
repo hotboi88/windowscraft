@@ -46,6 +46,20 @@ public final class VDisplayHelper implements MonitorBackend {
             pending.add(p);
             stdin.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             stdin.flush();
+            // never wait forever: a helper that stops answering is restarted (everything waiting
+            // on it gets an error to show, instead of U silently doing nothing)
+            Process proc = process;
+            long secs = command.startsWith("install") || command.startsWith("uninstall") ? 600 : command.startsWith("add") ? 90
+                    : command.startsWith("setmode") || command.startsWith("seat") || command.startsWith("remove") ? 40 : 20;
+            CompletableFuture.delayedExecutor(secs, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
+                if (f.isDone()) return;
+                WindowsCraftClient.LOGGER.warn("The in-game monitor helper didn't answer \"{}\" in {} s: restarting it", command.split("[ \t]")[0], secs);
+                f.completeExceptionally(new IOException("the in-game monitor helper didn't answer (it was restarted: try again)"));
+                synchronized (VDisplayHelper.this) {
+                    pending.remove(p);
+                    if (process == proc && proc != null) proc.destroyForcibly(); // (the reader then fails the rest; the next call starts a fresh one)
+                }
+            });
         } catch (IOException e) {
             f.completeExceptionally(e);
         }
