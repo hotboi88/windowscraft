@@ -36,6 +36,8 @@ public interface MonitorBackend {
         default void adminApp() {}
         /** Windows moved or renamed a monitor: look where they all are now. */
         default void monitorsMoved() {}
+        /** An app that only runs once came forward where it already is (not here): it stays there. */
+        default void singleInstance(String title) {}
         /** Pointing: your own click (or release) while someone else points — it belongs to the game. */
         default void mouseButton(int button, boolean down) {}
         /** Pointing: your own wheel while someone else points — it belongs to the game. */

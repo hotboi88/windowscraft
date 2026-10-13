@@ -998,6 +998,46 @@ fn work_area(area: &RECT) -> RECT {
     }
 }
 
+static SCAN_CLIP: Mutex<Option<RECT>> = Mutex::new(None);
+static SCANNER: AtomicBool = AtomicBool::new(false);
+
+/// While you sit at a monitor: a few times a second, windows that slipped past the window events
+/// (never on the thread that carries your mouse and keyboard).
+fn ensure_seat_scanner() {
+    if SCANNER.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let mut checked: std::collections::HashSet<isize> = std::collections::HashSet::new();
+        while SEATED.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(150));
+            let Some(clip) = *SCAN_CLIP.lock().unwrap() else { continue };
+            let known = seat_known().lock().unwrap().clone();
+            let t0 = Instant::now();
+            for h in app_windows() {
+                let k = h.0 as isize;
+                if known.contains(&k) || checked.contains(&k) {
+                    continue;
+                }
+                unsafe {
+                    if !IsIconic(h).as_bool() && !on_area(h, &clip) {
+                        on_window_shown(h, false);
+                    }
+                }
+                checked.insert(k); // (each window looked at once: not again and again)
+            }
+            if t0.elapsed() > Duration::from_millis(50) {
+                eprintln!("info=looking for new windows took {} ms", t0.elapsed().as_millis());
+            }
+            if checked.len() > 5000 {
+                checked.clear();
+            }
+        }
+        *SCAN_CLIP.lock().unwrap() = None;
+        SCANNER.store(false, Ordering::SeqCst);
+    });
+}
+
 /// Puts a window onto a monitor at its own size, like Windows does on your desk: a maximized
 /// one stays maximized (there), any other keeps its size (never bigger than the screen), a
 /// little down and right of the last one, without activating it (the game keeps your keyboard).
@@ -1726,13 +1766,10 @@ fn hook_thread() {
                     }
                 }
                 // and in case a window slipped past the window events: anything new that isn't on
-                // the monitor yet goes there (several times a second while you sit)
-                let known = seat_known().lock().unwrap().clone();
-                for h in app_windows() {
-                    if !known.contains(&(h.0 as isize)) && !IsIconic(h).as_bool() && !on_area(h, &clip) {
-                        on_window_shown(h, false);
-                    }
-                }
+                // the monitor yet goes there — looked for on a thread of its own: this thread
+                // carries every move of your mouse, and must never be kept busy (that's input lag)
+                *SCAN_CLIP.lock().unwrap() = Some(clip);
+                ensure_seat_scanner();
             }
             if msg.message == WM_QUIT {
                 break;
@@ -2875,21 +2912,28 @@ fn on_window_activated(h: HWND) {
         return;
     }
     let Some(area) = monitor_area(idx) else { return };
-    if on_area(h, &area) || !app_windows().contains(&h) {
+    if on_area(h, &area) {
+        *LAST_SEAT_FRONT.lock().unwrap() = h.0 as isize;
         return;
     }
-    if let Some(homes) = HOMES.get() {
-        let mut homes = homes.lock().unwrap();
-        if !homes.contains_key(&(h.0 as isize)) {
-            if let Some(p) = placement(h) {
-                homes.insert(h.0 as isize, p); // where it goes back to
-            }
-        }
+    if !app_windows().contains(&h) {
+        return;
     }
-    eprintln!("info=bringing \"{}\" (already open on your desk) onto in-game monitor {idx}", title(h));
-    place_on(h, idx);
-    placed().lock().unwrap().remove(&(h.0 as isize)); // (brought, not started there: never closed for the monitor)
+    // an app that only runs once (Discord, WhatsApp…), already open on your desk or another
+    // monitor, came forward there instead of opening here: the monitor says no — it stays where
+    // it is, and you stay at your monitor (the menu's "Move here" takes it over on purpose)
+    let elsewhere = if monitor_of_window(h).is_some() { "another in-game monitor" } else { "your desk" };
+    eprintln!("info=\"{}\" only runs once and is open on {elsewhere}: it stays there", title(h));
+    emit(&format!("single {}", title(h)));
+    let back = HWND(*LAST_SEAT_FRONT.lock().unwrap() as *mut _);
+    let to = if !back.0.is_null() && unsafe { IsWindow(Some(back)).as_bool() } && on_area(back, &area) { back } else { HWND(SINK.load(Ordering::SeqCst) as *mut _) };
+    if !to.0.is_null() {
+        foreground(to);
+    }
 }
+
+/// The window last in front on the monitor you sit at (where the keyboard goes back to).
+static LAST_SEAT_FRONT: Mutex<isize> = Mutex::new(0);
 
 /// Puts a window onto monitor `idx` (not activated) and keeps an eye on it for a few seconds.
 fn place_on(h: HWND, idx: i32) {

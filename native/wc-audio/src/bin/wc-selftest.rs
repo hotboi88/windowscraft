@@ -376,7 +376,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 17] = ["moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 18] = ["single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -940,8 +940,33 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             let still = !h.events_since(t).iter().any(|e| e == "esc") && c.left >= ra.left && c.right <= ra.right.max(rb.right);
             rep.check("right-clicking a monitor's taskbar keeps you sitting there", still,
                 format!("front: {} \"{}\", clip {}", class_name(fg), title(fg), fmt(&c)));
-            key(VK_ESCAPE); // (closes the menu — and gets you up)
+            key(VK_ESCAPE); // (closes the menu)
             sleep(600);
+            // an app that only runs once, open on your desk, comes forward when you start it from
+            // the monitor: it stays on your desk, and you stay at the monitor
+            play();
+            sleep(300);
+            let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
+            sleep(500);
+            let t1 = Instant::now();
+            unsafe {
+                let _ = SetCursorPos(tbr.left + (tbr.right - tbr.left) * 3 / 4, (tbr.top + tbr.bottom) / 2);
+            }
+            sleep(100);
+            click(false); // (using the monitor's own taskbar…)
+            sleep(400);
+            unsafe {
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+                let _ = SetForegroundWindow(desk); // (…and the app brings its one window forward)
+            }
+            sleep(1200);
+            let (dx, dy) = center(&rect_of(desk));
+            let stayed = inside(&prim, dx, dy);
+            let said = h.events_since(t1).iter().any(|e| e.starts_with("single"));
+            let fg = foreground_root();
+            let (fx, fy) = center(&rect_of(fg));
+            rep.check("an app that only runs once, open on your desk, stays on your desk (the monitor says no) and you stay at the monitor",
+                stayed && said && inside(&ra, fx, fy), format!("desk window at {} · told {said} · front: {} \"{}\" at {}", fmt(&rect_of(desk)), class_name(fg), title(fg), fmt(&rect_of(fg))));
         }
         None => rep.skip("right-clicking a monitor's taskbar keeps you sitting there", "no taskbar on the monitor"),
     }
