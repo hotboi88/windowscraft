@@ -365,6 +365,35 @@ fn device_for_index(index: i32) -> Option<String> {
     }
 }
 
+/// For the log: every display name Windows has for a monitor of the driver, its state and its UID.
+fn vdd_listing() -> String {
+    let mut out = Vec::new();
+    unsafe {
+        let mut i = 0;
+        loop {
+            let mut ad = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+            if !EnumDisplayDevicesW(PCWSTR::null(), i, &mut ad, 0).as_bool() {
+                break;
+            }
+            i += 1;
+            let mut j = 0;
+            loop {
+                let mut mon = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+                if !EnumDisplayDevicesW(PCWSTR(ad.DeviceName.as_ptr()), j, &mut mon, EDD_GET_DEVICE_INTERFACE_NAME).as_bool() {
+                    break;
+                }
+                j += 1;
+                let id = from_wide(&mon.DeviceID).to_ascii_uppercase();
+                if id.contains(VDD_DISPLAY_ID) {
+                    let uid = id.split(|c| c == '#' || c == '&').find(|p| p.starts_with("UID")).unwrap_or("?").to_string();
+                    out.push(format!("{} {uid} adapter {:#x} monitor {:#x}", from_wide(&ad.DeviceName), ad.StateFlags.0, mon.StateFlags.0));
+                }
+            }
+        }
+    }
+    out.join("; ")
+}
+
 /// Every monitor on the desktop: (device name, rect).
 fn monitors() -> Vec<(String, RECT)> {
     unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> windows::core::BOOL {
@@ -812,6 +841,7 @@ fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT,
     if !placed {
         let list: Vec<String> = monitors().iter().map(|(d, r)| format!("{d} {},{} {}x{}", r.left, r.top, r.right - r.left, r.bottom - r.top)).collect();
         eprintln!("info=screens now: {}", list.join("; "));
+        eprintln!("info=Windows' list of in-game monitors: {}", vdd_listing());
     }
     // it must be a monitor of its own: if Windows mirrors it onto one of yours (duplicate
     // displays), capturing it would show your real screen — never allowed
@@ -3567,6 +3597,7 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     }
     *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
     let Some(idx) = got else { return Err(("the driver didn't add a monitor".into(), false)) };
+    eprintln!("info=the driver added monitor {idx} (UID{})", 256 + idx);
     // (the driver gave us a number we still had: that monitor is gone already)
     let old = added.lock().unwrap().remove(&idx);
     if let Some(o) = old {
