@@ -22,6 +22,7 @@ jobs:
           Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, CurrentHorizontalResolution, CurrentVerticalResolution | Format-List
           query user 2>$null
           Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId
+          exit 0
 
       - name: Install the Parsec virtual display driver
         shell: pwsh
@@ -31,6 +32,7 @@ jobs:
           "installer exit code: $($p.ExitCode)"
           Start-Sleep -Seconds 5
           Get-PnpDevice -Class Display | Format-Table -AutoSize Status, FriendlyName, InstanceId
+          exit 0
 
       - name: Self-test
         shell: pwsh
