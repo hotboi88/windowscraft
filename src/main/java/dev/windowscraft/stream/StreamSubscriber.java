@@ -288,7 +288,7 @@ public final class StreamSubscriber implements FrameSource {
                 boolean lossy = given >= 1 || (rec >= 20 && rec * 20 > got);
                 if (!lossy) continue;
                 WindowsCraftClient.LOGGER.info("[loss] {}: given up {}, resent {} of {} (report as {})", streamId.substring(0, 8), given, rec, got, reportAs);
-                if (reportAs != null && now - lastLossTroubleNanos > 10_000_000_000L) {
+                if (reportAs != null && now - lastLossTroubleNanos > 4_000_000_000L) {
                     lastLossTroubleNanos = now;
                     WindowsCraftClient.LOGGER.info("Viewer for {}: pieces keep getting lost on the way ({} resent of {}); asking for a lighter stream",
                             streamId.substring(0, 8), rec, got);

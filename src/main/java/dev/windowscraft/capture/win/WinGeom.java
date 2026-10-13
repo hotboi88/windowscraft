@@ -203,6 +203,34 @@ public final class WinGeom {
         }
     }
 
+    /** The top-level window you see at that point of the desktop (physical pixels); 0 if none. */
+    public static long rootAt(int x, int y) {
+        if (!WINDOWS) return 0;
+        try {
+            dpiAware();
+            HWND at = Win32.User32.I.WindowFromPoint(new POINT.ByValue(x, y));
+            HWND root = at == null ? null : Win32.User32.I.GetAncestor(at, 2);
+            return root == null ? 0 : Pointer.nativeValue(root.getPointer());
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** That window's inside on the desktop: {left, top, width, height} in physical pixels, or null. */
+    public static int[] clientArea(long handle) {
+        if (!WINDOWS || handle == 0) return null;
+        try {
+            dpiAware();
+            HWND h = new HWND(new Pointer(handle));
+            RECT r = new RECT();
+            POINT p = new POINT(0, 0);
+            if (!Win32.User32.I.GetClientRect(h, r) || !Win32.User32.I.ClientToScreen(h, p)) return null;
+            return new int[]{p.x, p.y, r.right - r.left, r.bottom - r.top};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** Where the real mouse pointer is on the desktop (physical pixels), or null. Any thread. */
     public static int[] cursorPos() {
         if (!WINDOWS) return null;

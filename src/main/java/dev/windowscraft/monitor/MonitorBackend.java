@@ -54,6 +54,8 @@ public interface MonitorBackend {
         default void seatMoved(int index) {}
         /** Pointing, with an app on the monitor in front (you clicked it): your key, for the game ({@code vk} Windows' key code). */
         default void gameKey(int vk, int scancode, boolean down) {}
+        /** A blank window of a browser open elsewhere too opened on monitor {@code index}: it gets its own copy of that browser instead. */
+        default void ownBrowser(int index, long pid) {}
     }
 
     CompletableFuture<Driver> status();

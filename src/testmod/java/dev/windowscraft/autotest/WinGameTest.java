@@ -114,6 +114,86 @@ public final class WinGameTest implements ClientModInitializer {
     private BlockPos wall(int dx, int dy) { return new BlockPos(dx, ground + 2 + dy, -6); }
     private BlockPos mon() { return new BlockPos(6, ground + 1, -4); }
 
+    private int fs;
+
+    /** The game in fullscreen: sit down, and nothing of the screen is under your taskbar or cut off. */
+    private void fullscreenSeat(MinecraftClient mc) {
+        switch (fs) {
+            case 1 -> {
+                if (tick < 30) return;
+                if (!mc.getWindow().isFullscreen()) mc.getWindow().toggleFullscreen();
+                fs = 2;
+                tick = 0;
+            }
+            case 2 -> {
+                if (tick < 80) return;
+                log("fullscreen: " + mc.getWindow().isFullscreen() + ", " + mc.getWindow().getFramebufferWidth() + "x" + mc.getWindow().getFramebufferHeight());
+                look(mc, 0.5, ground + 1, -1.5, Vec3d.ofCenter(wall(0, 0)));
+                fs = 3;
+                tick = 0;
+            }
+            case 3 -> {
+                if (tick < 10) return;
+                dev.windowscraft.client.TheaterMode.toggle(mc);
+                fs = 4;
+                tick = 0;
+            }
+            case 4 -> {
+                if (tick < 100) return; // (seated; the monitor's apps have the keyboard, Windows' taskbar does what it does)
+                check(InGameMonitors.seated() != null, "fullscreen: O sits you down");
+                log("fullscreen seated: visible part " + java.util.Arrays.toString(dev.windowscraft.client.GameArea.visible()));
+                shot(mc, "4b_seated_fullscreen");
+                checkUncovered(mc, "fullscreen");
+                dev.windowscraft.client.TheaterMode.leaveNow();
+                fs = 5;
+                tick = 0;
+            }
+            case 5 -> {
+                if (tick < 30) return;
+                if (mc.getWindow().isFullscreen()) mc.getWindow().toggleFullscreen();
+                fs = 0;
+                await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
+            }
+            default -> fs = 0;
+        }
+    }
+
+    /** Along the seated picture's edges, what you really see on the desktop is the game (no taskbar over it). */
+    private void checkUncovered(MinecraftClient mc, String how) {
+        var shown = dev.windowscraft.client.DeskView.showing();
+        long game = dev.windowscraft.capture.win.WinGeom.gameWindow;
+        int[] ca = dev.windowscraft.capture.win.WinGeom.clientArea(game);
+        if (shown == null || ca == null) {
+            check(false, how + ": the seated picture is shown flat (" + shown + ", " + java.util.Arrays.toString(ca) + ")");
+            return;
+        }
+        double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (Vec3d p : dev.windowscraft.client.ScreenControl.pictureCorners(shown)) {
+            double[] q = dev.windowscraft.client.FrameView.project(p);
+            if (q == null) return;
+            x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]);
+        }
+        double sx = ca[2] / (double) mc.getWindow().getFramebufferWidth(), sy = ca[3] / (double) mc.getWindow().getFramebufferHeight();
+        int bad = 0, n = 0;
+        StringBuilder what = new StringBuilder();
+        for (int i = 1; i <= 9; i++) {
+            double fx = x0 + (x1 - x0) * i / 10.0;
+            for (double fy : new double[]{y0 + 3, y1 - 3}) {
+                int x = ca[0] + (int) Math.round(fx * sx), y = ca[1] + (int) Math.round(fy * sy);
+                long at = dev.windowscraft.capture.win.WinGeom.rootAt(x, y);
+                n++;
+                if (at != game) {
+                    bad++;
+                    if (what.length() < 200) what.append(" ").append(x).append(",").append(y).append("→").append(Long.toHexString(at));
+                }
+            }
+        }
+        log(how + ": picture " + Math.round(x0) + "," + Math.round(y0) + " - " + Math.round(x1) + "," + Math.round(y1) + " of " + mc.getWindow().getFramebufferWidth() + "x" + mc.getWindow().getFramebufferHeight()
+                + ", game's inside on the desktop " + java.util.Arrays.toString(ca));
+        check(bad == 0 && y0 >= -1 && y1 <= mc.getWindow().getFramebufferHeight() + 1,
+                how + ": seated, nothing covers the screen's edges (no taskbar over it, nothing cut off) — " + (n - bad) + "/" + n + " edge points show the game" + what);
+    }
+
     private void step(MinecraftClient mc) {
         switch (stage) {
             case 0 -> {
@@ -245,6 +325,7 @@ public final class WinGameTest implements ClientModInitializer {
                 await("O sits you down at it (your mouse and keyboard go to it)", 20, () -> InGameMonitors.seated() != null);
             }
             case 14 -> {
+                if (fs > 0) { fullscreenSeat(mc); return; }
                 if (tick < 60) return;
                 shot(mc, "4_seated");
                 check(dev.windowscraft.client.DeskView.showing() != null, "sitting down shows the monitor flat on your screen, pixel for pixel");
@@ -266,7 +347,13 @@ public final class WinGameTest implements ClientModInitializer {
                 double[] fpr = pr;
                 check(fpr != null && fpr[0] >= vis[0] - 1 && fpr[1] >= vis[1] - 1 && fpr[2] <= vis[0] + vis[2] + 1 && fpr[3] <= vis[1] + vis[3] + 1,
                         "fully zoomed in, the screen stays inside what you see of the game (never under your taskbar)");
+                checkUncovered(mc, "windowed");
                 dev.windowscraft.client.TheaterMode.leaveNow();
+                fs = 1; // (and the same with the game in fullscreen)
+                tick = 0;
+                return;
+            }
+            case 1400 -> {
                 await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
             }
             case 15 -> {

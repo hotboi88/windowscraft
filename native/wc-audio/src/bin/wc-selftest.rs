@@ -383,7 +383,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 19] = ["gkey", "single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 20] = ["ownbrowser", "gkey", "single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -890,6 +890,19 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     key(VK_A);
     let typed = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_CHAR));
     rep.check("typing at a monitor reaches the app you clicked", typed, format!("{:.0} ms", t0.elapsed().as_secs_f64() * 1000.0));
+    // Alt + Space (look straight again) is the game's: the app gets neither the press nor the release
+    LOG.lock().unwrap().clear();
+    let t0 = Instant::now();
+    key_state(VK_LMENU, false);
+    sleep(60);
+    key(VK_SPACE);
+    sleep(60);
+    key_state(VK_LMENU, true);
+    sleep(300);
+    let leaked: Vec<(u32, usize)> = LOG.lock().unwrap().iter().filter(|(w, m, p)| *w == target.0 as isize && matches!(*m, WM_KEYDOWN | WM_KEYUP | WM_CHAR) && *p == 0x20).map(|(_, m, p)| (*m, *p)).collect();
+    let recentered = h.events_since(t0).iter().any(|e| e == "recenter");
+    rep.check("Alt + Space while seated looks straight again, and never reaches the app (not even its release)", leaked.is_empty() && recentered,
+        format!("app got {leaked:?} · recenter {recentered}"));
 
     // ---- 3b. File Explorer and Task Manager open on the monitor you sit at (not your desk)
     unsafe {
@@ -1023,9 +1036,29 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             let came = wait_for(2000, || { let (x, y) = center(&rect_of(hidden)); inside(&ra, x, y) });
             rep.check("a Store app (Calculator…) opened from the monitor opens on the monitor", came, format!("its window at {}", fmt(&rect_of(hidden))));
             close(hidden);
-            // (the desk window goes home for the rest of the test)
+            // and back: at your real desktop, you open it from your own taskbar → it comes back to your desk
             let _ = h.call("unseat", "unseated", 8000);
             sleep(4300); // (the monitor keeps a just-placed window there for a few seconds)
+            let tray = unsafe { FindWindowW(PCWSTR(wide("Shell_TrayWnd").as_ptr()), PCWSTR::null()) }.unwrap_or_default();
+            let trr = rect_of(tray);
+            unsafe {
+                let _ = SetCursorPos(trr.left + (trr.right - trr.left) * 3 / 4, (trr.top + trr.bottom) / 2);
+            }
+            sleep(100);
+            click(false); // (your own taskbar…)
+            sleep(400);
+            unsafe {
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+                let _ = SetForegroundWindow(desk); // (…and the app brings its one window forward)
+            }
+            let back = wait_for(1500, || { let (x, y) = center(&rect_of(desk)); inside(&prim, x, y) });
+            sleep(500);
+            let r = rect_of(desk);
+            let (dx, dy) = center(&r);
+            let wp = work_area_of(&prim);
+            let (wx, wy) = center(&wp);
+            rep.check("…and opening it from your own desktop brings it back to your desk, centred", back && (dx - wx).abs() <= 4 && (dy - wy).abs() <= 4,
+                format!("now at {} (your work area {})", fmt(&r), fmt(&wp)));
             unsafe {
                 let _ = SetWindowPos(desk, None, desk_home.left, desk_home.top, desk_home.right - desk_home.left, desk_home.bottom - desk_home.top, SWP_NOZORDER | SWP_NOACTIVATE);
             }
@@ -1081,6 +1114,9 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     close(full);
     close(target);
     sleep(300);
+    // the same with a real browser gone full screen (Edge, like Brave or Chrome: F11 or a video's
+    // full-screen button), and still a few seconds later
+    edge_fullscreen(rep, &h, &ra, &a, game, shot);
 
     // ---- 7. your own taskbar is still there
     let tray = unsafe { FindWindowW(PCWSTR(wide("Shell_TrayWnd").as_ptr()), PCWSTR::null()) }.unwrap_or_default();
@@ -1328,6 +1364,9 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         None => rep.skip("\"Own browser\"", "Edge isn't installed"),
     }
 
+    // ---- 14b. the browser open on your desk, opened again from a monitor: the monitor gets its own
+    auto_own_browser(rep, &h, &rb, &b, game);
+
     // ---- 16. the monitor's picture: Windows Graphics Capture sees it (what your wall shows)
     let cap = dir.join("wc-capture.exe");
     if cap.exists() {
@@ -1532,6 +1571,98 @@ fn point_clicks(rep: &mut Report, h: &Helper, rb: &RECT, game: HWND) {
     let up = wait_for(1000, || h.events_since(t).iter().any(|e| e == "altup"));
     rep.check("…letting go of Alt ends pointing", up, format!("{:?}", h.events_since(t)));
     close(app);
+}
+
+/// A real browser (Edge) on the monitor, gone full screen while you sit there; Esc gets you up:
+/// its monitor's taskbar never comes up over it — right away, and still a few seconds later.
+fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND, shot: &dyn Fn(&str)) {
+    let Some(e) = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
+        .into_iter().find(|p| std::path::Path::new(p).exists()) else {
+        rep.skip("a full-screen browser keeps its monitor after Esc", "Edge isn't installed");
+        return;
+    };
+    let profile = std::env::temp_dir().join(format!("wc-selftest-edge-full-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&profile);
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let r = h.call(&format!("launch\t{}\t{e}\t--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank\tmsedge.exe", a.idx, profile.display()), "launched", 10000);
+    let Some(w) = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty()) else {
+        rep.check("a full-screen browser keeps its monitor after Esc", false, format!("{r:?}: no Edge window"));
+        return;
+    };
+    sleep(2500);
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+    let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    sleep(400);
+    let (x, y) = center(&rect_of(w));
+    unsafe {
+        let _ = SetCursorPos(x, y);
+    }
+    click(false); // (into it, then full screen)
+    sleep(400);
+    key(VK_F11);
+    sleep(2000);
+    let wr = rect_of(w);
+    let full = wr.left <= ra.left && wr.top <= ra.top && wr.right >= ra.right && wr.bottom >= ra.bottom;
+    key(VK_ESCAPE); // (gets you up — Edge stays full screen)
+    sleep(1200);
+    let at = |w: HWND| unsafe { GetAncestor(w, GA_ROOT) };
+    let b1 = at(root_at((ra.left + ra.right) / 2, ra.bottom - 6));
+    sleep(3500);
+    let b2 = at(root_at((ra.left + ra.right) / 2, ra.bottom - 6));
+    shot("6b-browser-fullscreen-after-esc");
+    rep.check("a real browser gone full screen on a monitor keeps it after Esc: no taskbar over it, then or later",
+        full && b1 == w && b2 == w,
+        format!("Edge at {} (full screen: {full}); at the bottom right after: {} \"{}\", 5 s later: {} \"{}\"", fmt(&wr), class_name(b1), title(b1), class_name(b2), title(b2)));
+    let p = pid(w);
+    let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
+    sleep(500);
+}
+
+/// Edge open on your desk; you open it again while sitting at a monitor: its blank new window
+/// (which would share the desk's sound) is swapped for the monitor's own copy.
+fn auto_own_browser(rep: &mut Report, h: &Helper, rb: &RECT, b: &Mon, game: HWND) {
+    let Some(e) = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
+        .into_iter().find(|p| std::path::Path::new(p).exists()) else {
+        rep.skip("a browser open on your desk gets its own copy on a monitor", "Edge isn't installed");
+        return;
+    };
+    let profile = std::env::temp_dir().join(format!("wc-selftest-edge-desk-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&profile);
+    let prof = format!("--user-data-dir={}", profile.display());
+    let prim = primary();
+    unsafe {
+        let _ = SetCursorPos(prim.left + 200, prim.top + 200);
+    }
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(e).args([prof.as_str(), "--no-first-run", "--no-default-browser-check", "--new-window", "about:blank"]).spawn();
+    let Some(deskw) = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty()) else {
+        rep.check("a browser open on your desk gets its own copy on a monitor", false, "Edge didn't open on the desk");
+        return;
+    };
+    sleep(2500);
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+    let _ = h.call(&format!("seat {} 0.5 0.5 {}", b.idx, game.0 as isize), "seated", 8000);
+    sleep(500);
+    let t = Instant::now();
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(e).args([prof.as_str(), "--no-first-run", "--no-default-browser-check", "--new-window"]).spawn(); // (as from the monitor's Start)
+    let neww = find_new(&before, 10000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty() && pid(*w) == pid(deskw));
+    let told = wait_for(4000, || h.events_since(t).iter().any(|ev| ev.starts_with(&format!("ownbrowser {} ", b.idx))));
+    sleep(800);
+    let closed = neww.map_or(false, |w| unsafe { !IsWindow(Some(w)).as_bool() || !IsWindowVisible(w).as_bool() });
+    let desk_ok = unsafe { IsWindow(Some(deskw)).as_bool() } && { let (x, y) = center(&rect_of(deskw)); inside(&prim, x, y) };
+    rep.check("the browser open on your desk, opened again from a monitor: the monitor gets a copy of its own (its own sound), your desk's is left alone",
+        neww.is_some() && told && closed && desk_ok,
+        format!("new window {:?} · asked for its own copy: {told} · shared window closed: {closed} · desk window still home: {desk_ok}", neww.map(title)));
+    let _ = h.call("unseat", "unseated", 8000);
+    let p = pid(deskw);
+    let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
+    sleep(500);
+    let _ = rb;
 }
 
 fn union(a: &RECT, b: &RECT) -> RECT {

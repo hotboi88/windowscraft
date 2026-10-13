@@ -698,6 +698,7 @@ public final class InGameMonitors {
 
     /** Got up: the mouse and keyboard come back to the game. */
     private static boolean onTop;
+    private static final java.util.Set<java.util.UUID> OWN_TOLD = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public static void unseat() {
         if (seatedMon == null) return;
@@ -978,6 +979,24 @@ public final class InGameMonitors {
         }
 
         @Override public void altUp() { onGame(InGameMonitors::ownerStopPointing); }
+
+        @Override
+        public void ownBrowser(int index, long pid) {
+            onGame(() -> {
+                for (Display d : DisplayManager.get().all()) {
+                    Mon m = monitorOf(d);
+                    if (m == null || m.index() != index) continue;
+                    String name = ownCopyName(pid);
+                    openOwnCopy(d, pid).thenAccept(ok -> MinecraftClient.getInstance().execute(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (ok && name != null && OWN_TOLD.add(d.id)) {
+                            hint(mc, "This monitor has its own " + name + ": its sound plays from this monitor only. Sign in to it once - it remembers.");
+                        }
+                    }));
+                    return;
+                }
+            });
+        }
 
         @Override
         public void gameKey(int vk, int scancode, boolean down) {

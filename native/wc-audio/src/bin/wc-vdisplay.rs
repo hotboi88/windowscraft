@@ -1232,6 +1232,8 @@ static RAW_SEEN: AtomicBool = AtomicBool::new(false);
 /// Pointing, after a click on the monitor: the game's title bar keeps looking active.
 static KEEP_GAME_LOOK: AtomicBool = AtomicBool::new(false);
 static LAST_FG: AtomicIsize = AtomicIsize::new(0);
+/// Seated: keys pressed with Alt held (kept for the game): their releases are kept too.
+static KEYS_KEPT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 /// Keys handed to the game that way and still held (let go of when pointing ends).
 static GAME_KEYS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
@@ -1439,7 +1441,16 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
                     let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000 != 0;
                     emit(if shift { "switch-back" } else { "switch" });
                 }
-                return LRESULT(1); // Alt + a key belongs to the game (releases always go through)
+                // Alt + a key belongs to the game — its release too (an app that acts when a key
+                // is let go, a video player's Space, never sees half of it)
+                let mut held = KEYS_KEPT.lock().unwrap();
+                if !held.contains(&(vk as u32)) {
+                    held.push(vk as u32);
+                }
+                return LRESULT(1);
+            } else if !down && KEYS_KEPT.lock().unwrap().contains(&(vk as u32)) {
+                KEYS_KEPT.lock().unwrap().retain(|x| *x != vk as u32);
+                return LRESULT(1); // (its press never reached the app: nor does its release)
             }
         }
     } else if code == HC_ACTION as i32 && POINTING.load(Ordering::SeqCst) {
@@ -1863,6 +1874,7 @@ fn hook_thread() {
 fn give_back(to_game: bool) {
     SEATED.store(false, Ordering::SeqCst);
     ALT.store(false, Ordering::SeqCst);
+    KEYS_KEPT.lock().unwrap().clear();
     look_mode(false);
     WIN_PENDING.store(false, Ordering::SeqCst);
     WIN_COMBO.store(false, Ordering::SeqCst);
@@ -2621,7 +2633,10 @@ fn is_full_screen(h: HWND, a: &RECT) -> bool {
         }
         let style = GetWindowLongW(h, GWL_STYLE) as u32;
         let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
-        if style & WS_CAPTION.0 == WS_CAPTION.0 {
+        // (some players and Store apps keep their title-bar style in full screen: exactly the
+        // monitor's size, not maximized, is full screen too)
+        let exact = r.right - r.left <= a.right - a.left + 16 && r.bottom - r.top <= a.bottom - a.top + 16;
+        if style & WS_CAPTION.0 == WS_CAPTION.0 && !exact {
             return false;
         }
         if ex & WS_EX_LAYERED.0 != 0 && ex & WS_EX_TRANSPARENT.0 != 0 {
@@ -2637,6 +2652,22 @@ fn is_overlay(h: HWND) -> bool {
     let c = class_name(h);
     matches!(c.as_str(), "SnipOverlayRootWindow" | "ScreenClippingHost" | "Microsoft.ScreenSketch" | "ShellScreenSketchHostWindow")
         || title(h).contains("Snipping Tool Overlay")
+}
+
+/// After the window in front changed: the taskbars are tidied right away and once more a moment
+/// later (Windows decides who's on top in a few steps) — on a thread of their own.
+fn tidy_soon() {
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    if BUSY.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        for ms in [0u64, 60, 250, 700] {
+            std::thread::sleep(Duration::from_millis(ms));
+            tidy_taskbars();
+        }
+        BUSY.store(false, Ordering::SeqCst);
+    });
 }
 
 /// A full-screen video or game on an in-game monitor hides that monitor's taskbar, even while you
@@ -2903,7 +2934,12 @@ fn on_window_shown(h: HWND, fresh: bool) {
             POINTING.load(Ordering::SeqCst), game_in_front(), on_desk);
     }
     match target {
-        Some(idx) => place_on(h, idx),
+        Some(idx) => {
+            place_on(h, idx);
+            if fresh {
+                maybe_own_browser(h, idx);
+            }
+        }
         None => {
             // nothing says it belongs on an in-game monitor, yet it opened on one (an app putting
             // itself back where it was last time): it goes to your desk
@@ -2914,6 +2950,51 @@ fn on_window_shown(h: HWND, fresh: bool) {
             }
         }
     }
+}
+
+const BROWSERS: [&str; 6] = ["brave.exe", "chrome.exe", "msedge.exe", "vivaldi.exe", "opera.exe", "firefox.exe"];
+
+/// A browser window just opened on monitor `idx`, but it belongs to the browser that's open on
+/// your desk (or another monitor) too — one program, one sound, so its sound couldn't be this
+/// monitor's alone. A blank new window (opened from the monitor's Start or taskbar) is swapped for
+/// the monitor's own copy of that browser: its own program, its own sound, its own sign-ins (kept
+/// for next time). A window that already shows a page (a link) is left as it is.
+fn maybe_own_browser(h: HWND, idx: i32) {
+    let p = pid(h);
+    let Some((_, exe)) = process_info(p) else { return };
+    if !BROWSERS.contains(&exe.as_str()) {
+        return;
+    }
+    let Some(area) = monitor_area(idx) else { return };
+    let elsewhere = app_windows().into_iter().any(|o| o != h && pid(o) == p && !on_area(o, &area));
+    if !elsewhere {
+        return; // (only here: its sound is this monitor's already)
+    }
+    let hv = h.0 as isize;
+    std::thread::spawn(move || {
+        // (its title tells what it shows, once it has one)
+        let h = HWND(hv as *mut _);
+        let mut t = String::new();
+        for _ in 0..12 {
+            std::thread::sleep(Duration::from_millis(100));
+            t = title(h);
+            if !t.is_empty() && !t.starts_with("Untitled") {
+                break;
+            }
+        }
+        let low = t.to_lowercase();
+        let blank = low.is_empty() || low.starts_with("new tab") || low.starts_with("about:blank") || low.starts_with("untitled")
+            || low.starts_with("start") || low == "brave" || low == "google chrome" || low == "mozilla firefox";
+        if !blank || unsafe { !IsWindow(Some(h)).as_bool() } {
+            eprintln!("info=\"{t}\" is the same browser as on your desk: its sound stays with that one");
+            return;
+        }
+        eprintln!("info=a new window of the browser on your desk opened on in-game monitor {idx}: it gets its own copy instead");
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        emit(&format!("ownbrowser {idx} {p}"));
+    });
 }
 
 /// Which in-game monitor your real cursor is on (None: your own screens).
@@ -3021,7 +3102,21 @@ fn bring_over(h: HWND, idx: i32) {
         let top = work.top + (ah - hh) / 2;
         RECT { left, top, right: left + w, bottom: top + hh }
     };
-    placed().lock().unwrap().insert(h.0 as isize, idx);
+    // like "Bring here": from your desk, it remembers its spot there (and goes back to it, not
+    // closed, when the monitor turns off); from another monitor, it lives on this one now
+    if monitor_of_window(h).is_some() {
+        let mut pl = placed().lock().unwrap();
+        if pl.contains_key(&(h.0 as isize)) {
+            pl.insert(h.0 as isize, idx);
+        }
+    } else if let Some(homes) = HOMES.get() {
+        let mut homes = homes.lock().unwrap();
+        if !homes.contains_key(&(h.0 as isize)) {
+            if let Some(p) = placement(h) {
+                homes.insert(h.0 as isize, p);
+            }
+        }
+    }
     {
         let mut w = watch().lock().unwrap();
         w.retain(|(x, _, _)| *x != h.0 as isize);
@@ -3030,6 +3125,79 @@ fn bring_over(h: HWND, idx: i32) {
     apply_place(h, &spot(aw * 3 / 5, ah * 13 / 20), false);
     // once it's there (an app may insist on a bigger minimum, or resize for the monitor's
     // scaling): centred again by the size it really has
+    let hv = h.0 as isize;
+    std::thread::spawn(move || {
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(120));
+            let h = HWND(hv as *mut _);
+            let mut r = RECT::default();
+            if unsafe { GetWindowRect(h, &mut r) }.is_err() {
+                return;
+            }
+            let s = spot(r.right - r.left, r.bottom - r.top);
+            if (s.left - r.left).abs() > 2 || (s.top - r.top).abs() > 2 {
+                unsafe {
+                    let _ = SetWindowPos(h, None, s.left, s.top, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_ASYNCWINDOWPOS);
+                }
+            }
+        }
+    });
+}
+
+/// When you last used your own Start menu, taskbar or desktop (on your real screens).
+static DESK_SHELL_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// You're at your real desktop: you start (from your own Start menu, taskbar or desktop) an app
+/// that only runs once and is open on an in-game monitor — it comes over to your desk, in the
+/// middle at a modest size (the same as the other way round).
+fn on_desk_activated(h: HWND) {
+    if cursor_monitor().is_some() {
+        return; // (the cursor's on a monitor: not you at your desk)
+    }
+    if is_shell(h) {
+        if monitor_of_window(h).is_none() {
+            *DESK_SHELL_AT.lock().unwrap() = Some(Instant::now());
+        }
+        return;
+    }
+    if h.0 as isize == GAME.load(Ordering::SeqCst) || h.0 as isize == SINK.load(Ordering::SeqCst) || game_in_front_root(h) {
+        return;
+    }
+    if DESK_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
+        return;
+    }
+    let Some(idx) = monitor_of_window(h) else { return };
+    if !app_windows().contains(&h) {
+        return;
+    }
+    *DESK_SHELL_AT.lock().unwrap() = None;
+    eprintln!("info=\"{}\" only runs once and was open on in-game monitor {idx}: bringing it over to your desk", title(h));
+    placed().lock().unwrap().remove(&(h.0 as isize));
+    owned().lock().unwrap().remove(&pid(h)); // (it's yours on your desk now: the monitor turning off leaves it be)
+    watch().lock().unwrap().retain(|(x, _, _)| *x != h.0 as isize);
+    if let Some(homes) = HOMES.get() {
+        homes.lock().unwrap().remove(&(h.0 as isize)); // (it's at home now)
+    }
+    let home = primary_area();
+    place_centred(h, &home);
+}
+
+fn game_in_front_root(h: HWND) -> bool { class_name(h) == "GLFW30" }
+
+/// Centred on that screen's work area, a modest size (about 60 × 65 %; more if the app needs it).
+fn place_centred(h: HWND, area: &RECT) {
+    if admin_window(h) {
+        return;
+    }
+    let work = work_area(area);
+    let (aw, ah) = (work.right - work.left, work.bottom - work.top);
+    let spot = move |w: i32, hh: i32| {
+        let (w, hh) = (w.min(aw), hh.min(ah));
+        let left = work.left + (aw - w) / 2;
+        let top = work.top + (ah - hh) / 2;
+        RECT { left, top, right: left + w, bottom: top + hh }
+    };
+    apply_place(h, &spot(aw * 3 / 5, ah * 13 / 20), false);
     let hv = h.0 as isize;
     std::thread::spawn(move || {
         for _ in 0..3 {
@@ -3073,8 +3241,17 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     if h.0.is_null() {
         return;
     }
+    if event == 0x8002 && obj == 0 && class_name(h) == "Shell_SecondaryTrayWnd" {
+        // Windows put a monitor's taskbar up again: over a full-screen video it goes straight away
+        tidy_taskbars();
+        return;
+    }
     if event == 0x0003 {
+        tidy_soon();
         let root = unsafe { GetAncestor(h, GA_ROOT) };
+        if !root.0.is_null() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) {
+            on_desk_activated(root);
+        }
         if !root.0.is_null() && POINTING.load(Ordering::SeqCst) && !SEATED.load(Ordering::SeqCst) && KEEP_GAME_LOOK.load(Ordering::SeqCst) {
             keep_game_looking_active(root);
         }

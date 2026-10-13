@@ -597,11 +597,14 @@ public final class StreamPublisher {
                 String bw = busyWhy;
                 busyWhy = null;
                 if (bw != null && now - pipelineStart > 5_000_000_000L) lower(bw);
-                // someone watching can't keep up. Give each step 15 s to show its effect first
+                // someone watching can't keep up. Give each step a few seconds to show its effect
+                // (a movie on a link that's too slow glitches until the stream fits: get there
+                // quickly — 5 s for the first steps, then 15 s, so it doesn't overshoot)
                 int vt = viewerTrouble;
                 viewerTrouble = 0;
                 if (vt == dev.windowscraft.net.Payloads.TROUBLE_NETWORK) lossyViewer = true;
-                if (vt != 0 && now - levelSince > 15_000_000_000L && now - pipelineStart > 5_000_000_000L)
+                long gate = level < 2 ? 5_000_000_000L : 15_000_000_000L;
+                if (vt != 0 && now - levelSince > gate && now - pipelineStart > 3_000_000_000L)
                     lower(vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE ? "a viewer's PC can't play it fast enough" : "it doesn't reach a viewer fast enough");
                 // a while without trouble: try one step better (once; if that fails it stays down)
                 if (level > 0 && !triedUp && now - levelSince > 300_000_000_000L) {

@@ -43,7 +43,7 @@ public final class TheaterMode {
     private static long lastFrameNanos;
     private static boolean savedHudHidden;
     // looking around from the seat (degrees, relative to facing the screen); Space recenters
-    private static double lookYaw, lookPitch;
+    private static double lookYaw, lookPitch, pendX, pendY;
     private static boolean recentering;
     private static long enteredNanos;
     /** Your own screen: the mouse and keyboard work it like a PC (null for someone else's screen). */
@@ -95,17 +95,27 @@ public final class TheaterMode {
         allowedMax = fitDistance * MAX_FACTOR;
         if (controlled != null) {
             // your own screen: sit exactly where it fills your view, like your real monitor —
-            // a 1080p desktop on a 1080p monitor is then pixel for pixel
-            distance = fitDistance * MIN_FACTOR;
+            // a 1080p desktop on a 1080p monitor is then pixel for pixel (or as close as you last sat)
+            distance = fitDistance * remembered(true);
             KeyBinding.unpressAll(); // let go of W etc. — from now on keys belong to the screen
             ScreenControl.sitDown(controlled);
             ScreenControl.nativePointer(mc, true);
         } else if (controlledRemote != null) {
-            distance = fitDistance * MIN_FACTOR;
+            distance = fitDistance * remembered(true);
             KeyBinding.unpressAll();
             ScreenControl.sitDown(controlledRemote);
             ScreenControl.nativePointer(mc, true);
+        } else {
+            distance = fitDistance * remembered(false);
         }
+        clampDistance();
+    }
+
+    /** The zoom (× the fitted distance) you last left a screen at — sitting at one, or watching one. */
+    private static double remembered(boolean using) {
+        double z = dev.windowscraft.config.ClientSettings.seatZoom(using);
+        if (!(z > 0)) return using ? MIN_FACTOR : 1.0;
+        return MathHelper.clamp(z, MIN_FACTOR, MAX_FACTOR);
     }
 
     /** Starts theater mode on a specific remote screen (from its options dialog). */
@@ -127,16 +137,20 @@ public final class TheaterMode {
         distance = fitDistance;
         allowedMax = fitDistance * MAX_FACTOR;
         if (controlledRemote != null) {
-            distance = fitDistance * MIN_FACTOR;
+            distance = fitDistance * remembered(true);
             KeyBinding.unpressAll();
             ScreenControl.sitDown(controlledRemote);
             ScreenControl.nativePointer(mc, true);
+        } else {
+            distance = fitDistance * remembered(false);
         }
+        clampDistance();
     }
 
     private static void targetRemote(RemoteDisplays.Remote r) {
         WallRect at = r.rect;
         target(at, r.info.title(), () -> RemoteDisplays.all().contains(r) && at.equals(r.rect) && r.wallOk);
+        watchedRemote = r;
         picture = () -> ScreenControl.pictureCorners(r);
         if (ScreenControl.controllable(r)) controlledRemote = r;
     }
@@ -145,6 +159,8 @@ public final class TheaterMode {
         rect = r;
         title = t;
         stillThere = alive;
+        watchedOwn = null;
+        watchedRemote = null;
         picture = () -> r.corners(1, 1);
         controlled = null;
         controlledRemote = null;
@@ -154,6 +170,7 @@ public final class TheaterMode {
     private static void targetOwn(Display d) {
         WallRect at = d.rect;
         target(at, d.share().source().title(), () -> d.isLive() && DisplayManager.get().all().contains(d) && at.equals(d.rect));
+        watchedOwn = d;
         picture = () -> ScreenControl.pictureCorners(d);
         if (ScreenControl.controllable(d)) controlled = d;
     }
@@ -236,6 +253,7 @@ public final class TheaterMode {
 
     private static void leave() {
         leaving = true;
+        if (fitDistance > 0) dev.windowscraft.config.ClientSettings.setSeatZoom(controlled != null || controlledRemote != null, distance / fitDistance);
         dev.windowscraft.monitor.InGameMonitors.unseat(); // the mouse and keyboard come back right away
     }
 
@@ -308,6 +326,16 @@ public final class TheaterMode {
     public static boolean look(double dx, double dy) {
         if (!active || leaving) return false;
         if (dx == 0 && dy == 0) return true; // the game reports the mouse every frame, moved or not
+        if (lookYaw == 0 && lookPitch == 0 && !recentering) {
+            // looking straight at it: a hand resting on the mouse (or Alt + Space) doesn't turn
+            // the view — only a real move does (otherwise the sharp flat view keeps dropping out)
+            pendX += dx;
+            pendY += dy;
+            if (Math.hypot(pendX, pendY) * 0.15 < 2.5) return true;
+            dx = pendX;
+            dy = pendY;
+        }
+        pendX = pendY = 0;
         recentering = false;
         lookYaw = MathHelper.clamp(lookYaw + dx * 0.15, -150, 150);   // same feel as normal mouse look
         lookPitch = MathHelper.clamp(lookPitch + dy * 0.15, -89, 89);
@@ -316,7 +344,8 @@ public final class TheaterMode {
 
     /** Ease the view back to straight at the screen. */
     public static void recenter() {
-        if (active) recentering = true;
+        pendX = pendY = 0;
+        if (active && (lookYaw != 0 || lookPitch != 0)) recentering = true; // (already straight: nothing moves)
     }
 
     /** How far the view is turned away from the screen, in degrees (for the on-screen hint). */
@@ -450,11 +479,25 @@ public final class TheaterMode {
      * straight at it, at any zoom — null otherwise (and when it's turned off in settings).
      */
     public static Display deskViewDisplay() {
-        if (!active || leaving || progress < 1 || controlled == null || !dev.windowscraft.config.ClientSettings.deskView()) return null;
-        if (Math.abs(lookYaw) > 0.01 || Math.abs(lookPitch) > 0.01) return null;
-        if (System.nanoTime() - glideAt < 400_000_000L) return null; // (gliding to a joined monitor)
-        return dev.windowscraft.monitor.InGameMonitors.isOn(controlled) ? controlled : null;
+        if (!flatNow() || watchedOwn == null) return null;
+        return watchedOwn;
     }
+
+    /** Someone else's screen shown flat on your view (you sit at it, or watch it in theater mode), or null. */
+    public static RemoteDisplays.Remote deskViewRemote() {
+        if (!flatNow() || watchedRemote == null) return null;
+        return watchedRemote;
+    }
+
+    private static boolean flatNow() {
+        if (!active || leaving || progress < 1 || !dev.windowscraft.config.ClientSettings.deskView()) return false;
+        if (Math.abs(lookYaw) > 0.01 || Math.abs(lookPitch) > 0.01 || recentering) return false;
+        return System.nanoTime() - glideAt >= 400_000_000L; // (not while gliding to a joined monitor)
+    }
+
+    /** The screen theater mode is on: one of yours, or someone else's. */
+    private static Display watchedOwn;
+    private static RemoteDisplays.Remote watchedRemote;
 
     public static String watchingTitle() { return active ? title : null; }
 

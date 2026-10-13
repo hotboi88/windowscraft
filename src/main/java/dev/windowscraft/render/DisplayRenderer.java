@@ -27,6 +27,9 @@ public final class DisplayRenderer {
     private static final double MAX_RENDER_DISTANCE = 128;
     private static long renderFrame;
 
+    /** This frame's number (polling a picture again in the same frame does no more work). */
+    public static long frameNumber() { return renderFrame; }
+
     /** Normal path: inside the world, so a shader pack lights and colours the screens like everything else. */
     public static void render(WorldRenderContext ctx) {
         if (ShaderCompat.drawAfterShaders()) return; // drawn later, in true colours
@@ -155,7 +158,9 @@ public final class DisplayRenderer {
             if (pauseHidden && !view.sees(r.rect, cam)) continue;
             double rpx = view.pixelsTall(r.rect, cam);
             Identifier tex = r.pollTexture(frame, !limitFar || rpx >= FAR_PX || due(r.id, now));
-            if (tex != null) {
+            if (tex != null && dev.windowscraft.client.DeskView.covers(r)) {
+                // (you watch or use it flat on your view: drawn there, sharp)
+            } else if (tex != null) {
                 placed(matrices, immediate, r.rect, tex, r.textureWidth(), r.textureHeight(), r.info.fit(), cam);
                 if (dev.windowscraft.client.ScreenControl.pointerVisible(r)) {
                     Vec3d[] pc = dev.windowscraft.client.ScreenControl.pictureCorners(r);
@@ -413,6 +418,13 @@ public final class DisplayRenderer {
     }
 
     private static final ShapeTex REAL = new ShapeTex("real-pointer"), ARROW = new ShapeTex("arrow-pointer");
+
+    /** A real Windows arrow's picture as a texture (someone's pointer, drawn flat on your view). */
+    public static Identifier arrowTexture(dev.windowscraft.capture.win.RealCursor.Shape shape) { return ARROW.upload(shape); }
+
+    /** The plain pointer (where there's no Windows arrow to draw): its texture and size in pixels. */
+    public static Identifier plainPointer() { return pointerTexture(); }
+    public static int[] plainPointerSize() { pointerTexture(); return new int[]{pointerW, pointerH}; }
 
     /** Your real pointer's picture as a texture (for the tablet held up). */
     public static Identifier realPointerTexture(dev.windowscraft.capture.win.RealCursor.Shape shape) { return REAL.upload(shape); }
