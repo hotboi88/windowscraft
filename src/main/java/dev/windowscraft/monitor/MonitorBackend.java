@@ -34,6 +34,8 @@ public interface MonitorBackend {
         default void monitorGone(int index) {}
         /** An app running as administrator should go onto a monitor, but Windows won't let it be moved. */
         default void adminApp() {}
+        /** Windows moved or renamed a monitor: look where they all are now. */
+        default void monitorsMoved() {}
         /** Pointing: your own click (or release) while someone else points — it belongs to the game. */
         default void mouseButton(int button, boolean down) {}
         /** Pointing: your own wheel while someone else points — it belongs to the game. */

@@ -3271,6 +3271,19 @@ fn main() {
                             missing.remove(&i);
                             continue;
                         }
+                        // Windows gave it another display name (it settles on one a moment after a
+                        // monitor comes): the same monitor — the game picks it up under its new name
+                        if let Some(d) = now.filter(|d| rect_of(d).is_some()) {
+                            let mut g = added.lock().unwrap();
+                            if let Some(a) = g.get_mut(&i).filter(|a| a.device == dev) {
+                                a.device = d.clone();
+                                drop(g);
+                                missing.remove(&i);
+                                eprintln!("info=in-game monitor {i} is {d} now (was {dev})");
+                                emit("moved");
+                                continue;
+                            }
+                        }
                         let n = missing.entry(i).or_insert(0);
                         *n += 1;
                         if *n >= 4 {

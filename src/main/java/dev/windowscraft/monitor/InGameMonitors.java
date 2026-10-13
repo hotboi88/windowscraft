@@ -789,6 +789,8 @@ public final class InGameMonitors {
                 }
             });
         }
+        @Override public void monitorsMoved() { onGame(() -> refreshRects(MinecraftClient.getInstance())); }
+
         @Override public void adminApp() {
             onGame(() -> say(MinecraftClient.getInstance(), "That app is running as administrator, so Windows won't let it be moved onto a monitor. "
                     + "Close it and open it again from the monitor (Task Manager: close the one on your desk first).", Formatting.YELLOW));
