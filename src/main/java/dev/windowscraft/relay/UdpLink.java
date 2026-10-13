@@ -236,7 +236,10 @@ public final class UdpLink implements AutoCloseable {
         }
 
         private void pace(int len) {
-            double rate = Math.max(1_250_000, inRate * 1.5); // bytes/s: at least 10 Mbit/s
+            // bytes/s: a little over the stream's own rate (at least 2 Mbit/s). A home connection's
+            // router keeps only a short queue: a big start-point picture sent at full speed would
+            // overflow it (pieces lost, sent again, late) — spread out a little, it fits
+            double rate = Math.max(256_000, inRate * 1.4);
             long now = System.nanoTime();
             tokens = Math.min(64 * 1024, tokens + (now - refilled) / 1e9 * rate);
             refilled = now;
