@@ -42,6 +42,8 @@ public interface MonitorBackend {
         default void pointOk(boolean seated) {}
         /** The cursor couldn't go onto the monitor. */
         default void pointFail(String why) {}
+        /** Sitting: your cursor went on to a monitor joined to yours — you sit at that one now. */
+        default void seatMoved(int index) {}
     }
 
     CompletableFuture<Driver> status();

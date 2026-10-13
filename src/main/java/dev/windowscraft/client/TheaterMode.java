@@ -347,11 +347,43 @@ public final class TheaterMode {
         float targetYaw = seatYaw + (float) lookYaw, targetPitch = MathHelper.clamp(seatPitch + (float) lookPitch, -90, 90);
         float yaw = vanillaYaw + MathHelper.wrapDegrees(targetYaw - vanillaYaw) * (float) e;
         float pitch = vanillaPitch + (targetPitch - vanillaPitch) * (float) e;
+        if (glideFrom != null) { // over to a joined monitor: ~0.35 s
+            double g = Math.min(1, (now - glideAt) / 0.35e9);
+            double s2 = g * g * (3 - 2 * g);
+            if (g >= 1) glideFrom = null;
+            else {
+                pos = glideFrom.pos().lerp(pos, s2);
+                yaw = glideFrom.yaw() + MathHelper.wrapDegrees(yaw - glideFrom.yaw()) * (float) s2;
+                pitch = glideFrom.pitch() + (pitch - glideFrom.pitch()) * (float) s2;
+            }
+        }
         // your character stays visible (like third person) once the camera has left your head
-        return new Pose(pos, yaw, pitch, e > 0.25);
+        return lastPose = new Pose(pos, yaw, pitch, e > 0.25);
     }
 
     public record Pose(Vec3d pos, float yaw, float pitch, boolean showBody) {}
+
+    /** Gliding over to a joined monitor: where the view was, and since when. */
+    private static Pose glideFrom;
+    private static long glideAt;
+    private static Pose lastPose;
+
+    /**
+     * You sit at a joined monitor now (your cursor went over to it): the view glides to it, and
+     * you stay seated — the mouse and keyboard keep working without a pause.
+     */
+    public static void glideTo(Display d) {
+        if (!active || leaving || d == null || d == controlled || !d.isLive()) return;
+        glideFrom = lastPose;
+        glideAt = System.nanoTime();
+        targetOwn(d);
+        lookYaw = lookPitch = 0;
+        recentering = false;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        fitDistance = fitDistance(mc, rect);
+        allowedMax = fitDistance * MAX_FACTOR;
+        distance = fitDistance * MIN_FACTOR;
+    }
 
     public static String watchingTitle() { return active ? title : null; }
 

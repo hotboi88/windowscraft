@@ -1,0 +1,61 @@
+# Runs WindowsCraft's Windows self-test (native/wc-audio/src/bin/wc-selftest.rs) on a real Windows
+# machine with the Parsec virtual display driver: real in-game monitors, real windows, real
+# mouse and keyboard input. The report and screenshots are attached to each run.
+name: Windows self-test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What this machine has
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version | Format-List
+          Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, CurrentHorizontalResolution, CurrentVerticalResolution | Format-List
+          query user 2>$null
+          Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId
+
+      - name: Install the Parsec virtual display driver
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://builds.parsec.app/vdd/parsec-vdd-0.41.0.0.exe -OutFile "$env:RUNNER_TEMP\vdd.exe"
+          $p = Start-Process "$env:RUNNER_TEMP\vdd.exe" -ArgumentList '/S' -Wait -PassThru
+          "installer exit code: $($p.ExitCode)"
+          Start-Sleep -Seconds 5
+          Get-PnpDevice -Class Display | Format-Table -AutoSize Status, FriendlyName, InstanceId
+
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $n = "src\main\resources\windowscraft\natives"
+          New-Item -ItemType Directory -Force -Path out\shots | Out-Null
+          & "$n\wc-selftest.exe" --helpers $n --report out\selftest-report.txt --shots out\shots
+          $code = $LASTEXITCODE
+          "self-test exit code: $code"
+          exit $code
+
+      - name: Screenshots to PNG
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          Get-ChildItem out\shots\*.bmp -ErrorAction SilentlyContinue | ForEach-Object {
+            $img = [System.Drawing.Image]::FromFile($_.FullName)
+            $img.Save(($_.FullName -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+            $img.Dispose()
+            Remove-Item $_.FullName
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest
+          path: out/

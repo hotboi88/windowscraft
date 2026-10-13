@@ -750,6 +750,19 @@ public final class InGameMonitors {
 
         @Override public void esc() { onGame(() -> { if (dev.windowscraft.client.Tablet.raised()) dev.windowscraft.client.Tablet.lower(); else TheaterMode.leaveNow(); }); }
         @Override public void alt(boolean down) { altLooking = down; }
+        @Override public void seatMoved(int index) {
+            onGame(() -> {
+                if (seatedMon == null) return;
+                for (Display d : DisplayManager.get().all()) {
+                    Mon m = monitorOf(d);
+                    if (m == null || m.index() != index || d == seatedOn) continue;
+                    seatedMon = m;
+                    seatedOn = d;
+                    TheaterMode.glideTo(d); // (your view goes along to it)
+                    return;
+                }
+            });
+        }
         @Override public void recenter() { onGame(TheaterMode::recenter); }
         @Override public void zoom(double notches) { onGame(() -> { if (dev.windowscraft.client.Tablet.raised()) dev.windowscraft.client.Tablet.zoom(notches); else TheaterMode.scroll(notches); }); }
 

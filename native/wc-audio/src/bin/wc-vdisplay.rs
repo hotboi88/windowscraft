@@ -459,6 +459,16 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
             groups.push(vec![(i, RECT { left: 0, top: 0, right: w, bottom: h })]);
         }
     }
+    {
+        let mut map: HashMap<i32, Vec<i32>> = HashMap::new();
+        for g in &groups {
+            let ids: Vec<i32> = g.iter().map(|(i, _)| *i).collect();
+            for i in &ids {
+                map.insert(*i, ids.clone());
+            }
+        }
+        *GROUPS.lock().unwrap() = Some(map);
+    }
     let mut want: Vec<(String, i32, i32)> = Vec::new();
     for g in &groups {
         let minx = g.iter().map(|(_, r)| r.left).min().unwrap_or(0);
@@ -888,6 +898,30 @@ static ESC_HELD: AtomicBool = AtomicBool::new(false);
 static SEAT_DEVICE: Mutex<String> = Mutex::new(String::new());
 static SEAT_IDX: AtomicI32 = AtomicI32::new(-1);
 static CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
+/// Where the cursor may go while you sit: the monitor, and every monitor joined to it in the game.
+static SEAT_CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
+/// Joined monitors (from "arrange"): each index → every index of its group (itself included).
+static GROUPS: Mutex<Option<HashMap<i32, Vec<i32>>>> = Mutex::new(None);
+
+/// The box around that monitor and the ones joined to it (None: it isn't on).
+fn group_area(idx: i32) -> Option<RECT> {
+    let members = GROUPS.lock().unwrap().as_ref().and_then(|g| g.get(&idx).cloned()).unwrap_or_else(|| vec![idx]);
+    let mut out: Option<RECT> = None;
+    for m in members {
+        if let Some(r) = monitor_area(m) {
+            out = Some(match out {
+                None => r,
+                Some(o) => RECT { left: o.left.min(r.left), top: o.top.min(r.top), right: o.right.max(r.right), bottom: o.bottom.max(r.bottom) },
+            });
+        }
+    }
+    out
+}
+
+/// Are these two joined (in the same group)?
+fn joined(a: i32, b: i32) -> bool {
+    a == b || GROUPS.lock().unwrap().as_ref().and_then(|g| g.get(&a)).map_or(false, |m| m.contains(&b))
+}
 static SAVED: Mutex<POINT> = Mutex::new(POINT { x: 0, y: 0 });
 static BEAT: Mutex<Option<Instant>> = Mutex::new(None);
 static SEAT_START: Mutex<Option<Instant>> = Mutex::new(None);
@@ -1333,6 +1367,22 @@ fn hook_thread() {
                     continue;
                 };
                 *CLIP.lock().unwrap() = area;
+                let clip = group_area(SEAT_IDX.load(Ordering::SeqCst)).unwrap_or(area);
+                *SEAT_CLIP.lock().unwrap() = clip;
+                // the cursor went on to a monitor joined to this one: you sit at that one now
+                if let Some(i) = cursor_monitor() {
+                    let at = SEAT_IDX.load(Ordering::SeqCst);
+                    if i != at && joined(at, i) {
+                        if let Some(added) = AREAS.get() {
+                            if let Some((dev, r)) = our_area(added, i) {
+                                SEAT_IDX.store(i, Ordering::SeqCst);
+                                *SEAT_DEVICE.lock().unwrap() = dev;
+                                *CLIP.lock().unwrap() = r;
+                                emit(&format!("seatmove {i}"));
+                            }
+                        }
+                    }
+                }
                 let beat_old = BEAT.lock().unwrap().map_or(true, |b| b.elapsed() > Duration::from_secs(4));
                 let settled = SEAT_START.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_millis(1500));
                 let fg = GetForegroundWindow();
@@ -1346,7 +1396,7 @@ fn hook_thread() {
                         || (GetWindowLongW(fg_root, GWL_EXSTYLE) as u32 & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0)) != 0);
                 let fg_here = fg_root.0.is_null()
                     || fg_root.0 as isize == SINK.load(Ordering::SeqCst)
-                    || on_area(fg_root, &area)
+                    || on_area(fg_root, &clip)
                     || is_shell(fg_root)
                     || popup // a menu or pop-up (the taskbar's right-click menu, a tray menu): not "something else"
                     || !seat_known().lock().unwrap().contains(&(fg_root.0 as isize));
@@ -1372,16 +1422,16 @@ fn hook_thread() {
                 let mut now = RECT::default();
                 let dragging = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000) != 0;
                 if !dragging && GetClipCursor(&mut now).is_ok() {
-                    let inside = now.left >= area.left && now.top >= area.top && now.right <= area.right && now.bottom <= area.bottom;
+                    let inside = now.left >= clip.left && now.top >= clip.top && now.right <= clip.right && now.bottom <= clip.bottom;
                     if !inside {
-                        let _ = ClipCursor(Some(&area));
+                        let _ = ClipCursor(Some(&clip));
                     }
                 }
                 // and in case a window slipped past the window events: anything new that isn't on
                 // the monitor yet goes there (several times a second while you sit)
                 let known = seat_known().lock().unwrap().clone();
                 for h in app_windows() {
-                    if !known.contains(&(h.0 as isize)) && !IsIconic(h).as_bool() && !on_area(h, &area) {
+                    if !known.contains(&(h.0 as isize)) && !IsIconic(h).as_bool() && !on_area(h, &clip) {
                         on_window_shown(h);
                     }
                 }
@@ -1524,9 +1574,12 @@ fn seat(idx: i32, device: &str, area: RECT, u: f64, v: f64, game: HWND) -> Resul
     }
     let x = area.left + ((area.right - area.left - 1) as f64 * u.clamp(0.0, 1.0)).round() as i32;
     let y = area.top + ((area.bottom - area.top - 1) as f64 * v.clamp(0.0, 1.0)).round() as i32;
+    // (the cursor may go on to the monitors joined to this one: a window drags across)
+    let clip = group_area(idx).unwrap_or(area);
+    *SEAT_CLIP.lock().unwrap() = clip;
     unsafe {
         let _ = SetCursorPos(x, y);
-        let _ = ClipCursor(Some(&area));
+        let _ = ClipCursor(Some(&clip));
         // whatever is under the pointer on that monitor gets the keyboard (our corner window if nothing is)
         let under = WindowFromPoint(POINT { x, y });
         let mut target = if under.0.is_null() { HWND::default() } else { GetAncestor(under, GA_ROOT) };
@@ -1553,11 +1606,11 @@ fn seat(idx: i32, device: &str, area: RECT, u: f64, v: f64, game: HWND) -> Resul
             }
             let mut c = POINT::default();
             let _ = GetCursorPos(&mut c);
-            let inside = c.x > area.left && c.x < area.right - 1 && c.y > area.top && c.y < area.bottom - 1;
+            let inside = c.x > clip.left && c.x < clip.right - 1 && c.y > clip.top && c.y < clip.bottom - 1;
             if !inside {
                 let _ = SetCursorPos(x, y);
             }
-            let _ = ClipCursor(Some(&area));
+            let _ = ClipCursor(Some(&clip));
         }
     }
     Ok(())
