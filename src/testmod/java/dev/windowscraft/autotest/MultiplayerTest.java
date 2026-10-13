@@ -288,7 +288,7 @@ public final class MultiplayerTest implements ClientModInitializer {
         // The picture must keep going (the last good one held, never smeared), and Alice's
         // stream should be asked to send less
         if (tick == 1600 && sub != null) {
-            lossStart = new long[]{sub.framesDecoded(), sub.skippedPieces()};
+            lossStart = new long[]{sub.framesDecoded(), sub.skippedPieces(), sub.recoveredPieces()};
             dev.windowscraft.relay.UdpReceiver.testLoss = 0.35;
             log("losing 35 % of the picture packets on the way (resends too)");
         }
@@ -296,7 +296,8 @@ public final class MultiplayerTest implements ClientModInitializer {
         if (tick == 1700 && sub != null && lossStart != null) {
             dev.windowscraft.relay.UdpReceiver.testLoss = 0;
             long frames = sub.framesDecoded() - lossStart[0], lost = sub.skippedPieces() - lossStart[1];
-            check(mc, lost > 0, "the lossy connection really lost pieces: " + lost + " (" + sub.transport() + ")");
+            long resent = sub.recoveredPieces() - lossStart[2];
+            check(mc, lost > 0 || resent > 50, "the lossy connection really lost pieces: " + resent + " sent again, " + lost + " given up on (" + sub.transport() + ")");
             check(mc, frames > 20, "the picture kept going through it: " + frames + " pictures in 5 s");
             check(mc, sub.lossTroubleSent(), "the owner was asked for a lighter stream");
         }

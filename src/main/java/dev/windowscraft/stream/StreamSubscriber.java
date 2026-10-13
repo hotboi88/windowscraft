@@ -109,6 +109,7 @@ public final class StreamSubscriber implements FrameSource {
 
     /** Picture pieces given up on (they never arrived in time). */
     public long skippedPieces() { var u = udp; return u == null ? 0 : u.skipped; }
+    public long recoveredPieces() { var u = udp; return u == null ? 0 : u.recovered; }
     private volatile boolean lossTroubleSent;
     private volatile long lastLossTroubleNanos;
     /** Tests: has this viewer asked the owner for a lighter stream because pieces got lost? */
