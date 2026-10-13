@@ -754,21 +754,21 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // switching has a moment's rest: a slip back over the edge right after doesn't swing you back
     sleep(1300);
     let t_back = Instant::now();
+    sleep(400); // (the rest after the last switch is over)
+    let mid_y = (rb.top + rb.bottom) / 2;
     unsafe {
-        let _ = SetCursorPos(rb.left + 100, (rb.top + rb.bottom) / 2);
+        let _ = SetCursorPos(rb.left + 100, mid_y);
     }
     sleep(100);
-    for _ in 0..4 {
-        move_by(-60, 0); // (140 px onto A)
-        sleep(15);
+    unsafe {
+        let _ = SetCursorPos(ra.right - 140, mid_y); // (140 px onto A: just over the edge)
     }
     sleep(700);
     // (a glance over the edge isn't a move: only going well onto it and staying)
     let glanced = h.events_since(t_back).iter().any(|e| e.starts_with("seatmove"));
     rep.check("just touching the joined monitor doesn't switch to it", !glanced, format!("{:?}", h.events_since(t_back)));
-    for _ in 0..30 {
-        move_by(-60, 0);
-        sleep(15);
+    unsafe {
+        let _ = SetCursorPos(ra.right - 600, mid_y); // (well onto A, and staying)
     }
     let back_ok = wait_for(2000, || h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx)));
     let t_slip = Instant::now();
@@ -878,9 +878,15 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         let _ = SetCursorPos((ra.left + ra.right) / 2, (ra.top + ra.bottom) / 2);
     }
     sleep(200);
-    for (what, class, cmd) in [("File Explorer", "CabinetWClass", "start \"\" explorer.exe C:\\Windows"), ("Task Manager", "TaskManagerWindow", "start \"\" taskmgr.exe")] {
+    for (what, class, exe, arg) in [("File Explorer", "CabinetWClass", "explorer.exe", "C:\\Windows"), ("Task Manager", "TaskManagerWindow", "taskmgr.exe", "")] {
         let before: Vec<HWND> = top_windows().into_iter().filter(|w| class_name(*w) == class).collect();
-        let _ = Command::new("cmd").args(["/c", cmd]).spawn();
+        let mut c = Command::new(exe);
+        if !arg.is_empty() {
+            c.arg(arg);
+        }
+        if let Err(e) = c.spawn() {
+            rep.note(format!("couldn't start {exe}: {e}"));
+        }
         let mut found = None;
         wait_for(10000, || {
             found = top_windows().into_iter().find(|w| class_name(*w) == class && !before.contains(w) && unsafe { IsWindowVisible(*w) }.as_bool());
