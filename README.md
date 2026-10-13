@@ -143,6 +143,12 @@ one of your real screens instead, as before.
   shaders or compression in between, about one frame of delay. **Alt + scroll** out (or look
   around with Alt) to see the room; **Esc** gets you up. Joined monitors: moving onto the next one
   switches the view to it. Turn it off in the menu (In-game monitors → "Sit-down view").
+- **Apps that only run once** (Discord, WhatsApp…): already open on your desk or another
+  monitor, starting one from a monitor leaves it where it is (the monitor says so); "Bring here"
+  in the monitor's menu takes it over on purpose.
+- **A browser on your desk and on a monitor** shares its sound (Windows can't split one app's
+  sound by window), so it stays on your desk. For a browser with its own sound on a monitor, use
+  "Own Brave/Chrome/Edge" in the monitor's menu.
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.
   (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
   while in-game monitors are on it starts with your normal rights instead — no permission
