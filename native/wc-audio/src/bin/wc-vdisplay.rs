@@ -763,6 +763,13 @@ fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT,
     eprintln!("info=placing {device}: attached {att} (flags {flags:#x}), mode {}",
         mode.map_or("none".to_string(), |m| format!("{}x{}@{} {}bpp", m.dmPelsWidth, m.dmPelsHeight, m.dmDisplayFrequency, m.dmBitsPerPel)));
     let mut placed = false;
+    for round in 0..2 {
+    if round == 1 {
+        if placed {
+            break;
+        }
+        extend_all(ours, device);
+    }
     unsafe {
         'spots: for &(x, y) in &spots {
             // its own exact mode first (all fields: needed to switch on a display that isn't on yet), then simpler asks
@@ -801,6 +808,7 @@ fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT,
         }
         let _ = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
     }
+    }
     if !placed {
         let list: Vec<String> = monitors().iter().map(|(d, r)| format!("{d} {},{} {}x{}", r.left, r.top, r.right - r.left, r.bottom - r.top)).collect();
         eprintln!("info=screens now: {}", list.join("; "));
@@ -832,6 +840,33 @@ fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT,
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Windows wouldn't switch the new monitor on by itself: ask it to "extend" onto every connected
+/// screen (what Win + P → Extend does) — then switch off again any screen of yours that was off
+/// before (it was off on purpose).
+fn extend_all(ours: &[String], device: &str) {
+    let before: Vec<String> = monitors().into_iter().map(|(d, _)| d).collect();
+    eprintln!("info=asking Windows to extend onto all screens (it didn't switch {device} on by itself)");
+    let r = unsafe {
+        windows::Win32::Devices::Display::SetDisplayConfig(None, None,
+            windows::Win32::Devices::Display::SDC_TOPOLOGY_EXTEND | windows::Win32::Devices::Display::SDC_APPLY)
+    };
+    std::thread::sleep(Duration::from_millis(1500));
+    for (d, _) in monitors() {
+        let mine = d.eq_ignore_ascii_case(device) || ours.iter().any(|o| o.eq_ignore_ascii_case(&d));
+        if !mine && !before.iter().any(|b| b.eq_ignore_ascii_case(&d)) {
+            eprintln!("info={d} was off before: switching it off again");
+            let name = wide(&d);
+            let mut off = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+            off.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_POSITION;
+            unsafe {
+                let _ = ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&off), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
+                let _ = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
+            }
+        }
+    }
+    eprintln!("info=extend: {r}, {device} now {:?}", attached(device));
 }
 
 // ---- windows on a monitor -----------------------------------------------------------------
