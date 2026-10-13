@@ -2,9 +2,9 @@
 # are added and removed many times? Each variant runs on its own fresh Windows machine.
 name: Windows driver stress
 
+# (finding: no way of talking to it prevents the occasional freeze on these VMs — the helper
+# copes instead: it notices, replaces dropped monitors and offers Repair. Run by hand.)
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

@@ -1,4 +1,4 @@
-WindowsCraft 0.14.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.14.3 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
 1. Close Minecraft.
 2. Right-click this zip and choose "Extract All...", then open the extracted folder.
@@ -6,11 +6,10 @@ WindowsCraft 0.14.2 (screens, in-game monitors, gaming monitors and tablets for 
    If Windows says "Windows protected your PC": click "More info", then "Run anyway".
 4. Start Cobbleverse and join the server as usual.
 
-Everyone on the server needs this same version, and the server too: put the same windowscraft
-.jar into the server's "mods" folder (delete the old windowscraft .jar there) and restart it.
-This version adds blocks (gaming monitors) and items (tablets), so an older WindowsCraft can't
-join the server any more - that's why this one update has to be installed by hand on every PC.
-After that, newer versions are offered in chat when you join and update themselves.
+The server needs this version too: put the same windowscraft .jar into the server's "mods"
+folder (delete the old windowscraft .jar there) and restart it. Anyone already on 0.14.2 is
+offered this update in chat when they join, and it updates itself (anyone older than 0.14.2
+installs it by hand once, like this).
 
 U anywhere: the WindowsCraft menu - all your screens (what's open on them, who can use them,
 their size and picture) and the settings.
@@ -27,7 +26,10 @@ To share a window or your screen instead: sneak + U on a wall, pick one, Go Live
 On someone else's screen, U opens listening options (3D or direct sound, volume, mute).
 Press O while looking at a live screen for theater mode.
 
-If something about in-game monitors misbehaves: close Minecraft, open the "Windows self-test"
+If U does nothing or in-game monitors won't turn on: the display driver got stuck. WindowsCraft
+now notices that and offers "Repair driver" (Windows asks for permission). Restarting the PC
+fixes it too.
+If something else about in-game monitors misbehaves: close Minecraft, open the "Windows self-test"
 folder and double-click "Run self-test.bat". It takes a couple of minutes (your screens blink and
 the mouse moves - leave the PC alone meanwhile) and puts "WindowsCraft self-test" on your desktop:
 send that folder's report.

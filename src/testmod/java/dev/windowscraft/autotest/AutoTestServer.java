@@ -37,6 +37,14 @@ public final class AutoTestServer implements ModInitializer {
         // a gaming monitor block, turned diagonally (south-west)
         w.setBlockState(new BlockPos(-5, ground + 1, -5), dev.windowscraft.block.Monitors.MONITORS.get("orange").getDefaultState()
                 .with(dev.windowscraft.block.MonitorBlock.TURN, 1));
+        // two joined gaming monitors (the second hangs off the first one's right edge, no stand)
+        BlockPos left = new BlockPos(-9, ground + 1, -5), right = left.east();
+        w.setBlockState(left, dev.windowscraft.block.Monitors.MONITORS.get("black").getDefaultState());
+        w.setBlockState(right, dev.windowscraft.block.Monitors.MONITORS.get("black").getDefaultState().with(dev.windowscraft.block.MonitorBlock.FREE, true));
+        var pose = dev.windowscraft.display.MonitorPose.join(dev.windowscraft.display.MonitorPose.standing(0), left, right,
+                dev.windowscraft.display.MonitorPose.Edge.RIGHT, null, true);
+        if (w.getBlockEntity(right) instanceof dev.windowscraft.block.MonitorBlockEntity be) be.setPose(pose);
+        LOG.info("[mp-test] joined monitors at {} and {} ({})", left, right, pose);
         LOG.info("[mp-test] built wall at ground {}", ground);
     }
 

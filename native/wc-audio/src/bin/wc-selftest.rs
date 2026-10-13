@@ -750,6 +750,38 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     let ev = h.events_since(t);
     rep.check("from a monitor, the cursor goes on to the monitor joined to it", inside(&rb, cx, cy), format!("cursor {cx},{cy}; B {}", fmt(&rb)));
     rep.check("…and you're sitting at that one now", ev.iter().any(|e| e == &format!("seatmove {}", b.idx)), format!("events {ev:?}"));
+    // switching has a moment's rest: a slip back over the edge right after doesn't swing you back
+    sleep(1300);
+    let t_back = Instant::now();
+    for _ in 0..40 {
+        move_by(-60, 0);
+        sleep(15);
+        if h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx)) {
+            break;
+        }
+    }
+    sleep(150);
+    let back_ok = h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx));
+    let t_slip = Instant::now();
+    for _ in 0..6 {
+        move_by(80, 0);
+        sleep(15);
+    }
+    sleep(400);
+    let (sx, sy) = cursor();
+    let slipped = h.events_since(t_slip);
+    rep.check("after moving to a joined monitor, slipping back over the edge right away doesn't switch you back",
+        back_ok && inside(&ra, sx, sy) && !slipped.iter().any(|e| e.starts_with("seatmove")),
+        format!("moved to A: {back_ok}; cursor {sx},{sy}; events {slipped:?}"));
+    sleep(900);
+    let t_again = Instant::now();
+    for _ in 0..20 {
+        move_by(60, 0);
+        sleep(15);
+    }
+    sleep(300);
+    rep.check("…but a moment later it does", h.events_since(t_again).iter().any(|e| e == &format!("seatmove {}", b.idx)),
+        format!("events {:?}", h.events_since(t_again)));
     for _ in 0..30 {
         move_by(0, -150);
         move_by(-150, 0);

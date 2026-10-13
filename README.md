@@ -386,6 +386,8 @@ TCP when UDP doesn't get through.
 | A window shows black | That app blocks background capture. Share its screen instead. |
 | An app is very quiet after a crash | The mod puts the volume back by itself the next time the game runs while that app is open. You can also fix it by hand in Windows *Settings → Sound → Volume mixer*. |
 | Someone else's screen freezes for a moment now and then | Pieces of the picture got lost on the way (Wi-Fi, a busy connection). Their screen holds the last good picture until the next clean one (well under a second) instead of smearing, and if it keeps happening their game asks yours to send a lighter stream. `/windowscraft report` on their side shows how many pieces were lost. |
+| U on a wall does nothing / in-game monitors won't turn on | The display driver got stuck (it can happen after monitors are turned on and off many times quickly). WindowsCraft notices it and offers **Repair driver**, which restarts the driver (Windows asks for permission). Restarting the PC fixes it too. |
+| "Windows dropped an in-game monitor - turning it back on…" | Windows let one of the monitors go by itself; it comes back on its own right away. If it keeps happening you get a message instead, and U on it tries again. |
 | Something about in-game monitors misbehaves on your PC | Close Minecraft and run `Windows self-test\Run self-test.bat` from the WindowsCraft zip: in a couple of minutes it checks every part of in-game monitors on your own PC (your screens blink and the mouse moves meanwhile) and puts a report on your desktop. |
 | A yellow border appears around a shared window (Windows 10) | Windows 10 draws it during GPU capture, and it can't be turned off there. Windows 11 doesn't show it. |
 

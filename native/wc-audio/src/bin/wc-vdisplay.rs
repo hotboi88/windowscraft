@@ -1008,6 +1008,12 @@ static SEAT_IDX: AtomicI32 = AtomicI32::new(-1);
 static CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
 /// Where the cursor may go while you sit: the monitor, and every monitor joined to it in the game.
 static SEAT_CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
+/// Moving to a joined monitor: when it happened, and the moment after it the cursor stays there.
+static SWITCHED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+static NARROWED: AtomicBool = AtomicBool::new(false);
+const SWITCH_REST: Duration = Duration::from_millis(1000);
+/// …and how far (pixels) onto the other monitor the cursor has to go before you move to it.
+const SWITCH_DEPTH: i32 = 24;
 /// Joined monitors (from "arrange"): each index → every index of its group (itself included).
 static GROUPS: Mutex<Option<HashMap<i32, Vec<i32>>>> = Mutex::new(None);
 
@@ -1478,18 +1484,40 @@ fn hook_thread() {
                     continue;
                 };
                 *CLIP.lock().unwrap() = area;
-                let clip = group_area(SEAT_IDX.load(Ordering::SeqCst)).unwrap_or(area);
+                let dragging_now = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000) != 0;
+                // right after moving to a joined monitor, the cursor stays on it for a moment (so a
+                // little slip back over the edge doesn't swing you straight back) — not while dragging
+                // a window across, though
+                let resting = !dragging_now && SWITCHED_AT.lock().unwrap().map_or(false, |t| t.elapsed() < SWITCH_REST);
+                let group = group_area(SEAT_IDX.load(Ordering::SeqCst)).unwrap_or(area);
+                let clip = if resting { area } else { group };
                 *SEAT_CLIP.lock().unwrap() = clip;
-                // the cursor went on to a monitor joined to this one: you sit at that one now
-                if let Some(i) = cursor_monitor() {
+                if !resting && NARROWED.swap(false, Ordering::SeqCst) {
+                    let _ = ClipCursor(Some(&group)); // (the rest is over: the joined monitors are open again)
+                }
+                // the cursor went on (a little way, not just onto the edge) to a monitor joined to
+                // this one: you sit at that one now
+                if let Some(i) = cursor_monitor().filter(|_| !resting) {
                     let at = SEAT_IDX.load(Ordering::SeqCst);
                     if i != at && joined(at, i) {
                         if let Some(added) = AREAS.get() {
                             if let Some((dev, r)) = our_area(added, i) {
-                                SEAT_IDX.store(i, Ordering::SeqCst);
-                                *SEAT_DEVICE.lock().unwrap() = dev;
-                                *CLIP.lock().unwrap() = r;
-                                emit(&format!("seatmove {i}"));
+                                let mut c = POINT::default();
+                                let _ = GetCursorPos(&mut c);
+                                let depth = if r.left == area.right { c.x - r.left } else if r.right == area.left { r.right - 1 - c.x }
+                                    else if r.top == area.bottom { c.y - r.top } else if r.bottom == area.top { r.bottom - 1 - c.y } else { i32::MAX };
+                                if depth >= SWITCH_DEPTH {
+                                    SEAT_IDX.store(i, Ordering::SeqCst);
+                                    *SEAT_DEVICE.lock().unwrap() = dev;
+                                    *CLIP.lock().unwrap() = r;
+                                    *SWITCHED_AT.lock().unwrap() = Some(Instant::now());
+                                    if !dragging_now {
+                                        let _ = ClipCursor(Some(&r));
+                                        *SEAT_CLIP.lock().unwrap() = r;
+                                        NARROWED.store(true, Ordering::SeqCst);
+                                    }
+                                    emit(&format!("seatmove {i}"));
+                                }
                             }
                         }
                     }
@@ -3319,9 +3347,14 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
             got = Some(i);
             break;
         }
-        eprintln!("info=the driver didn't add a monitor (try {attempt}: {}); trying again", LAST_IOCTL.lock().unwrap());
+        let last = LAST_IOCTL.lock().unwrap().clone();
+        eprintln!("info=the driver didn't add a monitor (try {attempt}: {last})");
         if driver_status() != "ok" {
             break; // (it has a problem now: retrying won't help)
+        }
+        if last.contains("0x80070102") {
+            // it didn't answer at all (rather than saying no): it's stuck, and only Repair helps
+            return Err(("the display driver stopped answering (\"Repair driver\" restarts it)".into(), false));
         }
         std::thread::sleep(Duration::from_millis(1500 * attempt));
     }

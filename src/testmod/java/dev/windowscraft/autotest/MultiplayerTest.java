@@ -79,6 +79,17 @@ public final class MultiplayerTest implements ClientModInitializer {
                 DisplayManager.get().start(gm, SourceInfo.testPattern(), new CaptureSettings(720, 30, true, true));
                 log("and onto the gaming monitor block");
             }
+            // two joined gaming monitors: both must reach everyone (the joined one hangs at an angle)
+            for (BlockPos jp : List.of(new BlockPos(-9, g + 1, -5), new BlockPos(-8, g + 1, -5))) {
+                if (!(mc.world.getBlockState(jp).getBlock() instanceof dev.windowscraft.block.MonitorBlock)) {
+                    check(mc, false, "joined monitor block arrived at " + jp);
+                    continue;
+                }
+                WallRect jr = dev.windowscraft.block.MonitorBlock.rectAt(mc.world, jp);
+                Display jd = DisplayManager.get().create(dim, jr);
+                DisplayManager.get().start(jd, SourceInfo.testPattern(), new CaptureSettings(720, 30, true, true));
+                log("went live on the gaming monitor at " + jp + " (" + jr.faceString() + ")");
+            }
             dev.windowscraft.apps.InputBridge.testSink = sink::add;
             dev.windowscraft.client.ScreenControl.testControlPattern = true;
         }
@@ -253,6 +264,17 @@ public final class MultiplayerTest implements ClientModInitializer {
             mc.player.setYaw((float) Math.toDegrees(Math.atan2(-to.x, to.z)));
             mc.player.setPitch((float) -Math.toDegrees(Math.atan2(to.y, Math.hypot(to.x, to.z))));
         }
+        if (tick == 1130) { // and at the joined pair
+            int g = mc.player.getBlockPos().getY() - 1;
+            net.minecraft.util.math.Vec3d to = new net.minecraft.util.math.Vec3d(-8, g + 1.6, -4.5).subtract(mc.player.getEyePos());
+            mc.player.setYaw((float) Math.toDegrees(Math.atan2(-to.x, to.z)));
+            mc.player.setPitch((float) -Math.toDegrees(Math.atan2(to.y, Math.hypot(to.x, to.z))));
+        }
+        if (tick == 1140) {
+            shot(mc, "mp_viewer_joined_monitors");
+            mc.player.setYaw(180);
+            mc.player.setPitch(0);
+        }
         if (tick == 1110) {
             shot(mc, "mp_viewer_monitor_block");
             mc.player.setYaw(180);
@@ -277,8 +299,11 @@ public final class MultiplayerTest implements ClientModInitializer {
             log("delay series (ms, 1/s): " + latencySamples.stream().map(d -> Long.toString(Math.round(d))).toList());
             check(mc, r != null, "viewer learned about Alice's screen from the server");
             List<RemoteDisplays.Remote> walls = new ArrayList<>(RemoteDisplays.all());
-            check(mc, walls.size() == 3 && walls.stream().allMatch(w -> w.info.streamId().equals(walls.get(0).info.streamId())),
-                    "viewer sees all three of Alice's screens carrying one stream (" + walls.size() + ")");
+            check(mc, walls.size() == 5 && walls.stream().allMatch(w -> w.info.streamId().equals(walls.get(0).info.streamId())),
+                    "viewer sees all five of Alice's screens carrying one stream (" + walls.size() + ")");
+            check(mc, walls.stream().filter(w -> w.rect.isMonitor() && w.rect.turn() == 0).count() == 2
+                            && walls.stream().anyMatch(w -> w.rect.faceString().contains("~")),
+                    "including both joined gaming monitors, the hanging one too: " + walls.stream().map(w -> w.rect.faceString()).toList());
             check(mc, walls.stream().anyMatch(w -> w.rect.isMonitor() && w.rect.turn() == 1),
                     "including the diagonal gaming monitor block: " + walls.stream().map(w -> w.rect.faceString()).toList());
             check(mc, RemoteDisplays.watchedStreams() == 1, "viewer downloads the mirrored stream once (" + RemoteDisplays.watchedStreams() + ")");
