@@ -249,11 +249,12 @@ static GAME_RESTORE: Mutex<(i32, i32)> = Mutex::new((0, 0));
 static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
+        | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE)
+    {
+        LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
+    }
     match msg {
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL | WM_CAPTURECHANGED
-        | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE => {
-            LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
-        }
         WM_ACTIVATE if class_name(h) == "GLFW30" && GAME_HOLDS.load(Ordering::SeqCst) => unsafe {
             if (w.0 & 0xFFFF) != 0 {
                 // like GLFW's "disabled" cursor: remember where it was, hold it in the middle
