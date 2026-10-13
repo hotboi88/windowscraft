@@ -11,6 +11,8 @@ rm -f run-alice/config/windowscraft/displays.json run-bob/viewer-* run-bob/mods/
 mkdir -p run-mp-server run-alice run-bob
 [ -f run-mp-server/server.properties ] || cp tools/movie/server.properties run-mp-server/server.properties
 [ -f run-mp-server/eula.txt ] || echo "eula=true" > run-mp-server/eula.txt
+# (the test players: no first-start screens in the way)
+for d in run-alice run-bob; do [ -f $d/options.txt ] || cp tools/movie/options.txt $d/options.txt; done
 echo "$1" > run-bob/movie.txt
 gradle runMpServer ${GRADLE_FLAGS---offline} -q > "$OUT/server-$2.log" 2>&1 &
 for i in $(seq 1 240); do grep -q "Done (" "$OUT/server-$2.log" 2>/dev/null && break; sleep 1; done
