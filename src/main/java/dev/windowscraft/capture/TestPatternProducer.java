@@ -91,6 +91,8 @@ public final class TestPatternProducer implements FrameProducer {
     private static BufferedImage scene;
     private static int sceneNo = -1;
 
+    private static BufferedImage[] grains;
+
     private static void paintMovie(Graphics2D g, double t, long frame) {
         int no = (int) (t / 5);
         if (no != sceneNo || scene == null) {
@@ -100,19 +102,25 @@ public final class TestPatternProducer implements FrameProducer {
             for (int y = 0; y < 56; y++) for (int x = 0; x < 200; x++) small.setRGB(x, y, r.nextInt(0xFFFFFF));
             scene = new BufferedImage(W * 2, H, BufferedImage.TYPE_INT_RGB);
             Graphics2D sg = scene.createGraphics();
-            sg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            sg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
             sg.drawImage(small, 0, 0, W * 2, H, null);
             sg.dispose();
         }
+        if (grains == null) { // (film grain, made once: a different one on each picture)
+            grains = new BufferedImage[6];
+            java.util.Random r = new java.util.Random(5);
+            for (int k = 0; k < grains.length; k++) {
+                grains[k] = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
+                int[] px = ((DataBufferInt) grains[k].getRaster().getDataBuffer()).getData();
+                for (int i = 0; i < 40_000; i++) {
+                    int v = r.nextInt(256);
+                    px[r.nextInt(px.length)] = (110 << 24) | (v << 16) | (v << 8) | v;
+                }
+            }
+        }
         int off = (int) ((t % 5) * 120); // panning, 120 px a second
         g.drawImage(scene, -off, 0, null);
-        // film grain: a little fresh noise on every picture
-        java.util.Random grain = new java.util.Random(frame);
-        for (int i = 0; i < 6000; i++) {
-            int x = grain.nextInt(W), y = grain.nextInt(H), v = grain.nextInt(256);
-            g.setColor(new Color(v, v, v, 90));
-            g.fillRect(x, y, 3, 3);
-        }
+        g.drawImage(grains[(int) (frame % grains.length)], 0, 0, null);
     }
 
     private static void paint(BufferedImage img, double t, long frame, int fps) {
