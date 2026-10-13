@@ -89,6 +89,10 @@ public final class WinGameTest implements ClientModInitializer {
                 boolean done = waitFor.getAsBoolean();
                 if (!done && System.nanoTime() < waitUntil) return;
                 check(done, waitName + (done ? "" : " — waited, it didn't happen. Messages: " + lastMessages()));
+                StringBuilder st = new StringBuilder();
+                for (Display d : DisplayManager.get().all())
+                    st.append(String.format(" [%s %s live %s on %s]", d.tablet ? "tablet" : d.rect.faceString().split("~")[0], d.rect.min().toShortString(), d.isLive(), InGameMonitors.isOn(d)));
+                log("screens:" + st + " · monitors " + InGameMonitors.all());
                 waitFor = null;
                 stage++;
                 tick = 0;

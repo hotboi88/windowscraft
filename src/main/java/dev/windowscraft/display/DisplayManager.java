@@ -333,6 +333,11 @@ public final class DisplayManager {
     private void detach(Display d) {
         Share s = d.share;
         if (s == null) return;
+        // (in the log: which screen stopped showing what, and what stopped it — for reports)
+        String by = StackWalker.getInstance().walk(st -> st.skip(1).limit(4)
+                .map(f -> f.getClassName().substring(f.getClassName().lastIndexOf('.') + 1) + "." + f.getMethodName())
+                .reduce((x, y) -> x + " ← " + y).orElse("?"));
+        WindowsCraftClient.LOGGER.info("Screen at {} stops showing '{}' ({})", d.rect.min().toShortString(), s.source().title(), by);
         d.share = null;
         s.displays.remove(d);
         if (s.publisher != null) ClientNet.remove(d.id);

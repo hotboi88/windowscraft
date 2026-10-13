@@ -61,7 +61,11 @@ public record DisplayInfo(UUID displayId, String dimension, String face, BlockPo
 
     /** Server-side sanity check of something a client sent us. */
     public boolean plausible() {
-        if (face.contains("@")) return min.equals(max) && face.matches("(north|south|east|west)@[0-7]") && plausibleRest(); // a gaming monitor block
+        if (face.contains("@")) { // a gaming monitor block (standing, or joined to another: "@5~<how it hangs>")
+            int t = face.indexOf('~');
+            boolean pose = t < 0 || dev.windowscraft.display.MonitorPose.parse(face.substring(t + 1)) != null;
+            return min.equals(max) && face.matches("(north|south|east|west)@[0-7](~[-0-9.,]{1,110})?") && pose && plausibleRest();
+        }
         int dx = Math.abs(max.getX() - min.getX()) + 1, dy = Math.abs(max.getY() - min.getY()) + 1, dz = Math.abs(max.getZ() - min.getZ()) + 1;
         boolean flat = dx == 1 || dz == 1;
         boolean box = Float.isFinite(boxX0) && Float.isFinite(boxY0) && Float.isFinite(boxX1) && Float.isFinite(boxY1)
