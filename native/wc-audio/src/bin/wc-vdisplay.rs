@@ -393,7 +393,25 @@ fn sizes(device: &str) -> Vec<(u32, u32, u32)> {
 /// Lays the in-game monitors out on the desktop like they stand in the world (see the "arrange"
 /// command): joined ones edge to edge, each group of them off on its own — touching nothing else
 /// but at a corner, so a window only ever drags across monitors that are joined in the game.
+static LAST_SPEC: Mutex<String> = Mutex::new(String::new());
+
+/// After Windows turned a new monitor on (it shuffles the others around when it does): the
+/// last layout again, the new one off on its own.
+fn rearrange_with(added: &AddedMap, idx: i32) {
+    let last = LAST_SPEC.lock().unwrap().clone();
+    let mut spec: Vec<String> = last.split_whitespace().filter(|e| !e.starts_with(&format!("{idx}:"))).map(|e| e.to_string()).collect();
+    for i in added.lock().unwrap().keys() {
+        if !spec.iter().any(|e| e.starts_with(&format!("{i}:"))) {
+            spec.push(format!("{i}:-1:-"));
+        }
+    }
+    if let Err(why) = arrange(added, &spec.join(" ")) {
+        eprintln!("info=couldn't lay the monitors out again: {why}");
+    }
+}
+
 fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
+    *LAST_SPEC.lock().unwrap() = spec.to_string();
     let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
     let mut size: HashMap<i32, (String, i32, i32)> = HashMap::new();
     let mut links: Vec<(i32, i32, char)> = Vec::new();
@@ -2366,9 +2384,13 @@ fn on_window_shown(h: HWND, fresh: bool) {
     let on_desk = at.is_none() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) && !game_in_front();
     // 1. started for a monitor by WindowsCraft (its Start menu, "Own Brave"…): its first window
     // goes there — once (what you open yourself afterwards follows the rules below)
-    if fresh && !on_desk {
+    if fresh {
         let mut launches = LAUNCHES.lock().unwrap();
         launches.retain(|l| Instant::now() < l.until);
+        // (on your desk by now: only a launch from the last few seconds still counts)
+        if on_desk {
+            launches.retain(|l| l.until.saturating_duration_since(Instant::now()) > Duration::from_secs(15));
+        }
         if !launches.is_empty() {
             if let Some((created, exe)) = process_info(p) {
                 let hit = launches.iter().position(|l| {
@@ -2961,6 +2983,8 @@ fn main() {
                         added.lock().unwrap().insert(idx, Added { device: device.clone(), since });
                         taskbars_separate(true);
                         ensure_placer();
+                        rearrange_with(&added, idx);
+                        let r = rect_of(&device).unwrap_or(r);
                         say(&format!("added {idx} {device} {} {} {} {}", r.left, r.top, r.right - r.left, r.bottom - r.top));
                     }
                     Err(why) => {

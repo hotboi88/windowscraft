@@ -250,7 +250,8 @@ static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL => {
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL | WM_CAPTURECHANGED
+        | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE => {
             LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
         }
         WM_ACTIVATE if class_name(h) == "GLFW30" && GAME_HOLDS.load(Ordering::SeqCst) => unsafe {
@@ -790,6 +791,16 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     click(false);
     let got = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_LBUTTONUP));
     let under = root_at(tx, ty);
+    let first_log: Vec<u32> = LOG.lock().unwrap().iter().filter(|(w, _, _)| *w == target.0 as isize).map(|(_, m, _)| *m).collect();
+    if !got {
+        // (what happens on a second click, once it's in front)
+        LOG.lock().unwrap().clear();
+        click(false);
+        let again = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_LBUTTONUP));
+        rep.note(format!("first click got {first_log:?}; a second click: {} {:?}; left button down now: {}", again,
+            LOG.lock().unwrap().iter().filter(|(w, _, _)| *w == target.0 as isize).map(|(_, m, _)| *m).collect::<Vec<_>>(),
+            unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000 != 0));
+    }
     rep.check("clicking on a monitor reaches the app under the cursor", got, format!("{:.0} ms; under the cursor: {} \"{}\"; it got {:?}",
         t0.elapsed().as_secs_f64() * 1000.0, class_name(under), title(under),
         LOG.lock().unwrap().iter().filter(|(w, _, _)| *w == target.0 as isize).map(|(_, m, _)| *m).collect::<Vec<_>>()));
@@ -850,10 +861,10 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     sleep(300);
 
     // ---- 6. a fullscreen app keeps its screen (Esc doesn't bring the taskbar back over it)
-    let full = spawn_window("WindowsCraftTestWin", "Fullscreen (self-test)", ra, true);
-    sleep(400);
     play();
     let _ = h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000);
+    sleep(400);
+    let full = spawn_window("WindowsCraftTestWin", "Fullscreen (self-test)", ra, true); // (opened while you sit there)
     sleep(400);
     unsafe {
         let _ = SetCursorPos(ra.left + 300, ra.top + 300);
@@ -912,6 +923,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
 
     // started for a monitor: it opens there, and so do the windows it opens while you play
     let app = format!("WindowsCraft test app {}", std::process::id());
+    play(); // (you start it from the game: its menu)
     let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
     let launched = h.call(&format!("launch\t{}\t{}\t--window \"{app}\"\twc-selftest.exe", a.idx, me.display()), "launched", 10000);
     let first = find_new(&before, 8000, |w| title(*w) == app);

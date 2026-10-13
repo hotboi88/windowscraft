@@ -761,8 +761,7 @@ public final class ScreenControl {
     static boolean onOwnTablet(MinecraftClient mc) {
         if (Tablet.raised()) return true;
         if (dev.windowscraft.monitor.InGameMonitors.seated() != null && TheaterMode.controlled() == null) return true;
-        return mc.player != null && (dev.windowscraft.block.Monitors.isTablet(mc.player.getMainHandStack())
-                || dev.windowscraft.block.Monitors.isTablet(mc.player.getOffHandStack()));
+        return mc.player != null && dev.windowscraft.block.Monitors.isTablet(mc.player.getMainHandStack());
     }
 
     public static boolean onMouseButton(MinecraftClient mc, int button, int action) {
