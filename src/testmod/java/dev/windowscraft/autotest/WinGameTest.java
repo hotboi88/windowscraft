@@ -151,6 +151,49 @@ public final class WinGameTest implements ClientModInitializer {
             case 5 -> {
                 if (tick < 30) return;
                 if (mc.getWindow().isFullscreen()) mc.getWindow().toggleFullscreen();
+                fs = 6;
+                tick = 0;
+            }
+            case 6 -> {
+                // a wide game window that reaches down under your real taskbar, at a big wall that
+                // fills the view top to bottom: the screen must stop above the taskbar
+                if (tick < 40) return;
+                var u = com.sun.jna.platform.win32.User32.INSTANCE;
+                int sw = u.GetSystemMetrics(0), sh = u.GetSystemMetrics(1);
+                long h = mc.getWindow().getHandle();
+                org.lwjgl.glfw.GLFW.glfwSetWindowSize(h, sw - 40, Math.max(300, sh * 11 / 20));
+                org.lwjgl.glfw.GLFW.glfwSetWindowPos(h, 20, sh - Math.max(300, sh * 11 / 20)); // (its bottom at the screen's bottom)
+                fs = 7;
+                tick = 0;
+            }
+            case 7 -> {
+                if (tick < 60) return;
+                log("wide window: " + mc.getWindow().getFramebufferWidth() + "x" + mc.getWindow().getFramebufferHeight()
+                        + ", inside on the desktop " + java.util.Arrays.toString(dev.windowscraft.capture.win.WinGeom.clientArea(dev.windowscraft.capture.win.WinGeom.gameWindow)));
+                look(mc, 0.5, ground + 1, -1.5, Vec3d.ofCenter(wall(0, 0)));
+                fs = 8;
+                tick = 0;
+            }
+            case 8 -> {
+                if (tick < 10) return;
+                dev.windowscraft.client.TheaterMode.toggle(mc);
+                fs = 9;
+                tick = 0;
+            }
+            case 9 -> {
+                if (tick < 100) return;
+                check(InGameMonitors.seated() != null, "wide window under the taskbar: O sits you down");
+                log("wide window seated: visible part " + java.util.Arrays.toString(dev.windowscraft.client.GameArea.visible()));
+                shot(mc, "4c_seated_wide_under_taskbar");
+                checkUncovered(mc, "wide window under your taskbar");
+                dev.windowscraft.client.TheaterMode.leaveNow();
+                fs = 10;
+                tick = 0;
+            }
+            case 10 -> {
+                if (tick < 30) return;
+                org.lwjgl.glfw.GLFW.glfwSetWindowSize(mc.getWindow().getHandle(), 1006, 679);
+                org.lwjgl.glfw.GLFW.glfwSetWindowPos(mc.getWindow().getHandle(), 9, 32);
                 fs = 0;
                 await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
             }
