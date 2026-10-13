@@ -1,0 +1,9 @@
+{
+  "parent": "windowscraft:block/gaming_monitor_template",
+  "textures": {
+    "front": "windowscraft:block/white_gaming_monitor_front",
+    "back": "windowscraft:block/white_gaming_monitor_back",
+    "body": "windowscraft:block/white_gaming_monitor_body",
+    "particle": "windowscraft:block/white_gaming_monitor_front"
+  }
+}

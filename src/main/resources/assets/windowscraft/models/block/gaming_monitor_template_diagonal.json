@@ -1,0 +1,226 @@
+{
+  "credit": "WindowsCraft",
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "#front"
+  },
+  "elements": [
+    {
+      "name": "panel",
+      "from": [
+        0,
+        4,
+        7
+      ],
+      "to": [
+        16,
+        14,
+        9
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            10
+          ],
+          "texture": "#front"
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            10
+          ],
+          "texture": "#back"
+        },
+        "up": {
+          "uv": [
+            0,
+            10,
+            16,
+            12
+          ],
+          "texture": "#back"
+        },
+        "down": {
+          "uv": [
+            0,
+            12,
+            16,
+            14
+          ],
+          "texture": "#back"
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            2,
+            10
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            2,
+            10
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          8,
+          8
+        ],
+        "axis": "y",
+        "angle": 45
+      }
+    },
+    {
+      "name": "neck",
+      "from": [
+        7,
+        1,
+        9
+      ],
+      "to": [
+        9,
+        7,
+        10
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            2,
+            0,
+            4,
+            6
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            2,
+            0,
+            4,
+            6
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            2,
+            0,
+            3,
+            6
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            2,
+            0,
+            3,
+            6
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          8,
+          8
+        ],
+        "axis": "y",
+        "angle": 45
+      }
+    },
+    {
+      "name": "base",
+      "from": [
+        4,
+        0,
+        6
+      ],
+      "to": [
+        12,
+        1,
+        12
+      ],
+      "faces": {
+        "up": {
+          "uv": [
+            4,
+            0,
+            12,
+            6
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            4,
+            0,
+            12,
+            6
+          ],
+          "texture": "#body",
+          "cullface": "down"
+        },
+        "north": {
+          "uv": [
+            4,
+            6,
+            12,
+            7
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            4,
+            6,
+            12,
+            7
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            4,
+            7,
+            10,
+            8
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            4,
+            7,
+            10,
+            8
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          8,
+          8
+        ],
+        "axis": "y",
+        "angle": 45
+      }
+    }
+  ]
+}

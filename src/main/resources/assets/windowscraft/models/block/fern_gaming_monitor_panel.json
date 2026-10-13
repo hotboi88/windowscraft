@@ -1,0 +1,9 @@
+{
+  "parent": "windowscraft:block/gaming_monitor_panel_template",
+  "textures": {
+    "front": "windowscraft:block/fern_gaming_monitor_front",
+    "back": "windowscraft:block/fern_gaming_monitor_back",
+    "body": "windowscraft:block/fern_gaming_monitor_body",
+    "particle": "windowscraft:block/fern_gaming_monitor_front"
+  }
+}

@@ -1,0 +1,3 @@
+{ "schemaVersion": 1, "id": "windowscraft_autotest", "version": "0.0.0", "name": "WindowsCraft autotest", "environment": "*",
+  "entrypoints": { "main": ["dev.windowscraft.autotest.AutoTestServer"], "client": ["dev.windowscraft.autotest.AutoTest", "dev.windowscraft.autotest.MultiplayerTest", "dev.windowscraft.autotest.IrisTest"] },
+  "depends": { "windowscraft": "*" } }

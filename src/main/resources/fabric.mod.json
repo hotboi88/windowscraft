@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "windowscraft",
+  "version": "${version}",
+  "name": "WindowsCraft",
+  "description": "Screens in Minecraft: share your Windows screen or any app window onto a black concrete wall, or turn a wall, a gaming monitor block or a tablet into a real extra monitor for your PC (an in-game monitor), with spatial audio, for everyone on the server. Press U anywhere for the menu. Install it on the server too (it adds the gaming monitor blocks and tablets).",
+  "authors": [
+    "vitrjol"
+  ],
+  "contributors": [
+    "Arno Dölinger (3D audio engine, from Dream Displays)"
+  ],
+  "license": "LGPL-3.0-or-later",
+  "icon": "assets/windowscraft/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.windowscraft.WindowsCraftCommon"
+    ],
+    "client": [
+      "dev.windowscraft.WindowsCraftClient"
+    ]
+  },
+  "mixins": [
+    "windowscraft.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.1",
+    "fabric-api": "*",
+    "java": ">=21"
+  }
+}

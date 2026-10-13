@@ -1,0 +1,37 @@
+{
+  "variants": {
+    "free=false,turn=0": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor",
+      "y": 180
+    },
+    "free=false,turn=1": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor_diagonal",
+      "y": 270
+    },
+    "free=false,turn=2": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor",
+      "y": 270
+    },
+    "free=false,turn=3": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor_diagonal"
+    },
+    "free=false,turn=4": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor"
+    },
+    "free=false,turn=5": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor_diagonal",
+      "y": 90
+    },
+    "free=false,turn=6": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor",
+      "y": 90
+    },
+    "free=false,turn=7": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor_diagonal",
+      "y": 180
+    },
+    "free=true": {
+      "model": "windowscraft:block/chartreuse_gaming_monitor_free"
+    }
+  }
+}

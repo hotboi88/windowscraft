@@ -1,0 +1,9 @@
+{
+  "parent": "windowscraft:block/gaming_monitor_template_diagonal",
+  "textures": {
+    "front": "windowscraft:block/vermilion_gaming_monitor_front",
+    "back": "windowscraft:block/vermilion_gaming_monitor_back",
+    "body": "windowscraft:block/vermilion_gaming_monitor_body",
+    "particle": "windowscraft:block/vermilion_gaming_monitor_front"
+  }
+}

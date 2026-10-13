@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "redstone",
+  "group": "windowscraft_tablet_dye",
+  "ingredients": [
+    {
+      "tag": "windowscraft:tablets"
+    },
+    {
+      "item": "minecraft:cyan_dye"
+    },
+    {
+      "item": "minecraft:light_blue_dye"
+    }
+  ],
+  "result": {
+    "id": "windowscraft:aqua_tablet",
+    "count": 1
+  }
+}

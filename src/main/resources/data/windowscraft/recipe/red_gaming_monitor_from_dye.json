@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "redstone",
+  "group": "windowscraft_gaming_monitor_dye",
+  "ingredients": [
+    {
+      "tag": "windowscraft:gaming_monitors"
+    },
+    {
+      "item": "minecraft:red_dye"
+    }
+  ],
+  "result": {
+    "id": "windowscraft:red_gaming_monitor",
+    "count": 1
+  }
+}

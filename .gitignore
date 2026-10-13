@@ -1,0 +1,11 @@
+.gradle/
+build/
+run/
+run-server/
+*.log
+out/
+.idea/
+*.iml
+native/wc-audio/target/
+dist/*.zip
+run-iris/

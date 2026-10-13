@@ -1,0 +1,160 @@
+{
+  "gui_light": "front",
+  "textures": {
+    "front": "windowscraft:item/maroon_tablet",
+    "back": "windowscraft:item/maroon_tablet_back",
+    "particle": "windowscraft:item/maroon_tablet"
+  },
+  "elements": [
+    {
+      "from": [
+        0,
+        2,
+        7.5
+      ],
+      "to": [
+        16,
+        14,
+        8.5
+      ],
+      "faces": {
+        "south": {
+          "uv": [
+            0,
+            2,
+            16,
+            14
+          ],
+          "texture": "#front"
+        },
+        "north": {
+          "uv": [
+            16,
+            2,
+            0,
+            14
+          ],
+          "texture": "#back"
+        },
+        "up": {
+          "uv": [
+            0,
+            2,
+            16,
+            3
+          ],
+          "texture": "#front"
+        },
+        "down": {
+          "uv": [
+            0,
+            13,
+            16,
+            14
+          ],
+          "texture": "#front"
+        },
+        "east": {
+          "uv": [
+            15,
+            2,
+            16,
+            14
+          ],
+          "texture": "#front"
+        },
+        "west": {
+          "uv": [
+            0,
+            2,
+            1,
+            14
+          ],
+          "texture": "#front"
+        }
+      }
+    }
+  ],
+  "display": {
+    "ground": {
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "translation": [
+        0,
+        2,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "head": {
+      "rotation": [
+        0,
+        180,
+        0
+      ],
+      "translation": [
+        0,
+        13,
+        7
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "thirdperson_righthand": {
+      "rotation": [
+        25,
+        0,
+        0
+      ],
+      "translation": [
+        0,
+        3,
+        1
+      ],
+      "scale": [
+        0.55,
+        0.55,
+        0.55
+      ]
+    },
+    "firstperson_righthand": {
+      "rotation": [
+        0,
+        -90,
+        25
+      ],
+      "translation": [
+        1.13,
+        3.2,
+        1.13
+      ],
+      "scale": [
+        0.68,
+        0.68,
+        0.68
+      ]
+    },
+    "fixed": {
+      "rotation": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  }
+}

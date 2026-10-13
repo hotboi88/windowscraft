@@ -1,0 +1,143 @@
+plugins {
+    id 'fabric-loom' version '1.11.8'
+}
+
+version = "${project.mod_version}+mc${project.minecraft_version}"
+group = project.maven_group
+
+base { archivesName = project.archives_base_name }
+
+repositories { mavenCentral() }
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // JNA + jna-platform ship with Minecraft itself (5.14.0), so nothing to bundle.
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") { expand "version": project.version }
+}
+
+tasks.withType(JavaCompile).configureEach { it.options.release = 21 }
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test { useJUnitPlatform() }
+
+jar { from(files("COPYING", "COPYING.LESSER", "NOTICE.md")) { into("META-INF/windowscraft") } }
+
+// ---- dev-only scripted test (never shipped in the jar) ----
+sourceSets {
+    testmod {
+        compileClasspath += main.compileClasspath + main.output
+        runtimeClasspath += main.runtimeClasspath + main.output
+    }
+}
+
+loom {
+    mods {
+        windowscraft { sourceSet sourceSets.main }
+        windowscraft_autotest { sourceSet sourceSets.testmod }
+    }
+    runs {
+        autotest {
+            client()
+            name "Autotest Client"
+            source sourceSets.testmod
+            runDir "run"
+            vmArg "-Dwindowscraft.autotest=true"
+            // -Pquick: only the scene, then the tablet part (for looking at it quickly)
+            if (project.hasProperty("quick")) vmArg "-Dwindowscraft.autotest.quick=true"
+            if (project.hasProperty("handOverlay")) vmArg "-Dwindowscraft.test.handOverlay=true"
+            // headless CI: point at an Xvfb display and Mesa's software renderer
+            if (project.hasProperty("xdisplay")) {
+                environmentVariable "DISPLAY", project.property("xdisplay")
+                environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1"
+            }
+            programArgs "--quickPlaySingleplayer", "autotest", "--width", "1600", "--height", "900"
+        }
+        // Same world, with Cobbleverse's Sodium + Iris and a shader pack in run-iris/ (see README)
+        irisTest {
+            client()
+            name "Iris shader test"
+            source sourceSets.testmod
+            runDir "run-iris"
+            vmArg "-Dwindowscraft.irisTest=true"
+            if (project.hasProperty("xdisplay")) {
+                environmentVariable "DISPLAY", project.property("xdisplay")
+                environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1"
+            }
+            programArgs "--quickPlaySingleplayer", "autotest", "--width", "1280", "--height", "720"
+        }
+        mpServer {
+            server()
+            name "MP test server"
+            source sourceSets.testmod
+            runDir "run-mp-server"
+            vmArg "-Dwindowscraft.autotest.server=true"
+            vmArg "-Dwindowscraft.relay.debugToken=0123456789abcdef0123456789abcdef"
+            // the server offers a pretend newer WindowsCraft (any jar will do) to test updates
+            vmArg "-Dwindowscraft.update.testJar=${projectDir}/build/libs/windowscraft-${project.mod_version}+mc1.21.1.jar"
+            programArgs "nogui"
+        }
+        mpSharer {
+            client()
+            name "MP test sharer"
+            source sourceSets.testmod
+            runDir "run-alice"
+            vmArg "-Dwindowscraft.autotest.role=sharer"
+            programArgs "--quickPlayMultiplayer", "127.0.0.1:25565", "--username", "Alice", "--width", "854", "--height", "480"
+            if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
+        }
+        mpViewer {
+            client()
+            name "MP test viewer"
+            source sourceSets.testmod
+            runDir "run-bob"
+            vmArg "-Dwindowscraft.autotest.role=viewer"
+            vmArg "-Dwindowscraft.update.test=true"
+            vmArg "-Dwindowscraft.update.testJar=${projectDir}/build/libs/windowscraft-${project.mod_version}+mc1.21.1.jar"
+            if (project.hasProperty("forceCatchup")) vmArg "-Dwindowscraft.debug.forceCatchup=true"
+            programArgs "--quickPlayMultiplayer", "127.0.0.1:25565", "--username", "Bob", "--width", "1280", "--height", "720"
+            if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
+        }
+        worldgen {
+            server()
+            name "Worldgen Server"
+            runDir "run-server"
+            programArgs "nogui"
+        }
+    }
+}
+
+// Copies what a production (launcher-style) client needs: Minecraft's own libraries and Fabric
+// Loader with its dependencies. Used to test with the real Sodium + Iris jars (see tools/prodclient).
+tasks.register("prodClientLibs", Copy) {
+    from(configurations.minecraftRuntimeLibraries)
+    from(configurations.compileClasspath.filter { f ->
+        f.name.startsWith("fabric-loader-") || f.name.startsWith("sponge-mixin") || f.name.startsWith("tiny-") ||
+                f.name.startsWith("asm") || f.name.startsWith("mixinextras") || f.name.startsWith("access-widener")
+    })
+    into(layout.buildDirectory.dir("prodclient/libs"))
+}
+
+// The test mod as a production (intermediary) jar, for the launcher-style client test.
+tasks.register("testmodJar", Jar) {
+    from(sourceSets.testmod.output)
+    archiveClassifier = "testmod-dev"
+}
+tasks.register("remapTestmodJar", net.fabricmc.loom.task.RemapJarTask) {
+    dependsOn tasks.testmodJar
+    inputFile = tasks.testmodJar.archiveFile
+    archiveClassifier = "testmod"
+    addNestedDependencies = false
+}
