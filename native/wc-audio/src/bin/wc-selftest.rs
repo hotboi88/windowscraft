@@ -376,7 +376,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 15] = ["gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 17] = ["adminask", "adminrefused", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -390,6 +390,7 @@ impl Helper {
     fn start(exe: &std::path::Path) -> Result<Helper, String> {
         let mut child = Command::new(exe)
             .args(["--parent-pid", &std::process::id().to_string()])
+            .env("WC_TEST_ADMIN_MOVER", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -745,7 +746,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         move_by(120, 0);
         sleep(15);
     }
-    sleep(400);
+    wait_for(2000, || h.events_since(t).iter().any(|e| e == &format!("seatmove {}", b.idx)));
+    sleep(200);
     let (cx, cy) = cursor();
     let ev = h.events_since(t);
     rep.check("from a monitor, the cursor goes on to the monitor joined to it", inside(&rb, cx, cy), format!("cursor {cx},{cy}; B {}", fmt(&rb)));
@@ -753,15 +755,23 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // switching has a moment's rest: a slip back over the edge right after doesn't swing you back
     sleep(1300);
     let t_back = Instant::now();
-    for _ in 0..40 {
+    unsafe {
+        let _ = SetCursorPos(rb.left + 100, (rb.top + rb.bottom) / 2);
+    }
+    sleep(100);
+    for _ in 0..4 {
+        move_by(-60, 0); // (140 px onto A)
+        sleep(15);
+    }
+    sleep(700);
+    // (a glance over the edge isn't a move: only going well onto it and staying)
+    let glanced = h.events_since(t_back).iter().any(|e| e.starts_with("seatmove"));
+    rep.check("just touching the joined monitor doesn't switch to it", !glanced, format!("{:?}", h.events_since(t_back)));
+    for _ in 0..30 {
         move_by(-60, 0);
         sleep(15);
-        if h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx)) {
-            break;
-        }
     }
-    sleep(150);
-    let back_ok = h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx));
+    let back_ok = wait_for(2000, || h.events_since(t_back).iter().any(|e| e == &format!("seatmove {}", a.idx)));
     let t_slip = Instant::now();
     for _ in 0..6 {
         move_by(80, 0);
@@ -773,13 +783,13 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     rep.check("after moving to a joined monitor, slipping back over the edge right away doesn't switch you back",
         back_ok && inside(&ra, sx, sy) && !slipped.iter().any(|e| e.starts_with("seatmove")),
         format!("moved to A: {back_ok}; cursor {sx},{sy}; events {slipped:?}"));
-    sleep(900);
+    sleep(1500);
     let t_again = Instant::now();
     for _ in 0..20 {
         move_by(60, 0);
         sleep(15);
     }
-    sleep(300);
+    wait_for(2000, || h.events_since(t_again).iter().any(|e| e == &format!("seatmove {}", b.idx)));
     rep.check("…but a moment later it does", h.events_since(t_again).iter().any(|e| e == &format!("seatmove {}", b.idx)),
         format!("events {:?}", h.events_since(t_again)));
     for _ in 0..30 {
@@ -863,6 +873,40 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     key(VK_A);
     let typed = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_CHAR));
     rep.check("typing at a monitor reaches the app you clicked", typed, format!("{:.0} ms", t0.elapsed().as_secs_f64() * 1000.0));
+
+    // ---- 3b. File Explorer and Task Manager open on the monitor you sit at (not your desk)
+    unsafe {
+        let _ = SetCursorPos((ra.left + ra.right) / 2, (ra.top + ra.bottom) / 2);
+    }
+    sleep(200);
+    let t0_admin = Instant::now();
+    for (what, class, cmd) in [("File Explorer", "CabinetWClass", "start \"\" explorer.exe C:\\Windows"), ("Task Manager", "TaskManagerWindow", "start \"\" taskmgr.exe")] {
+        let before: Vec<HWND> = top_windows().into_iter().filter(|w| class_name(*w) == class).collect();
+        let _ = Command::new("cmd").args(["/c", cmd]).spawn();
+        let mut found = None;
+        wait_for(10000, || {
+            found = top_windows().into_iter().find(|w| class_name(*w) == class && !before.contains(w) && unsafe { IsWindowVisible(*w) }.as_bool());
+            found.is_some()
+        });
+        match found {
+            Some(w) => {
+                let on = wait_for(5000, || {
+                    let (x, y) = center(&rect_of(w));
+                    inside(&ra, x, y)
+                });
+                rep.check(&format!("{what} opened while sitting at a monitor opens on that monitor"), on, format!("at {}", fmt(&rect_of(w))));
+                if class == "TaskManagerWindow" {
+                    let asked = h.events_since(t0_admin).iter().any(|e| e == "adminask");
+                    rep.check("…moved by the admin helper (as for an app running as administrator)", asked && on, format!("{:?}", h.events_since(t0_admin)));
+                }
+                close(w);
+            }
+            None => rep.check(&format!("{what} opened while sitting at a monitor opens on that monitor"), false, "it didn't open"),
+        }
+        sleep(500);
+    }
+    let _ = Command::new("taskkill").args(["/im", "taskmgr.exe", "/f"]).output();
+    sleep(300);
 
     // ---- 4. right-clicking the monitor's taskbar doesn't throw you out
     let t = Instant::now();

@@ -783,6 +783,14 @@ public final class InGameMonitors {
                 }
             });
         }
+        @Override public void adminApp(boolean refused) {
+            onGame(() -> {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                if (refused) say(mc, "That app runs as administrator, so it stays on your desk (moving admin apps wasn't allowed).", Formatting.YELLOW);
+                else say(mc, "That app (Task Manager?) runs as administrator: Windows asks once for permission to move admin apps onto your in-game monitors.", Formatting.GRAY);
+            });
+        }
+
         @Override public void monitorGone(int index) {
             onGame(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();

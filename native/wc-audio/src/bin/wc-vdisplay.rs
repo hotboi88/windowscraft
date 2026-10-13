@@ -951,15 +951,188 @@ fn place_window(h: HWND, area: &RECT) {
         let spot = RECT { left, top, right: left + w, bottom: top + hh };
         // first onto the monitor at its normal size (Windows won't move a maximized window by its
         // placement alone: it stays maximized wherever it is), then maximized there if it was
-        if let Some(mut p) = pl {
+        if admin_window(h) {
+            // an app running as administrator (Task Manager, Registry Editor…): Windows only lets
+            // a program with the same rights move it — the helper's admin mover does it
+            mover_place(h, &spot, maximized);
+            return;
+        }
+        apply_place(h, &spot, maximized);
+    }
+}
+
+/// Moves a window to that spot (normal size there), maximized after if asked.
+fn apply_place(h: HWND, spot: &RECT, maximized: bool) {
+    unsafe {
+        if let Some(mut p) = placement(h) {
             p.flags = WINDOWPLACEMENT_FLAGS(0);
-            p.rcNormalPosition = spot;
+            p.rcNormalPosition = *spot;
             p.showCmd = SW_SHOWNOACTIVATE.0 as u32;
             let _ = SetWindowPlacement(h, &p);
         }
-        let _ = SetWindowPos(h, None, spot.left, spot.top, w, hh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+        let _ = SetWindowPos(h, None, spot.left, spot.top, spot.right - spot.left, spot.bottom - spot.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
         if maximized {
             let _ = ShowWindowAsync(h, SW_MAXIMIZE);
+        }
+    }
+}
+
+// ---- admin apps (Task Manager…): moved by a small helper with the same rights ----------------
+
+static ME_ADMIN: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| unsafe {
+    let mut t = HANDLE::default();
+    if OpenProcessToken(GetCurrentProcess(), windows::Win32::Security::TOKEN_QUERY, &mut t).is_err() {
+        return false;
+    }
+    let e = token_elevated(t);
+    let _ = CloseHandle(t);
+    e.unwrap_or(false)
+});
+
+unsafe fn token_elevated(t: HANDLE) -> Option<bool> {
+    let mut el = windows::Win32::Security::TOKEN_ELEVATION::default();
+    let mut n = 0u32;
+    unsafe {
+        windows::Win32::Security::GetTokenInformation(t, windows::Win32::Security::TokenElevation, Some(&mut el as *mut _ as *mut _),
+            std::mem::size_of::<windows::Win32::Security::TOKEN_ELEVATION>() as u32, &mut n).ok()?;
+    }
+    Some(el.TokenIsElevated != 0)
+}
+
+/// Is that window an app running as administrator, while this helper isn't (so Windows won't
+/// let us move it)?
+fn admin_window(h: HWND) -> bool {
+    // (the self-test: on a test PC everything runs as administrator; this makes Task Manager go
+    // the admin way anyway, so that way gets tested too)
+    if std::env::var("WC_TEST_ADMIN_MOVER").map_or(false, |v| v == "1") && class_name(h) == "TaskManagerWindow" {
+        return true;
+    }
+    if *ME_ADMIN {
+        return false;
+    }
+    let p = pid(h);
+    unsafe {
+        let Ok(proc_) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, p) else { return true };
+        let mut t = HANDLE::default();
+        let r = if OpenProcessToken(proc_, windows::Win32::Security::TOKEN_QUERY, &mut t).is_err() {
+            true // (we may not even look: it's above us)
+        } else {
+            let e = token_elevated(t).unwrap_or(false);
+            let _ = CloseHandle(t);
+            e
+        };
+        let _ = CloseHandle(proc_);
+        r
+    }
+}
+
+static MOVER_ASKED: AtomicBool = AtomicBool::new(false);
+static MOVER_REFUSED: AtomicBool = AtomicBool::new(false);
+const MOVER_CLASS: &str = "WindowsCraftAdminMover";
+
+fn mover_window() -> Option<HWND> {
+    let c = wide(MOVER_CLASS);
+    unsafe { FindWindowExW(Some(HWND_MESSAGE), None, PCWSTR(c.as_ptr()), PCWSTR::null()).ok().filter(|h| !h.0.is_null()) }
+}
+
+/// Asks the admin mover to put that window there (starting it the first time: Windows asks you
+/// for permission once per game).
+fn mover_place(h: HWND, spot: &RECT, maximized: bool) {
+    let msg = format!("place {} {} {} {} {} {}", h.0 as isize, spot.left, spot.top, spot.right, spot.bottom, maximized as u8);
+    let title_ = title(h);
+    std::thread::spawn(move || {
+        if mover_window().is_none() {
+            if MOVER_REFUSED.load(Ordering::SeqCst) {
+                eprintln!("info=\"{title_}\" runs as administrator and you didn't allow moving those: it stays where it is");
+                emit("adminrefused");
+                return;
+            }
+            if !MOVER_ASKED.swap(true, Ordering::SeqCst) {
+                eprintln!("info=\"{title_}\" runs as administrator: asking Windows for permission to move admin apps onto in-game monitors");
+                emit("adminask");
+                let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+                let verb = wide("runas");
+                let f = wide(&exe);
+                let params = wide(&format!("--mover --parent-pid {}", std::process::id()));
+                let mut info = SHELLEXECUTEINFOW {
+                    cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+                    fMask: SEE_MASK_NOASYNC,
+                    lpVerb: PCWSTR(verb.as_ptr()),
+                    lpFile: PCWSTR(f.as_ptr()),
+                    lpParameters: PCWSTR(params.as_ptr()),
+                    nShow: SW_HIDE.0,
+                    ..Default::default()
+                };
+                if unsafe { ShellExecuteExW(&mut info) }.is_err() {
+                    MOVER_REFUSED.store(true, Ordering::SeqCst);
+                    MOVER_ASKED.store(false, Ordering::SeqCst);
+                    eprintln!("info=moving admin apps wasn't allowed");
+                    emit("adminrefused");
+                    return;
+                }
+            }
+            let t0 = Instant::now();
+            while mover_window().is_none() && t0.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        let Some(m) = mover_window() else { return };
+        let data = msg.into_bytes();
+        let cds = windows::Win32::System::DataExchange::COPYDATASTRUCT { dwData: 0x5743, cbData: data.len() as u32, lpData: data.as_ptr() as *mut _ };
+        unsafe {
+            let _ = SendMessageTimeoutW(m, WM_COPYDATA, WPARAM(0), LPARAM(&cds as *const _ as isize), SMTO_ABORTIFHUNG, 2000, None);
+        }
+    });
+}
+
+unsafe extern "system" fn mover_proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if msg == WM_COPYDATA {
+        let cds = unsafe { &*(l.0 as *const windows::Win32::System::DataExchange::COPYDATASTRUCT) };
+        if cds.dwData == 0x5743 && !cds.lpData.is_null() {
+            let bytes = unsafe { std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize) };
+            let line = String::from_utf8_lossy(bytes).to_string();
+            let v: Vec<i64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+            if line.starts_with("place ") && v.len() == 6 {
+                let target = HWND(v[0] as isize as *mut _);
+                let spot = RECT { left: v[1] as i32, top: v[2] as i32, right: v[3] as i32, bottom: v[4] as i32 };
+                apply_place(target, &spot, v[5] != 0);
+            }
+            return LRESULT(1);
+        }
+    }
+    unsafe { DefWindowProcW(h, msg, w, l) }
+}
+
+/// The admin mover ("--mover"): a hidden window that only moves the windows the helper names,
+/// and goes when the helper goes.
+fn mover_main(parent: Option<u32>) {
+    unsafe {
+        if let Some(pid) = parent {
+            std::thread::spawn(move || {
+                if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+                    WaitForSingleObject(h, INFINITE);
+                }
+                std::process::exit(0);
+            });
+        }
+        let class = wide(MOVER_CLASS);
+        let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(PCWSTR::null()).ok();
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(mover_proc),
+            hInstance: module.map(|m| HINSTANCE(m.0)).unwrap_or_default(),
+            lpszClassName: PCWSTR(class.as_ptr()),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+        let Ok(h) = CreateWindowExW(WINDOW_EX_STYLE(0), PCWSTR(class.as_ptr()), PCWSTR::null(), WINDOW_STYLE(0), 0, 0, 0, 0,
+            Some(HWND_MESSAGE), None, module.map(|m| HINSTANCE(m.0)), None) else { return };
+        // (the helper runs with normal rights: let its messages in)
+        let _ = ChangeWindowMessageFilterEx(h, WM_COPYDATA, MSGFLT_ALLOW, None);
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
     }
 }
@@ -1011,9 +1184,12 @@ static SEAT_CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bot
 /// Moving to a joined monitor: when it happened, and the moment after it the cursor stays there.
 static SWITCHED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 static NARROWED: AtomicBool = AtomicBool::new(false);
-const SWITCH_REST: Duration = Duration::from_millis(1000);
-/// …and how far (pixels) onto the other monitor the cursor has to go before you move to it.
-const SWITCH_DEPTH: i32 = 24;
+const SWITCH_REST: Duration = Duration::from_millis(1500);
+/// …and how far (pixels) onto the other monitor the cursor has to go, and how long it has to stay
+/// there, before you move to it.
+const SWITCH_DEPTH: i32 = 200;
+const SWITCH_DWELL: Duration = Duration::from_millis(350);
+static SWITCH_CANDIDATE: Mutex<Option<(i32, Instant)>> = Mutex::new(None);
 /// Joined monitors (from "arrange"): each index → every index of its group (itself included).
 static GROUPS: Mutex<Option<HashMap<i32, Vec<i32>>>> = Mutex::new(None);
 
@@ -1488,16 +1664,22 @@ fn hook_thread() {
                 // right after moving to a joined monitor, the cursor stays on it for a moment (so a
                 // little slip back over the edge doesn't swing you straight back) — not while dragging
                 // a window across, though
-                let resting = !dragging_now && SWITCHED_AT.lock().unwrap().map_or(false, |t| t.elapsed() < SWITCH_REST);
+                // (the rest holds while dragging too; only the cursor isn't held back then — changing
+                // its limits under a window being dragged makes the window jitter)
+                let resting = SWITCHED_AT.lock().unwrap().map_or(false, |t| t.elapsed() < SWITCH_REST);
                 let group = group_area(SEAT_IDX.load(Ordering::SeqCst)).unwrap_or(area);
-                let clip = if resting { area } else { group };
+                let clip = if resting && !dragging_now { area } else { group };
                 *SEAT_CLIP.lock().unwrap() = clip;
                 if !resting && NARROWED.swap(false, Ordering::SeqCst) {
                     let _ = ClipCursor(Some(&group)); // (the rest is over: the joined monitors are open again)
                 }
                 // the cursor went on (a little way, not just onto the edge) to a monitor joined to
                 // this one: you sit at that one now
-                if let Some(i) = cursor_monitor().filter(|_| !resting) {
+                let on_now = cursor_monitor();
+                if on_now.map_or(true, |i| i == SEAT_IDX.load(Ordering::SeqCst)) {
+                    *SWITCH_CANDIDATE.lock().unwrap() = None; // (back where you sit: start over)
+                }
+                if let Some(i) = on_now.filter(|_| !resting) {
                     let at = SEAT_IDX.load(Ordering::SeqCst);
                     if i != at && joined(at, i) {
                         if let Some(added) = AREAS.get() {
@@ -1506,7 +1688,22 @@ fn hook_thread() {
                                 let _ = GetCursorPos(&mut c);
                                 let depth = if r.left == area.right { c.x - r.left } else if r.right == area.left { r.right - 1 - c.x }
                                     else if r.top == area.bottom { c.y - r.top } else if r.bottom == area.top { r.bottom - 1 - c.y } else { i32::MAX };
-                                if depth >= SWITCH_DEPTH {
+                                // well onto it, and staying there a moment (not just passing over)
+                                let mut cand = SWITCH_CANDIDATE.lock().unwrap();
+                                let stayed = if depth >= SWITCH_DEPTH {
+                                    match *cand {
+                                        Some((ci, since)) if ci == i => since.elapsed() >= SWITCH_DWELL,
+                                        _ => {
+                                            *cand = Some((i, Instant::now()));
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    *cand = None;
+                                    false
+                                };
+                                if stayed {
+                                    *cand = None;
                                     SEAT_IDX.store(i, Ordering::SeqCst);
                                     *SEAT_DEVICE.lock().unwrap() = dev;
                                     *CLIP.lock().unwrap() = r;
@@ -2440,6 +2637,11 @@ fn all_top_windows() -> Vec<isize> {
 /// Windows' own shell (taskbar, Start, search, the desktop itself): never "something else".
 fn is_shell(h: HWND) -> bool {
     let c = class_name(h);
+    // File Explorer (and Control Panel) windows belong to explorer.exe, but they're windows you
+    // use like any app: they go where you open them
+    if matches!(c.as_str(), "CabinetWClass" | "ExploreWClass") {
+        return false;
+    }
     if matches!(c.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow"
         | "TopLevelWindowForOverflowXamlIsland" | "XamlExplorerHostIslandWindow") || c.starts_with("Windows.UI.Core")
     {
@@ -2964,6 +3166,14 @@ fn mirrored(added: &AddedMap, idx: i32) -> bool {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--mover") {
+        unsafe {
+            let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+        let parent = std::env::args().skip_while(|a| a != "--parent-pid").nth(1).and_then(|p| p.parse::<u32>().ok());
+        mover_main(parent);
+        return;
+    }
     unsafe {
         let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // a thread needs an input queue before it can share input state with another (foreground)

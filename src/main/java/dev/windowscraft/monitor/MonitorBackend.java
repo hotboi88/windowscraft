@@ -32,6 +32,8 @@ public interface MonitorBackend {
         void lost();
         /** That one monitor went away by itself (Windows or the driver dropped it). */
         default void monitorGone(int index) {}
+        /** An admin app (Task Manager…) is to go onto a monitor: Windows asks for permission ({@code refused}: you said no). */
+        default void adminApp(boolean refused) {}
         /** Pointing: your own click (or release) while someone else points — it belongs to the game. */
         default void mouseButton(int button, boolean down) {}
         /** Pointing: your own wheel while someone else points — it belongs to the game. */
