@@ -157,7 +157,8 @@ public final class WinGameTest implements ClientModInitializer {
             }
             case 4 -> {
                 // off and on again, a few times in a row (the "U stopped doing anything" report)
-                if (tick < 20) return;
+                // (once it's really on: not while it's still starting, or coming back on by itself)
+                if (tick < 20 || (tick < 600 && (InGameMonitors.starting(at(mc, wall(0, 0))) || !InGameMonitors.isOn(at(mc, wall(0, 0)))))) return;
                 pressU();
                 await("U on a live wall monitor turns it off (round " + (cycle + 1) + ")", 30, () -> !InGameMonitors.isOn(at(mc, wall(0, 0))) && !InGameMonitors.starting(at(mc, wall(0, 0))));
             }

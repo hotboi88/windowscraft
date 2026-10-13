@@ -3555,11 +3555,17 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
         Err(why) => return give_back(why),
     };
     eprintln!("info={}", fit_scale(&device, (r.bottom - r.top) as u32));
-    // (now and then Windows lets a brand-new monitor go again a moment later: make sure it stays)
-    std::thread::sleep(Duration::from_millis(800));
-    if !device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device)) || rect_of(&device).is_none() {
-        eprintln!("error=the new monitor {device} went away again right after it came on");
-        return give_back("Windows switched the new monitor off again".into());
+    // (now and then Windows lets a brand-new monitor go again a moment later — most of all the
+    // first one in a while, while Windows sets itself up for monitors: make sure it stays)
+    let first = added.lock().unwrap().values().all(|a| a.device.is_empty());
+    let watch = Duration::from_millis(if first { 3000 } else { 800 });
+    let t_watch = Instant::now();
+    while t_watch.elapsed() < watch {
+        std::thread::sleep(Duration::from_millis(200));
+        if !device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device)) || rect_of(&device).is_none() {
+            eprintln!("error=the new monitor {device} went away again right after it came on");
+            return give_back("Windows switched the new monitor off again".into());
+        }
     }
     let since = added.lock().unwrap().get(&idx).map_or_else(now_filetime, |a| a.since);
     added.lock().unwrap().insert(idx, Added { device: device.clone(), since });
