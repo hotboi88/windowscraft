@@ -94,6 +94,17 @@ impl Input {
     /// it — the guest's input then goes as messages only.
     fn yield_to_owner(&mut self) {
         if self.attached && self.valid() && unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) } == self.thread {
+            // (the keys the guest holds come up in the shared state first: nothing of theirs stays)
+            let mut state = [0u8; 256];
+            unsafe {
+                let _ = GetKeyboardState(&mut state);
+                for vk in 0..256 {
+                    if self.keys[vk] & 0x80 != 0 {
+                        state[vk] &= 0x01;
+                    }
+                }
+                let _ = SetKeyboardState(&state);
+            }
             self.detach();
         }
     }
