@@ -68,6 +68,10 @@ public final class RelayServer implements AutoCloseable {
         volatile long goneSince;
         /** Ended for good (the screen was turned off): no waiting for it to come back. */
         volatile boolean ended;
+        /** A publisher that wants to know how many are watching (PUB2): where to tell it. */
+        volatile OutputStream tellViewers;
+        volatile int toldViewers = -1;
+        volatile long toldAt;
 
         /** Gone, and not coming back (or not within the grace time)? */
         boolean over() {
@@ -131,10 +135,40 @@ public final class RelayServer implements AutoCloseable {
         }
         udp = u;
         threads.submit(this::acceptLoop);
+        threads.submit(this::viewerCounts);
         LOG.info("Relay listening on {}:{}", bind.getHostAddress(), port);
     }
 
     public int port() { return socket.getLocalPort(); }
+
+    /**
+     * Tells each publisher that asked (PUB2) how many are watching its stream — when it changes,
+     * and every few seconds — so a screen nobody watches costs its owner's PC and upload nothing,
+     * and the owner's upload is shared among the screens people do watch.
+     */
+    private void viewerCounts() {
+        while (!socket.isClosed()) {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                return;
+            }
+            long now = System.nanoTime();
+            for (Stream st : streams.values()) {
+                OutputStream o = st.tellViewers;
+                if (o == null) continue;
+                int n = st.subs.size();
+                if (n == st.toldViewers && now - st.toldAt < 3_000_000_000L) continue;
+                st.toldViewers = n;
+                st.toldAt = now;
+                try {
+                    synchronized (o) { RelayProtocol.writeLine(o, "VIEWERS " + n); }
+                } catch (IOException e) {
+                    st.tellViewers = null;
+                }
+            }
+        }
+    }
 
     private final UdpLink udp;
 
@@ -216,12 +250,12 @@ public final class RelayServer implements AutoCloseable {
             }
             byToken.computeIfAbsent(token, k -> ConcurrentHashMap.newKeySet()).add(s);
             switch (parts[1]) {
-                case "PUB" -> {
+                case "PUB", "PUB2" -> {
                     if (!mayPublish.test(player, streamId)) {
                         RelayProtocol.writeLine(out, "ERR not your screen");
                         return;
                     }
-                    publish(s, in, out, streamId);
+                    publish(s, in, out, streamId, parts[1].equals("PUB2"));
                 }
                 case "SUB" -> subscribe(s, out, streamId);
                 case "SUBU" -> {
@@ -240,7 +274,7 @@ public final class RelayServer implements AutoCloseable {
         }
     }
 
-    private void publish(Socket s, InputStream in, OutputStream out, String streamId) throws IOException {
+    private void publish(Socket s, InputStream in, OutputStream out, String streamId, boolean tell) throws IOException {
         Stream st = streams.computeIfAbsent(streamId, k -> new Stream());
         Socket previous = st.publisher;
         st.publisher = s;
@@ -250,6 +284,8 @@ public final class RelayServer implements AutoCloseable {
         for (Subscriber sub : st.subs) { sub.clear(); sub.started = false; }
         if (previous != null) closeQuietly(previous); // the owner reconnecting replaces the old connection
         RelayProtocol.writeLine(out, "OK");
+        st.toldViewers = -1;
+        st.tellViewers = tell ? out : null;
         // the owner's game keeps it alive (sound, pictures, or an empty packet every second); this
         // long without anything at all and it's gone
         s.setSoTimeout(PUBLISHER_SILENCE_MS);
@@ -269,6 +305,7 @@ public final class RelayServer implements AutoCloseable {
         } finally {
             if (st.publisher == s) {
                 st.publisher = null;
+                st.tellViewers = null;
                 if (st.ended) endNow(st, streamId);
                 else {
                     // it may be back in a moment (a restart): viewers wait a few seconds for it

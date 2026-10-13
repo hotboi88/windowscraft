@@ -96,6 +96,12 @@ public final class InGameMonitors {
     /** The monitor a source shows (any thread), or null. */
     public static Mon monitorOf(SourceInfo s) { return s == null ? null : LIVE.get(s.id()); }
 
+    /** Are you using that in-game monitor right now (sitting at it, or holding it up as your tablet)? */
+    public static boolean inUse(SourceInfo s) {
+        Mon m = monitorOf(s), at = seatedMon;
+        return m != null && at != null && m.index() == at.index();
+    }
+
     public static Mon monitorOf(Display d) { return d == null || d.share() == null ? null : monitorOf(d.share().source()); }
 
     /** Is this wall showing one of your in-game monitors? */
@@ -783,12 +789,9 @@ public final class InGameMonitors {
                 }
             });
         }
-        @Override public void adminApp(boolean refused) {
-            onGame(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (refused) say(mc, "That app runs as administrator, so it stays on your desk (moving admin apps wasn't allowed).", Formatting.YELLOW);
-                else say(mc, "That app (Task Manager?) runs as administrator: Windows asks once for permission to move admin apps onto your in-game monitors.", Formatting.GRAY);
-            });
+        @Override public void adminApp() {
+            onGame(() -> say(MinecraftClient.getInstance(), "That app is running as administrator, so Windows won't let it be moved onto a monitor. "
+                    + "Close it and open it again from the monitor (Task Manager: close the one on your desk first).", Formatting.YELLOW));
         }
 
         @Override public void monitorGone(int index) {

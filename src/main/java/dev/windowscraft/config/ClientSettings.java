@@ -20,6 +20,8 @@ public final class ClientSettings {
     private static boolean screensWithoutShaders = true;
     private static boolean gpuSharing = true;
     private static double pointerSpeed = 1.0;
+    /** Your upload for screens, shared among the ones people are watching (kbit/s). */
+    private static int uploadKbps = 10_000;
     private static boolean offscreenPause = true, distanceFpsLimit = true, lightMipmaps = false; // (every picture sharp, from up close or far)
     private static int tabletW = 1920, tabletH = 1080; // (wide, like a monitor)
 
@@ -44,6 +46,7 @@ public final class ClientSettings {
                     if (o.has("pointerSpeed")) pointerSpeed = o.get("pointerSpeed").getAsDouble();
                     if (o.has("offscreenPause")) offscreenPause = o.get("offscreenPause").getAsBoolean();
                     if (o.has("distanceFpsLimit")) distanceFpsLimit = o.get("distanceFpsLimit").getAsBoolean();
+                    if (o.has("uploadKbps")) uploadKbps = Math.max(1000, o.get("uploadKbps").getAsInt());
                     if (o.has("fewerMipmaps")) lightMipmaps = o.get("fewerMipmaps").getAsBoolean(); // (a new key: the old default was on)
                     if (o.has("tabletWide")) { // (the earlier 4:3 default isn't kept: only a size you picked)
                         tabletW = o.get("tabletWide").getAsInt();
@@ -123,6 +126,8 @@ public final class ClientSettings {
     public static boolean distanceFpsLimit() { get(); return distanceFpsLimit; }
     /** Fewer mipmap updates during video: the smaller copies used from a distance are redone 5 times a second, not every frame. */
     public static boolean lightMipmaps() { get(); return lightMipmaps; }
+    public static int uploadKbps() { get(); return uploadKbps; }
+    public static void setUploadKbps(int v) { get(); uploadKbps = Math.max(1000, v); set(current); }
 
     public static void setOffscreenPause(boolean v) { get(); offscreenPause = v; set(current); }
     public static void setDistanceFpsLimit(boolean v) { get(); distanceFpsLimit = v; set(current); }
@@ -149,6 +154,7 @@ public final class ClientSettings {
         o.addProperty("offscreenPause", offscreenPause);
         o.addProperty("distanceFpsLimit", distanceFpsLimit);
         o.addProperty("fewerMipmaps", lightMipmaps);
+        o.addProperty("uploadKbps", uploadKbps);
         o.addProperty("tabletWide", tabletW);
         o.addProperty("tabletHigh", tabletH);
         try {

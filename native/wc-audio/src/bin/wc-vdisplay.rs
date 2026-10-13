@@ -952,9 +952,12 @@ fn place_window(h: HWND, area: &RECT) {
         // first onto the monitor at its normal size (Windows won't move a maximized window by its
         // placement alone: it stays maximized wherever it is), then maximized there if it was
         if admin_window(h) {
-            // an app running as administrator (Task Manager, Registry Editor…): Windows only lets
-            // a program with the same rights move it — the helper's admin mover does it
-            mover_place(h, &spot, maximized);
+            // an app running as administrator (that you started that way): Windows doesn't let a
+            // program with normal rights move it — it stays where it is (no permission prompts)
+            if ADMIN_TOLD.lock().unwrap().insert(pid(h)) {
+                eprintln!("info=\"{}\" runs as administrator: Windows doesn't let other programs move it", title(h));
+                emit("adminapp");
+            }
             return;
         }
         apply_place(h, &spot, maximized);
@@ -1003,11 +1006,6 @@ unsafe fn token_elevated(t: HANDLE) -> Option<bool> {
 /// Is that window an app running as administrator, while this helper isn't (so Windows won't
 /// let us move it)?
 fn admin_window(h: HWND) -> bool {
-    // (the self-test: on a test PC everything runs as administrator; this makes Task Manager go
-    // the admin way anyway, so that way gets tested too)
-    if std::env::var("WC_TEST_ADMIN_MOVER").map_or(false, |v| v == "1") && class_name(h) == "TaskManagerWindow" {
-        return true;
-    }
     if *ME_ADMIN {
         return false;
     }
@@ -1027,115 +1025,7 @@ fn admin_window(h: HWND) -> bool {
     }
 }
 
-static MOVER_ASKED: AtomicBool = AtomicBool::new(false);
-static MOVER_REFUSED: AtomicBool = AtomicBool::new(false);
-const MOVER_CLASS: &str = "WindowsCraftAdminMover";
-
-fn mover_window() -> Option<HWND> {
-    let c = wide(MOVER_CLASS);
-    unsafe { FindWindowExW(Some(HWND_MESSAGE), None, PCWSTR(c.as_ptr()), PCWSTR::null()).ok().filter(|h| !h.0.is_null()) }
-}
-
-/// Asks the admin mover to put that window there (starting it the first time: Windows asks you
-/// for permission once per game).
-fn mover_place(h: HWND, spot: &RECT, maximized: bool) {
-    let msg = format!("place {} {} {} {} {} {}", h.0 as isize, spot.left, spot.top, spot.right, spot.bottom, maximized as u8);
-    let title_ = title(h);
-    std::thread::spawn(move || {
-        if mover_window().is_none() {
-            if MOVER_REFUSED.load(Ordering::SeqCst) {
-                eprintln!("info=\"{title_}\" runs as administrator and you didn't allow moving those: it stays where it is");
-                emit("adminrefused");
-                return;
-            }
-            if !MOVER_ASKED.swap(true, Ordering::SeqCst) {
-                eprintln!("info=\"{title_}\" runs as administrator: asking Windows for permission to move admin apps onto in-game monitors");
-                emit("adminask");
-                let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-                let verb = wide("runas");
-                let f = wide(&exe);
-                let params = wide(&format!("--mover --parent-pid {}", std::process::id()));
-                let mut info = SHELLEXECUTEINFOW {
-                    cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-                    fMask: SEE_MASK_NOASYNC,
-                    lpVerb: PCWSTR(verb.as_ptr()),
-                    lpFile: PCWSTR(f.as_ptr()),
-                    lpParameters: PCWSTR(params.as_ptr()),
-                    nShow: SW_HIDE.0,
-                    ..Default::default()
-                };
-                if unsafe { ShellExecuteExW(&mut info) }.is_err() {
-                    MOVER_REFUSED.store(true, Ordering::SeqCst);
-                    MOVER_ASKED.store(false, Ordering::SeqCst);
-                    eprintln!("info=moving admin apps wasn't allowed");
-                    emit("adminrefused");
-                    return;
-                }
-            }
-            let t0 = Instant::now();
-            while mover_window().is_none() && t0.elapsed() < Duration::from_secs(60) {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
-        let Some(m) = mover_window() else { return };
-        let data = msg.into_bytes();
-        let cds = windows::Win32::System::DataExchange::COPYDATASTRUCT { dwData: 0x5743, cbData: data.len() as u32, lpData: data.as_ptr() as *mut _ };
-        unsafe {
-            let _ = SendMessageTimeoutW(m, WM_COPYDATA, WPARAM(0), LPARAM(&cds as *const _ as isize), SMTO_ABORTIFHUNG, 2000, None);
-        }
-    });
-}
-
-unsafe extern "system" fn mover_proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if msg == WM_COPYDATA {
-        let cds = unsafe { &*(l.0 as *const windows::Win32::System::DataExchange::COPYDATASTRUCT) };
-        if cds.dwData == 0x5743 && !cds.lpData.is_null() {
-            let bytes = unsafe { std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize) };
-            let line = String::from_utf8_lossy(bytes).to_string();
-            let v: Vec<i64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
-            if line.starts_with("place ") && v.len() == 6 {
-                let target = HWND(v[0] as isize as *mut _);
-                let spot = RECT { left: v[1] as i32, top: v[2] as i32, right: v[3] as i32, bottom: v[4] as i32 };
-                apply_place(target, &spot, v[5] != 0);
-            }
-            return LRESULT(1);
-        }
-    }
-    unsafe { DefWindowProcW(h, msg, w, l) }
-}
-
-/// The admin mover ("--mover"): a hidden window that only moves the windows the helper names,
-/// and goes when the helper goes.
-fn mover_main(parent: Option<u32>) {
-    unsafe {
-        if let Some(pid) = parent {
-            std::thread::spawn(move || {
-                if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-                    WaitForSingleObject(h, INFINITE);
-                }
-                std::process::exit(0);
-            });
-        }
-        let class = wide(MOVER_CLASS);
-        let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(PCWSTR::null()).ok();
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(mover_proc),
-            hInstance: module.map(|m| HINSTANCE(m.0)).unwrap_or_default(),
-            lpszClassName: PCWSTR(class.as_ptr()),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-        let Ok(h) = CreateWindowExW(WINDOW_EX_STYLE(0), PCWSTR(class.as_ptr()), PCWSTR::null(), WINDOW_STYLE(0), 0, 0, 0, 0,
-            Some(HWND_MESSAGE), None, module.map(|m| HINSTANCE(m.0)), None) else { return };
-        // (the helper runs with normal rights: let its messages in)
-        let _ = ChangeWindowMessageFilterEx(h, WM_COPYDATA, MSGFLT_ALLOW, None);
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-}
+static ADMIN_TOLD: std::sync::LazyLock<Mutex<std::collections::HashSet<u32>>> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 
 /// Where a window goes when it comes back to your desk without a remembered place: your main
 /// monitor, same size (shrunk to fit), centered.
@@ -3033,6 +2923,78 @@ fn reg_set(path: &str, name: &str, value: Option<u32>) {
     }
 }
 
+fn reg_get_str(path: &str, name: &str) -> Option<String> {
+    unsafe {
+        let mut key = HKEY::default();
+        let p = wide(path);
+        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(p.as_ptr()), None, KEY_READ, &mut key) != ERROR_SUCCESS {
+            return None;
+        }
+        let n = wide(name);
+        let mut buf = [0u16; 1024];
+        let mut size = (buf.len() * 2) as u32;
+        let mut ty = REG_VALUE_TYPE::default();
+        let ok = RegQueryValueExW(key, PCWSTR(n.as_ptr()), None, Some(&mut ty), Some(buf.as_mut_ptr() as *mut u8), Some(&mut size)) == ERROR_SUCCESS;
+        let _ = RegCloseKey(key);
+        ok.then(|| from_wide(&buf))
+    }
+}
+
+fn reg_set_str(path: &str, name: &str, value: Option<&str>) {
+    unsafe {
+        let mut key = HKEY::default();
+        let p = wide(path);
+        if RegCreateKeyExW(HKEY_CURRENT_USER, PCWSTR(p.as_ptr()), None, PCWSTR::null(), REG_OPTION_NON_VOLATILE, KEY_WRITE, None, &mut key, None) != ERROR_SUCCESS {
+            return;
+        }
+        let n = wide(name);
+        match value {
+            Some(v) => {
+                let w = wide(v);
+                let bytes = std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2);
+                let _ = RegSetValueExW(key, PCWSTR(n.as_ptr()), None, REG_SZ, Some(bytes));
+            }
+            None => {
+                let _ = RegDeleteValueW(key, PCWSTR(n.as_ptr()));
+            }
+        }
+        let _ = RegCloseKey(key);
+    }
+}
+
+// Task Manager normally runs as administrator (without asking), and Windows doesn't let a program
+// with normal rights move an administrator's window — so it could only ever open on your desk.
+// While in-game monitors are on, Task Manager is started with your normal rights instead (the
+// same Windows setting "Run as invoker" that you could set yourself); then it goes where you open
+// it, like any app. It's put back the moment the monitors go (and after a crash, the next start).
+const LAYERS: &str = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
+const LAYER_BACKUP: &str = "Software\\WindowsCraft\\TaskmgrBackup";
+
+fn taskmgr_path() -> String {
+    let mut buf = [0u16; 260];
+    let n = unsafe { windows::Win32::System::SystemInformation::GetSystemDirectoryW(Some(&mut buf)) } as usize;
+    format!("{}\\Taskmgr.exe", String::from_utf16_lossy(&buf[..n.min(buf.len())]))
+}
+
+fn taskmgr_normal_rights(on: bool) {
+    let path = taskmgr_path();
+    if on {
+        if reg_get(LAYER_BACKUP, "Saved").is_none() {
+            match reg_get_str(LAYERS, &path) {
+                Some(v) => reg_set_str(LAYER_BACKUP, "Value", Some(&v)),
+                None => reg_set_str(LAYER_BACKUP, "Value", None),
+            }
+            reg_set(LAYER_BACKUP, "Saved", Some(1));
+        }
+        reg_set_str(LAYERS, &path, Some("~ RUNASINVOKER"));
+    } else if reg_get(LAYER_BACKUP, "Saved").is_some() {
+        let old = reg_get_str(LAYER_BACKUP, "Value");
+        reg_set_str(LAYERS, &path, old.as_deref());
+        reg_set_str(LAYER_BACKUP, "Value", None);
+        reg_set(LAYER_BACKUP, "Saved", None);
+    }
+}
+
 /// Tells the taskbar its settings changed (it picks the change up without signing out).
 fn tell_taskbar() {
     let what = wide("TraySettings");
@@ -3044,6 +3006,7 @@ fn tell_taskbar() {
 const NONE: u32 = 0xFFFF_FFFF; // "you didn't have this value"
 
 fn taskbars_separate(on: bool) {
+    taskmgr_normal_rights(on); // (same moments: monitors on / all gone / after a crash)
     if on {
         if reg_get(BACKUP, "Saved").is_none() {
             reg_set(BACKUP, "MMTaskbarEnabled", Some(reg_get(ADVANCED, "MMTaskbarEnabled").unwrap_or(NONE)));
@@ -3166,14 +3129,6 @@ fn mirrored(added: &AddedMap, idx: i32) -> bool {
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--mover") {
-        unsafe {
-            let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        }
-        let parent = std::env::args().skip_while(|a| a != "--parent-pid").nth(1).and_then(|p| p.parse::<u32>().ok());
-        mover_main(parent);
-        return;
-    }
     unsafe {
         let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // a thread needs an input queue before it can share input state with another (foreground)

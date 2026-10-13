@@ -119,6 +119,13 @@ public final class StreamSubscriber implements FrameSource {
 
     public String status() { return status + (light ? " (light playback)" : ""); }
     public long framesDecoded() { return framesDecoded; }
+
+    /** What a lost piece costs: false — a short glitch that heals by itself; true — the picture holds until the next keyframe. */
+    public static volatile boolean FREEZE_ON_LOSS = Boolean.parseBoolean(System.getProperty("windowscraft.freezeOnLoss", "false"));
+    private volatile boolean damaged;
+    /** For tests and the report: pauses longer than a quarter second between pictures, and pictures shown with damage. */
+    public volatile long stalls, stallMs, longestStallMs, damagedFrames;
+    public void resetStallStats() { stalls = 0; stallMs = 0; longestStallMs = 0; damagedFrames = 0; }
     public long catchUps() { return catchUps; }
     public long lastFlashNanos() { return lastFlashNanos; }
     /** Capture-to-decode delay of the latest frame in ms (test pattern only), or -1. */
@@ -319,7 +326,11 @@ public final class StreamSubscriber implements FrameSource {
                         lostUntilKey = true;
                     }
                     if (lostUntilKey && c.keyframe()) lostUntilKey = false;
-                    if (lostUntilKey) {
+                    damaged = lostUntilKey;
+                    if (lostUntilKey && !FREEZE_ON_LOSS) {
+                        // (play on through the damage: a glitch that heals by the next keyframe
+                        // rather than a frozen picture until then)
+                    } else if (lostUntilKey) {
                         byte[] rest = TsSplitter.without(c.data(), splitter.videoPid());
                         if (rest.length > 0) {
                             ffIn.write(rest);
@@ -406,7 +417,17 @@ public final class StreamSubscriber implements FrameSource {
             if (old != null) pool.release(old);
             framesDecoded++;
             windowFrames++;
-            lastFrameNanos = System.nanoTime();
+            long gapNow = System.nanoTime();
+            if (lastFrameNanos != 0) {
+                long gap = (gapNow - lastFrameNanos) / 1_000_000L;
+                if (gap > 250) {
+                    stalls++;
+                    stallMs += gap;
+                    longestStallMs = Math.max(longestStallMs, gap);
+                }
+            }
+            if (damaged) damagedFrames++;
+            lastFrameNanos = gapNow;
             measureTestPattern(buf);
             long now = System.nanoTime();
             if (now - windowStart > 1_000_000_000L) {

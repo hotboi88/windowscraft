@@ -100,6 +100,81 @@ public final class StreamPublisher {
         @Override public void recycle(Frame f) { previewPool.release(f); }
     };
 
+    // ---- who's watching (the relay tells, if it can) and your upload shared among them ---------------
+    private static final java.util.Set<StreamPublisher> ALL = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** How many watch this stream right now (-1: not known — an older server). */
+    private volatile int watchers = -1;
+    private volatile long zeroSince;
+    /** The relay connection kept open while nobody watches (no encoding meanwhile). */
+    private volatile Socket keptRelay;
+    private volatile boolean goingIdle;
+    private static final long IDLE_AFTER_NANOS = 8_000_000_000L;
+
+    /** Nobody has watched for a while: no encoding at all (it starts again the moment someone looks). */
+    private boolean idle() { return watchers == 0 && zeroSince != 0 && System.nanoTime() - zeroSince > IDLE_AFTER_NANOS; }
+
+    public int watchers() { return watchers; }
+
+    /** This stream's part of your upload: shared evenly among your streams that someone watches. */
+    private int budgetKb() {
+        long n = ALL.stream().filter(p -> p != this && p.running && p.watchers != 0).count() + 1;
+        return (int) Math.max(800, dev.windowscraft.config.ClientSettings.uploadKbps() / n);
+    }
+
+    private Socket connectRelay() throws IOException {
+        Socket s;
+        try {
+            s = Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), "PUB2", ClientNet.token(), streamId);
+        } catch (IOException e) {
+            if (e.getMessage() == null || !e.getMessage().contains("bad role")) throw e;
+            watchers = -1; // (an older server: it can't say who's watching)
+            return Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), "PUB", ClientNet.token(), streamId);
+        }
+        Socket sock = s;
+        daemon("viewer count", () -> {
+            try {
+                java.io.InputStream in = sock.getInputStream();
+                while (running && !sock.isClosed()) {
+                    String line = dev.windowscraft.relay.RelayProtocol.readLine(in, 64).trim();
+                    if (!line.startsWith("VIEWERS ")) continue;
+                    int n = Integer.parseInt(line.substring(8).trim());
+                    if (n == 0 && zeroSince == 0) zeroSince = System.nanoTime();
+                    if (n > 0) zeroSince = 0;
+                    if (n != watchers) WindowsCraftClient.LOGGER.info("Stream '{}': {} watching", source.title(), n);
+                    watchers = n;
+                }
+            } catch (IOException | RuntimeException ignored) {
+            }
+        });
+        return sock;
+    }
+
+    /** While idle: an empty packet now and then keeps the relay connection (and the stream) there. */
+    private void idleKeepAlive() {
+        Socket r = keptRelay;
+        if (r == null || r.isClosed()) {
+            keptRelay = null;
+            watchers = -1; // (lost it: start over normally)
+            zeroSince = 0;
+            return;
+        }
+        byte[] nul = new byte[188];
+        java.util.Arrays.fill(nul, (byte) 0xFF);
+        nul[0] = 0x47; nul[1] = 0x1F; nul[2] = (byte) 0xFF; nul[3] = 0x10;
+        try {
+            OutputStream o = r.getOutputStream();
+            synchronized (o) {
+                o.write(nul);
+                o.flush();
+            }
+        } catch (IOException e) {
+            Proc.closeQuietly(r);
+            keptRelay = null;
+            watchers = -1;
+            zeroSince = 0;
+        }
+    }
+
     private final AudioHub audioHub;
     /** True while your own wall gets its picture by direct GPU sharing (no preview needed from FFmpeg). */
     private volatile java.util.function.BooleanSupplier wallFedElsewhere = () -> false;
@@ -127,6 +202,7 @@ public final class StreamPublisher {
         RANDOM.nextBytes(id);
         this.streamId = HexFormat.of().formatHex(id);
         session.setTap(this::onFrame);
+        ALL.add(this);
         supervisor = new Thread(this::supervise, "WindowsCraft stream " + source.title());
         supervisor.setDaemon(true);
         supervisor.start();
@@ -218,9 +294,13 @@ public final class StreamPublisher {
 
     public void stop() {
         running = false;
+        ALL.remove(this);
         session.setTap(null);
         supervisor.interrupt();
         teardown();
+        Socket k = keptRelay;
+        keptRelay = null;
+        if (k != null) Proc.closeQuietly(k);
     }
 
     private void teardown() {
@@ -262,6 +342,13 @@ public final class StreamPublisher {
             return;
         }
         while (running) {
+            if (idle() && keptRelay != null) {
+                // nobody's watching: nothing is encoded or sent (your own wall carries on as usual)
+                status = "Paused · nobody's watching";
+                idleKeepAlive();
+                sleep(500);
+                continue;
+            }
             try {
                 runPipeline();
             } catch (Exception e) {
@@ -279,6 +366,11 @@ public final class StreamPublisher {
                 teardown();
             }
             if (Thread.interrupted()) return;
+            if (goingIdle) {
+                goingIdle = false;
+                WindowsCraftClient.LOGGER.info("Stream '{}': nobody's watching, pausing it", source.title());
+                continue;
+            }
             sleep(quickRestart ? 200 : 2000);
             quickRestart = false;
         }
@@ -330,14 +422,18 @@ public final class StreamPublisher {
 
         // 3. relay, FFmpeg, and the pumps (everything tracked so a failure or stop() closes it)
         status = "Connecting to the relay…";
-        Socket relay = track(Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), "PUB", ClientNet.token(), streamId));
+        Socket kept = keptRelay;
+        keptRelay = null;
+        Socket relay = track(kept != null && !kept.isClosed() ? kept : connectRelay());
         ServerSocket videoListen = track(Proc.loopbackListener());
         ServerSocket audioListen = track(Proc.loopbackListener());
         PcmRing audio = ps.audio() ? audioHub.openTap() : null; // the hub's taps outlive capture restarts
         if (audio != null) track(() -> audioHub.closeTap(audio));
         audioStatus = audioHub.status();
         Ffmpeg.Encoder enc = softwareOnly ? Ffmpeg.software() : Ffmpeg.encoder();
-        int kb = Math.max(1200, (int) (Ffmpeg.bitrateKbps(ew, eh, fps) * Math.pow(0.65, level)));
+        int ownKb = Math.max(1200, (int) (Ffmpeg.bitrateKbps(ew, eh, fps) * Math.pow(0.65, level)));
+        // (several screens at once: your upload is shared among those someone's watching)
+        int kb = Math.min(ownKb, budgetKb());
         boolean gpu = gpuEligible(enc);
         List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
                 // Both inputs are stamped with the wall clock, so video and audio share one timeline
@@ -449,6 +545,14 @@ public final class StreamPublisher {
             nul[0] = 0x47; nul[1] = 0x1F; nul[2] = (byte) 0xFF; nul[3] = 0x10;
             while (running && thisFf.isAlive() && ffmpeg == thisFf) {
                 sleep(1000);
+                if (idle()) {
+                    // nobody's watching any more: stop encoding, keep the connection
+                    live.remove(relay);
+                    keptRelay = relay;
+                    goingIdle = true;
+                    thisFf.destroyForcibly();
+                    return;
+                }
                 synchronized (net) {
                     if (System.nanoTime() - lastOut[0] < 2_000_000_000L || written[0] % 188 != 0) continue;
                     try {
@@ -505,8 +609,16 @@ public final class StreamPublisher {
                     quickRestart = true;
                     throw new IOException("trying better quality");
                 }
+                // your upload is shared differently now (a screen more or less being watched): re-fit
+                int want = Math.min(ownKb, budgetKb());
+                if (now - pipelineStart > 20_000_000_000L && Math.abs(want - kb) > kb * 0.35) {
+                    WindowsCraftClient.LOGGER.info("Stream '{}': its part of your upload is now {} kb/s (was {})", source.title(), want, kb);
+                    quickRestart = true;
+                    throw new IOException("upload shared differently");
+                }
                 audioStatus = audioHub.status();
-                status = String.format(Locale.ROOT, "Live · %s · %.1f Mbit/s", how, kbps / 1000);
+                status = String.format(Locale.ROOT, "Live · %s · %.1f Mbit/s", how, kbps / 1000)
+                        + (watchers >= 0 ? " · " + watchers + " watching" : "");
                 // no picture at all after 10 s = the GPU path doesn't work here (a still window just
                 // sends nothing new, which is fine once the first frame came through)
                 if (wantPreview && lastPreviewNanos == 0 && now - pipelineStart > 10_000_000_000L) gpuFail("no frames from the capture");
@@ -519,6 +631,7 @@ public final class StreamPublisher {
             CaptureSettings cur = settings;
             if (!cur.sameStream(ps)) throw new IOException("settings changed");
         }
+        if (goingIdle) return; // (stopped because nobody's watching: not a failure)
         if (running && gpu && total == 0) gpuFail("FFmpeg produced nothing (exit " + (ff.isAlive() ? "?" : ff.exitValue()) + ")");
         if (running && total == 0 && !enc.name().equals(Ffmpeg.software().name())) {
             // the hardware encoder refused to start (most often: the GPU's limit on simultaneous

@@ -86,12 +86,42 @@ public final class TestPatternProducer implements FrameProducer {
         return frame;
     }
 
+    /** Tests: "like a movie" — a detailed picture that pans, with film grain and a scene cut every 5 s (so the stream uses its full data rate). */
+    public static volatile boolean MOVIE = Boolean.getBoolean("windowscraft.test.movie");
+    private static BufferedImage scene;
+    private static int sceneNo = -1;
+
+    private static void paintMovie(Graphics2D g, double t, long frame) {
+        int no = (int) (t / 5);
+        if (no != sceneNo || scene == null) {
+            sceneNo = no;
+            java.util.Random r = new java.util.Random(no * 7919L + 13);
+            BufferedImage small = new BufferedImage(200, 56, BufferedImage.TYPE_INT_RGB);
+            for (int y = 0; y < 56; y++) for (int x = 0; x < 200; x++) small.setRGB(x, y, r.nextInt(0xFFFFFF));
+            scene = new BufferedImage(W * 2, H, BufferedImage.TYPE_INT_RGB);
+            Graphics2D sg = scene.createGraphics();
+            sg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            sg.drawImage(small, 0, 0, W * 2, H, null);
+            sg.dispose();
+        }
+        int off = (int) ((t % 5) * 120); // panning, 120 px a second
+        g.drawImage(scene, -off, 0, null);
+        // film grain: a little fresh noise on every picture
+        java.util.Random grain = new java.util.Random(frame);
+        for (int i = 0; i < 6000; i++) {
+            int x = grain.nextInt(W), y = grain.nextInt(H), v = grain.nextInt(256);
+            g.setColor(new Color(v, v, v, 90));
+            g.fillRect(x, y, 3, 3);
+        }
+    }
+
     private static void paint(BufferedImage img, double t, long frame, int fps) {
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g.setPaint(new GradientPaint(0, 0, new Color(0x1E1F22), 0, H, new Color(0x111214)));
         g.fillRect(0, 0, W, H);
+        if (MOVIE && fps > 0) paintMovie(g, t, frame);
 
         int barW = W / BARS.length;
         for (int i = 0; i < BARS.length; i++) {

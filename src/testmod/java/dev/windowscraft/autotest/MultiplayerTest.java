@@ -64,6 +64,10 @@ public final class MultiplayerTest implements ClientModInitializer {
             WallRect rect = WallDetector.detect(mc.world, new BlockPos(0, g + 2, -8), Direction.SOUTH, p -> false);
             check(mc, rect != null && rect.widthBlocks() == 7 && rect.heightBlocks() == 4, "found the 7×4 wall from the sharer's client");
             Display d = DisplayManager.get().create(dim, rect);
+            if (new java.io.File(mc.runDirectory.getParentFile(), "run-bob/movie.txt").exists()) {
+                dev.windowscraft.capture.TestPatternProducer.MOVIE = true; // (a movie-like picture: the stream at its full data rate)
+                log("movie mode");
+            }
             DisplayManager.get().start(d, SourceInfo.testPattern(), new CaptureSettings(720, 30, true, true));
             log("went live with the test pattern");
             WallRect mirrorRect = WallDetector.detect(mc.world, new BlockPos(6, g + 2, -8), Direction.SOUTH, p -> false);
@@ -196,7 +200,53 @@ public final class MultiplayerTest implements ClientModInitializer {
                 "once nobody uses it, the pointer is gone for everyone");
     }
 
+    // ---- "watching a movie over a home internet link" (run-bob/movie.txt: kbps queueMs delayMs jitterMs loss freeze)
+    private long movieStart, movieMeasure;
+    private long movieSkipped0, movieFrames0;
+
+    private void movieViewer(MinecraftClient mc, java.io.File cfg) {
+        RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
+        StreamSubscriber sub = r == null ? null : r.subscriber();
+        if (sub == null || sub.framesDecoded() < 30) return;
+        long now = System.nanoTime();
+        if (movieStart == 0) {
+            movieStart = now;
+            log("movie: watching, settling in");
+        }
+        if (movieMeasure == 0 && now - movieStart > 10_000_000_000L) {
+            try {
+                String[] v = java.nio.file.Files.readString(cfg.toPath()).trim().split("\\s+");
+                StreamSubscriber.FREEZE_ON_LOSS = Boolean.parseBoolean(v[5]);
+                dev.windowscraft.relay.UdpReceiver.testLink = new dev.windowscraft.relay.UdpReceiver.TestLink(
+                        Integer.parseInt(v[0]), Integer.parseInt(v[1]), Integer.parseInt(v[2]), Integer.parseInt(v[3]), Double.parseDouble(v[4]));
+                log("movie: link " + dev.windowscraft.relay.UdpReceiver.testLink + ", freeze on loss " + StreamSubscriber.FREEZE_ON_LOSS);
+            } catch (Exception e) {
+                log("movie: bad movie.txt " + e);
+            }
+            sub.resetStallStats();
+            movieSkipped0 = sub.skippedPieces();
+            movieFrames0 = sub.framesDecoded();
+            movieMeasure = now;
+        }
+        if (movieMeasure != 0 && now - movieMeasure > 60_000_000_000L) {
+            double secs = (now - movieMeasure) / 1e9;
+            log(String.format(java.util.Locale.ROOT, "MOVIE RESULT: %.0f s · pictures %.1f/s · pauses over 1/4 s: %d (%.1f s in all, longest %d ms) · damaged pictures %d · pieces lost for good %d · %s · stream %dx%d",
+                    secs, (sub.framesDecoded() - movieFrames0) / secs, sub.stalls, sub.stallMs / 1000.0, sub.longestStallMs, sub.damagedFrames,
+                    sub.skippedPieces() - movieSkipped0, sub.transport(), r.info.width(), r.info.height()));
+            shot(mc, "mp_viewer_movie");
+            dev.windowscraft.relay.UdpReceiver.testLink = null;
+            try { new java.io.File(mc.runDirectory, "viewer-done").createNewFile(); } catch (java.io.IOException ignored) {}
+            mc.scheduleStop();
+            movieMeasure = Long.MAX_VALUE / 4;
+        }
+    }
+
     private void viewer(MinecraftClient mc) {
+        java.io.File movieCfg = new java.io.File(mc.runDirectory, "movie.txt");
+        if (movieCfg.exists()) {
+            movieViewer(mc, movieCfg);
+            return;
+        }
         viewerControl(mc);
         RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
         StreamSubscriber sub = r == null ? null : r.subscriber();

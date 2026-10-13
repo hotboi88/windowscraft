@@ -40,6 +40,17 @@ public final class UdpReceiver implements AutoCloseable {
     public volatile long received, recovered, skipped;
     /** Tests: this share of incoming picture packets is "lost on the way" (0..1). */
     public static volatile double testLoss;
+    /**
+     * Tests: an imitation home internet link in front of this viewer — a bottleneck of
+     * {@code kbps} with a router queue of {@code queueMs} (fuller → packets dropped), a delay
+     * with jitter, and a little random loss. Null: none.
+     */
+    public record TestLink(int kbps, int queueMs, int delayMs, int jitterMs, double loss) {}
+    public static volatile TestLink testLink;
+    private final java.util.ArrayDeque<Object[]> inFlight = new java.util.ArrayDeque<>();
+    private long linkFree, lastDeliver;
+    private boolean linkTimer;
+    private final java.util.Random linkDice = new java.util.Random(11);
     private final java.util.Random lossDice = new java.util.Random(7);
 
     public UdpReceiver(InetSocketAddress relay, long session) throws IOException {
@@ -127,11 +138,18 @@ public final class UdpReceiver implements AutoCloseable {
                     send(ByteBuffer.allocate(13).put(UdpLink.ACK).putLong(session).putInt(next));
                 }
                 p.setLength(buf.length);
+                TestLink link = testLink;
+                if ((link != null) != linkTimer) {
+                    linkTimer = link != null;
+                    socket.setSoTimeout(linkTimer ? 1 : 5);
+                }
                 try {
                     socket.receive(p);
-                    handle(buf, p.getLength());
+                    if (link == null) handle(buf, p.getLength());
+                    else through(link, buf, p.getLength());
                 } catch (SocketTimeoutException ignored) {
                 }
+                if (link != null || !inFlight.isEmpty()) arrived();
                 advance();
                 askAgain();
             } catch (IOException e) {
@@ -139,6 +157,28 @@ public final class UdpReceiver implements AutoCloseable {
             }
         }
         out.offer(EOF);
+    }
+
+    /** (tests) a packet on its way over the imitation link */
+    private void through(TestLink link, byte[] buf, int len) {
+        long now = System.nanoTime();
+        if (linkDice.nextDouble() < link.loss()) return;
+        long tx = (long) (len + 28) * 8 * 1_000_000_000L / (link.kbps() * 1000L);
+        long start = Math.max(now, linkFree);
+        if (start - now > link.queueMs() * 1_000_000L) return; // the router's queue is full: dropped
+        linkFree = start + tx;
+        long at = linkFree + link.delayMs() * 1_000_000L + (long) (linkDice.nextDouble() * link.jitterMs() * 1_000_000L);
+        at = Math.max(at, lastDeliver); // (one path: packets stay in order)
+        lastDeliver = at;
+        inFlight.add(new Object[]{at, java.util.Arrays.copyOf(buf, len)});
+    }
+
+    private void arrived() {
+        long now = System.nanoTime();
+        while (!inFlight.isEmpty() && (long) inFlight.peek()[0] <= now) {
+            byte[] d = (byte[]) inFlight.poll()[1];
+            handle(d, d.length);
+        }
     }
 
     private void handle(byte[] buf, int len) {

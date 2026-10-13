@@ -376,7 +376,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 17] = ["adminask", "adminrefused", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 16] = ["adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -390,7 +390,6 @@ impl Helper {
     fn start(exe: &std::path::Path) -> Result<Helper, String> {
         let mut child = Command::new(exe)
             .args(["--parent-pid", &std::process::id().to_string()])
-            .env("WC_TEST_ADMIN_MOVER", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -879,7 +878,6 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         let _ = SetCursorPos((ra.left + ra.right) / 2, (ra.top + ra.bottom) / 2);
     }
     sleep(200);
-    let t0_admin = Instant::now();
     for (what, class, cmd) in [("File Explorer", "CabinetWClass", "start \"\" explorer.exe C:\\Windows"), ("Task Manager", "TaskManagerWindow", "start \"\" taskmgr.exe")] {
         let before: Vec<HWND> = top_windows().into_iter().filter(|w| class_name(*w) == class).collect();
         let _ = Command::new("cmd").args(["/c", cmd]).spawn();
@@ -896,8 +894,9 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
                 });
                 rep.check(&format!("{what} opened while sitting at a monitor opens on that monitor"), on, format!("at {}", fmt(&rect_of(w))));
                 if class == "TaskManagerWindow" {
-                    let asked = h.events_since(t0_admin).iter().any(|e| e == "adminask");
-                    rep.check("…moved by the admin helper (as for an app running as administrator)", asked && on, format!("{:?}", h.events_since(t0_admin)));
+                    let layer = layer_of_taskmgr();
+                    rep.check("…and while monitors are on, Task Manager starts with normal rights (so it can be moved — no permission prompt)",
+                        layer.as_deref().map_or(false, |v| v.contains("RUNASINVOKER")), format!("{layer:?}"));
                 }
                 close(w);
             }
@@ -1282,6 +1281,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     sleep(1500);
     let n = monitors().len();
     rep.check("at the end, only your own screens are left", n == real.len(), format!("{n} screens"));
+    let layer = layer_of_taskmgr();
+    rep.check("…and Task Manager is back to how Windows starts it normally (also after a crash)", layer.is_none(), format!("{layer:?}"));
     GAME_HOLDS.store(false, Ordering::SeqCst);
     unsafe {
         let _ = ClipCursor(None);
@@ -1472,4 +1473,12 @@ fn stress(dir: &std::path::Path, n: u32, with_b: bool, pause: u64) {
         println!("  helper: {l}");
     }
     HELPER_LOG.lock().unwrap().clear();
+}
+
+
+/// What Windows is told about how to start Task Manager (the "Run as invoker" setting), if anything.
+fn layer_of_taskmgr() -> Option<String> {
+    let out = Command::new("reg").args(["query", "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.lines().find(|l| l.to_ascii_lowercase().contains("taskmgr.exe")).map(|l| l.trim().to_string())
 }

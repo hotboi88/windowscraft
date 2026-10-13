@@ -71,7 +71,9 @@ public final class CaptureSession implements FrameSource {
                 // an in-game monitor on your own wall: every picture it makes (it's your screen —
                 // whatever rate the stream to others goes at)
                 // and at its full resolution, pixel for pixel
-                if (dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(source) && (s.fps() < 60 || s.maxHeight() > 0))
+                // (only the one you're using: every in-game monitor at full size and 60 pictures a
+                // second costs the PC far too much — the game and the server stutter)
+                if (dev.windowscraft.monitor.InGameMonitors.inUse(source) && (s.fps() < 60 || s.maxHeight() > 0))
                     s = new CaptureSettings(0, Math.max(60, s.fps()), s.showCursor(), s.audio(), s.fit(), s.hearInGame());
                 int cap = fpsCap;
                 // while the GPU captures, look once a second (so a closed or resized window is still noticed)

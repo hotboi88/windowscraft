@@ -32,7 +32,11 @@ import net.minecraft.util.math.Vec3d;
  */
 public final class RemoteDisplays {
     public static final double WATCH_DISTANCE = 96;
-    public static final int MAX_WATCHED = 6;
+    public static final int MAX_WATCHED = 4;
+    /** Screens this close are always downloaded (you'd hear them). */
+    private static final double NEAR = 10;
+    /** A screen you turned away from keeps coming this long (glancing around doesn't restart it). */
+    private static final long KEEP_NANOS = 15_000_000_000L;
 
     /** One remote wall. */
     public static final class Remote {
@@ -43,6 +47,8 @@ public final class RemoteDisplays {
         public WallRect rect;
 
         Remote(UUID id) { this.id = id; }
+        /** When it was last in front of you (or close by): only those are downloaded. */
+        long wantedAt;
 
         Watch watch() { return watches.get(info.streamId()); }
         public StreamSubscriber subscriber() { Watch w = watch(); return w == null ? null : w.subscriber; }
@@ -212,12 +218,23 @@ public final class RemoteDisplays {
                         || dev.windowscraft.display.WallDetector.stillValid(mc.world, r.rect);
             }
         }
-        // nearest wall of each stream, among walls in range
+        // nearest wall of each stream, among walls in range that you're looking toward (or are
+        // close to: you hear those) — a screen behind you or out of sight isn't downloaded (each
+        // one costs its owner's upload, and your PC a decoder), and comes back within a second or
+        // two when you turn to it
         Map<String, Remote> nearestWall = new LinkedHashMap<>();
+        Vec3d look = mc.player.getRotationVec(1f);
+        long nowN = System.nanoTime();
         for (Remote r : remotes.values()) {
             if (!r.info.dimension().equals(dim)) continue;
             double d2 = r.rect.center().squaredDistanceTo(eye);
             if (d2 >= WATCH_DISTANCE * WATCH_DISTANCE) continue;
+            Vec3d to = r.rect.center().subtract(eye);
+            double half = Math.max(r.rect.widthBlocks(), r.rect.heightBlocks()) / 2.0;
+            double reach = Math.atan2(half, Math.max(0.5, to.length())); // (big or close: counts from further round)
+            boolean ahead = to.lengthSquared() < 1e-6 || Math.acos(Math.max(-1, Math.min(1, to.normalize().dotProduct(look)))) < Math.toRadians(70) + reach;
+            if (ahead || d2 < NEAR * NEAR) r.wantedAt = nowN;
+            if (nowN - r.wantedAt > KEEP_NANOS) continue;
             Remote best = nearestWall.get(r.info.streamId());
             if (best == null || d2 < best.rect.center().squaredDistanceTo(eye)) nearestWall.put(r.info.streamId(), r);
         }
