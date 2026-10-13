@@ -385,6 +385,18 @@ public final class TheaterMode {
         distance = fitDistance * MIN_FACTOR;
     }
 
+    /**
+     * Your own in-game monitor shown flat on your screen (DeskView): while you sit at it, fully
+     * zoomed in, looking straight at it — null otherwise (and when it's turned off in settings).
+     */
+    public static Display deskViewDisplay() {
+        if (!active || leaving || progress < 1 || controlled == null || !dev.windowscraft.config.ClientSettings.deskView()) return null;
+        if (Math.abs(lookYaw) > 0.01 || Math.abs(lookPitch) > 0.01) return null;
+        if (distance > fitDistance * MIN_FACTOR * 1.01) return null; // (scrolled out: the room)
+        if (System.nanoTime() - glideAt < 400_000_000L) return null; // (gliding to a joined monitor)
+        return dev.windowscraft.monitor.InGameMonitors.isOn(controlled) ? controlled : null;
+    }
+
     public static String watchingTitle() { return active ? title : null; }
 
     public static String keyName() {

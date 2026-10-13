@@ -293,11 +293,11 @@ public final class Tablet {
     }
 
     /** Draws with the full-size picture only (no blurrier smaller copies): sharp, as big as it is on your screen. */
-    private static void sharp(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_LINEAR, org.lwjgl.opengl.GL11.GL_LINEAR, draw); }
+    static void sharp(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_LINEAR, org.lwjgl.opengl.GL11.GL_LINEAR, draw); }
 
-    private static void sharpNearest(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_NEAREST, org.lwjgl.opengl.GL11.GL_NEAREST, draw); }
+    static void sharpNearest(Identifier tex, Runnable draw) { filtered(tex, org.lwjgl.opengl.GL11.GL_NEAREST, org.lwjgl.opengl.GL11.GL_NEAREST, draw); }
 
-    private static void filtered(Identifier tex, int min, int mag, Runnable draw) {
+    static void filtered(Identifier tex, int min, int mag, Runnable draw) {
         var t = MinecraftClient.getInstance().getTextureManager().getTexture(tex);
         if (t == null) { draw.run(); return; }
         int id = t.getGlId();

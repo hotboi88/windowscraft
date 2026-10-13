@@ -90,6 +90,7 @@ public final class WindowsCraftClient implements ClientModInitializer {
         WorldRenderEvents.AFTER_ENTITIES.register(DisplayRenderer::render);
         // no block outline on a screen: it should look like the picture is on the wall
         WorldRenderEvents.BEFORE_BLOCK_OUTLINE.register((ctx, hit) -> !dev.windowscraft.client.ScreenLook.isScreen(hit));
+        net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(dev.windowscraft.client.DeskView::render);
         net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(dev.windowscraft.client.TheaterHint::render);
         LOGGER.info("WindowsCraft ready — look at a black concrete wall and press the share key (default U)");
     }

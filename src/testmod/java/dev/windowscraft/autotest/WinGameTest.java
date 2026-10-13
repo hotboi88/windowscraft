@@ -246,6 +246,7 @@ public final class WinGameTest implements ClientModInitializer {
             case 14 -> {
                 if (tick < 60) return;
                 shot(mc, "4_seated");
+                check(dev.windowscraft.client.DeskView.showing() != null, "sitting down shows the monitor flat on your screen, pixel for pixel");
                 dev.windowscraft.client.TheaterMode.leaveNow();
                 await("getting up gives the mouse and keyboard back", 20, () -> InGameMonitors.seated() == null);
             }

@@ -820,6 +820,10 @@ public final class HubScreen extends Screen {
     /** In-game monitors: whether the driver is there, and a way to remove it or turn every monitor off. */
     private int monitorSection(DrawContext g, int mx, int my, int x, int y, int w) {
         y = heading(g, "IN-GAME MONITORS", x, y);
+        y = toggleRow(g, mx, my, x, y, w, "Sit-down view: pixel for pixel",
+                "Sitting at your own monitor shows it flat on your screen, exactly like a real monitor: sharp, with nothing in between. "
+                        + "Alt + scroll out (or look around with Alt) to see the room.",
+                ClientSettings.deskView(), ClientSettings::setDeskView);
         var known = InGameMonitors.knownDriver();
         if (known == null && !driverBusy) {
             driverBusy = true;
