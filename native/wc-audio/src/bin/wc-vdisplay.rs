@@ -198,44 +198,54 @@ impl Vdd {
     }
 
     fn ioctl(&self, code: u32, data: &[u8]) -> Option<u32> {
+        // (on the heap: if the driver never finishes a call, these are left to it — never freed
+        // under it — and the helper carries on instead of waiting forever)
+        struct Call {
+            input: [u8; 32],
+            out: u32,
+            ov: OVERLAPPED,
+        }
         unsafe {
-            let mut input = [0u8; 32];
-            input[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
-            let mut out: u32 = 0;
             let ev = CreateEventW(None, true, false, PCWSTR::null()).ok()?;
-            let mut ov = OVERLAPPED { hEvent: ev, ..Default::default() };
+            let mut c = Box::new(Call { input: [0u8; 32], out: 0, ov: OVERLAPPED { hEvent: ev, ..Default::default() } });
+            c.input[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
             let _ = DeviceIoControl(
                 self.handle,
                 code,
-                Some(input.as_ptr() as *const _),
-                input.len() as u32,
-                Some(&mut out as *mut u32 as *mut _),
+                Some(c.input.as_ptr() as *const _),
+                c.input.len() as u32,
+                Some(&mut c.out as *mut u32 as *mut _),
                 4,
                 None,
-                Some(&mut ov),
+                Some(&mut c.ov),
             );
             let mut n = 0u32;
-            let first = GetOverlappedResultEx(self.handle, &ov, &mut n, 5000, false);
+            let first = GetOverlappedResultEx(self.handle, &c.ov, &mut n, 5000, false);
             if let Err(e) = &first {
                 *LAST_IOCTL.lock().unwrap() = format!("{code:#x}: {e}");
             }
-            let mut ok = first.is_ok();
-            if !ok {
-                // never return while the driver may still write into `out` / `ov`
-                let _ = CancelIoEx(self.handle, Some(&ov));
-                let late = GetOverlappedResult(self.handle, &ov, &mut n, true).is_ok();
-                if late && code == IOCTL_ADD {
-                    // it finished after all, but nobody is waiting for that monitor: take it back
-                    let i = out as i32;
-                    let be = [((i >> 8) & 0xFF) as u8, (i & 0xFF) as u8];
-                    let _ = CloseHandle(ev);
-                    let _ = self.ioctl(IOCTL_REMOVE, &be);
-                    return None;
-                }
-                ok = false; // timed out: treated as failed even if it finished meanwhile
+            if first.is_ok() {
+                let _ = CloseHandle(ev);
+                return Some(c.out);
             }
-            let _ = CloseHandle(ev);
-            ok.then_some(out)
+            let _ = CancelIoEx(self.handle, Some(&c.ov));
+            match GetOverlappedResultEx(self.handle, &c.ov, &mut n, 3000, false) {
+                Ok(()) => {
+                    let _ = CloseHandle(ev);
+                    if code == IOCTL_ADD {
+                        // it finished after all, but nobody is waiting for that monitor: take it back
+                        let i = c.out as i32;
+                        let be = [((i >> 8) & 0xFF) as u8, (i & 0xFF) as u8];
+                        let _ = self.ioctl(IOCTL_REMOVE, &be);
+                    }
+                    None
+                }
+                Err(_) => {
+                    eprintln!("error=the display driver didn't finish a call ({code:#x}); going on without it");
+                    std::mem::forget(c); // (the driver may still write into it)
+                    None
+                }
+            }
         }
     }
 
@@ -931,6 +941,8 @@ fn desk_spot(h: HWND) -> RECT {
 
 static SEATED: AtomicBool = AtomicBool::new(false);
 static LAST_IOCTL: Mutex<String> = Mutex::new(String::new());
+/// When a monitor was last added or removed (the driver needs a moment between them).
+static LAST_DRIVER_CHANGE: Mutex<Option<Instant>> = Mutex::new(None);
 /// When you last used the Start menu or taskbar of the monitor you sit at.
 static SEAT_SHELL_AT: Mutex<Option<Instant>> = Mutex::new(None);
 static ALT: AtomicBool = AtomicBool::new(false);
@@ -2964,17 +2976,25 @@ fn main() {
                     continue;
                 };
                 remove_orphans(&v, &added);
-                // (right after a monitor went away the driver can still be busy: give it a moment)
+                // (right after a monitor went away the driver is still busy with it: asking it for
+                // a new one too soon can upset it — so a moment's rest first, and gentle retries)
+                let since_change = LAST_DRIVER_CHANGE.lock().unwrap().map_or(Duration::from_secs(60), |t| t.elapsed());
+                if since_change < Duration::from_millis(1500) {
+                    std::thread::sleep(Duration::from_millis(1500) - since_change);
+                }
                 let mut got = None;
-                for attempt in 1..=4 {
+                for attempt in 1..=3u64 {
                     if let Some(i) = v.add() {
                         got = Some(i);
                         break;
                     }
                     eprintln!("info=the driver didn't add a monitor (try {attempt}: {}); trying again", LAST_IOCTL.lock().unwrap());
-                    std::thread::sleep(Duration::from_millis(600 * attempt));
-                    v.ping();
+                    if driver_status() != "ok" {
+                        break; // (it has a problem now: retrying won't help)
+                    }
+                    std::thread::sleep(Duration::from_millis(1500 * attempt));
                 }
+                *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
                 let Some(idx) = got else {
                     say("fail the driver didn't add a monitor");
                     continue;
@@ -3019,6 +3039,7 @@ fn main() {
             Some("remove") => {
                 let idx = n(1) as i32;
                 remove_one(&vdd, &added, &homes, idx);
+                *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
                 if added.lock().unwrap().is_empty() {
                     taskbars_separate(false);
                 }
@@ -3239,6 +3260,7 @@ fn remove_one(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32) {
         }
     }
     let had = added.lock().unwrap().remove(&idx);
+    *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
     if had.is_some() {
         let v = vdd.lock().unwrap().clone();
         if let Some(v) = v {
