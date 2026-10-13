@@ -2535,6 +2535,7 @@ fn tidy_taskbars() {
     let Some(areas) = AREAS.get() else { return };
     let devices: Vec<String> = areas.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
     let rects: Vec<RECT> = devices.iter().filter_map(|d| rect_of(d)).collect();
+    stray_taskbars(&devices, &rects);
     let apps = app_windows();
     let on_ours: Vec<HWND> = apps.iter().copied().filter(|h| rects.iter().any(|a| on_area(*h, a))).collect();
     keep_fullscreen_on_top(&on_ours, &rects);
@@ -2563,6 +2564,75 @@ fn tidy_taskbars() {
                 hidden.insert(tray.0 as isize);
             } else if !full && hidden.remove(&(tray.0 as isize)) {
                 let _ = ShowWindow(tray, SW_SHOWNA);
+            }
+        }
+    }
+}
+
+static STRAY_TRAYS: std::sync::LazyLock<Mutex<std::collections::HashSet<isize>>> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+static STRAY_TOLD: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// When monitors come, go or move, Windows now and then leaves an in-game monitor's taskbar on
+/// one of your own screens — tucked under your real taskbar. A screen of yours never has two
+/// taskbars: the extra one is hidden (and Windows asked to lay its taskbars out again); it shows
+/// again as soon as it's back on its monitor.
+fn stray_taskbars(ours: &[String], our_rects: &[RECT]) {
+    let center_in = |r: &RECT, a: &RECT| {
+        let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+        cx >= a.left && cx < a.right && cy >= a.top && cy < a.bottom
+    };
+    let real: Vec<RECT> = monitors().into_iter().filter(|(d, _)| !ours.iter().any(|o| o.eq_ignore_ascii_case(d))).map(|(_, r)| r).collect();
+    let mut trays: Vec<(HWND, RECT, bool)> = Vec::new(); // (window, where, the main one)
+    unsafe {
+        for (cls, main) in [("Shell_TrayWnd", true), ("Shell_SecondaryTrayWnd", false)] {
+            let class = wide(cls);
+            let mut prev: Option<HWND> = None;
+            loop {
+                let Ok(t) = FindWindowExW(None, prev, PCWSTR(class.as_ptr()), PCWSTR::null()) else { break };
+                if t.0.is_null() {
+                    break;
+                }
+                prev = Some(t);
+                let mut r = RECT::default();
+                if GetWindowRect(t, &mut r).is_ok() {
+                    trays.push((t, r, main));
+                }
+            }
+        }
+        let mut stray = STRAY_TRAYS.lock().unwrap();
+        // back on one of our monitors: it shows again
+        for &(t, r, _) in &trays {
+            if stray.contains(&(t.0 as isize)) && our_rects.iter().any(|a| center_in(&r, a)) {
+                stray.remove(&(t.0 as isize));
+                let _ = ShowWindow(t, SW_SHOWNA);
+            }
+        }
+        let mut found = false;
+        for screen in &real {
+            let here: Vec<&(HWND, RECT, bool)> = trays.iter().filter(|(_, r, _)| center_in(r, screen)).collect();
+            if here.len() < 2 {
+                continue;
+            }
+            // keep your main taskbar (or, on another screen of yours, the one along its edge)
+            let keep = here.iter().find(|(_, _, main)| *main).or_else(|| {
+                here.iter().find(|(_, r, _)| r.right - r.left >= screen.right - screen.left - 2 && (r.bottom == screen.bottom || r.top == screen.top))
+            }).map(|(t, _, _)| *t).unwrap_or(here[0].0);
+            for &&(t, _, main) in &here {
+                if t == keep || main || !IsWindowVisible(t).as_bool() {
+                    continue;
+                }
+                let _ = ShowWindow(t, SW_HIDE);
+                stray.insert(t.0 as isize);
+                found = true;
+            }
+        }
+        drop(stray);
+        if found {
+            let mut told = STRAY_TOLD.lock().unwrap();
+            if told.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
+                *told = Some(Instant::now());
+                eprintln!("info=an in-game monitor's taskbar ended up on one of your screens: hidden there, Windows asked to put it back");
+                tell_taskbar();
             }
         }
     }
@@ -2888,13 +2958,24 @@ fn ensure_placer() {
                     w.retain(|(_, _, until)| now < *until);
                     w.clone()
                 };
+                // (never while you're dragging it — and once you've taken it elsewhere yourself,
+                // a joined monitor or anywhere, it stays where you put it)
+                let mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0;
                 for (h, idx, _) in list {
                     let hw = HWND(h as *mut _);
                     if !IsWindow(Some(hw)).as_bool() {
                         continue;
                     }
+                    if mouse_down && SEATED.load(Ordering::SeqCst) {
+                        watch().lock().unwrap().retain(|(x, _, _)| *x != h);
+                        continue;
+                    }
                     if let Some(area) = monitor_area(idx) {
                         if !IsIconic(hw).as_bool() && !on_area(hw, &area) {
+                            if monitor_of_window(hw).map_or(false, |m| joined(idx, m)) {
+                                watch().lock().unwrap().retain(|(x, _, _)| *x != h);
+                                continue;
+                            }
                             place_on(hw, idx);
                         }
                     }
@@ -3592,11 +3673,13 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
         std::thread::sleep(rest - since_change);
     }
     let mut got = None;
+    let mut failed_tries = 0;
     for attempt in 1..=3u64 {
         if let Some(i) = v.add() {
             got = Some(i);
             break;
         }
+        failed_tries += 1;
         let last = LAST_IOCTL.lock().unwrap().clone();
         eprintln!("info=the driver didn't add a monitor (try {attempt}: {last})");
         if driver_status() != "ok" {
@@ -3619,6 +3702,11 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     }
     // the keep-alive covers it from now on
     added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime() });
+    // (a try the driver said no to may still have made a monitor: never leave one behind)
+    if failed_tries > 0 {
+        std::thread::sleep(Duration::from_millis(500));
+        remove_orphans(v, added);
+    }
     let give_back = |why: String| {
         v.remove(idx);
         added.lock().unwrap().remove(&idx);

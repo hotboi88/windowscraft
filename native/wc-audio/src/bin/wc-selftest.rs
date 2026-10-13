@@ -808,12 +808,23 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     }
     sleep(100);
     send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0)]);
-    for _ in 0..20 {
-        move_by(80, 0);
-        sleep(20);
+    // (smoothly: the window follows the cursor all the way, never pulled back or thrown about)
+    let mut jumps = Vec::new();
+    let mut last = rect_of(win);
+    for i in 0..40 {
+        move_by(40, 0);
+        sleep(25);
+        let now = rect_of(win);
+        if now.left < last.left - 8 || now.left - last.left > 400 || (now.top - last.top).abs() > 60 {
+            jumps.push(format!("step {i}: {} → {}", fmt(&last), fmt(&now)));
+        }
+        last = now;
     }
+    let seatmoves_during = h.events_since(t).iter().filter(|e| e.starts_with("seatmove")).count();
     send(&[mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0)]);
     sleep(300);
+    rep.check("dragging a window across joined monitors is smooth (it follows the cursor, nothing pulls it back)", jumps.is_empty(),
+        format!("{jumps:?}; seat moves {seatmoves_during}"));
     let wr2 = rect_of(win);
     let (wx, wy) = center(&wr2);
     rep.check("a window drags from a monitor onto the one joined to it", inside(&rb, wx, wy), format!("window {} → {}", fmt(&wr), fmt(&wr2)));
@@ -1111,6 +1122,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     rep.check("adding and removing a monitor five times in a row", cycle_errors.is_empty(), format!("{cycle_errors:?}"));
     let left = monitors().len();
     rep.check("…leaves no monitor behind", left == real.len() + 1, format!("{left} screens now: yours + B"));
+    let strays = stray_taskbars(&real);
+    rep.check("no monitor's taskbar ever ends up on your own screens", strays.is_empty(), format!("{strays:?}"));
     let gone: Vec<String> = h.events_since(t_round).into_iter().filter(|e| e.starts_with("gone")).collect();
     rep.check("no monitor ever went away by itself (or it was noticed)", gone.is_empty() && left == real.len() + 1, format!("{gone:?}"));
     // a new monitor is new: Windows mustn't bring back what an old one had (its size, scale, spot)
@@ -1487,4 +1500,18 @@ fn layer_of_taskmgr() -> Option<String> {
     let out = Command::new("reg").args(["query", "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     text.lines().find(|l| l.to_ascii_lowercase().contains("taskmgr.exe")).map(|l| l.trim().to_string())
+}
+
+
+/// Monitor taskbars (Shell_SecondaryTrayWnd) showing on one of your own screens that already has a taskbar.
+fn stray_taskbars(real: &[(String, RECT)]) -> Vec<String> {
+    let trays: Vec<(HWND, RECT)> = top_windows().into_iter().filter(|w| matches!(class_name(*w).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")).map(|w| (w, rect_of(w))).collect();
+    let mut out = Vec::new();
+    for (_, sr) in real {
+        let here: Vec<&(HWND, RECT)> = trays.iter().filter(|(_, r)| { let (x, y) = center(r); inside(sr, x, y) }).collect();
+        if here.len() > 1 {
+            out.push(format!("{} taskbars on your screen {}: {:?}", here.len(), fmt(sr), here.iter().map(|(w, r)| format!("{} {}", class_name(*w), fmt(r))).collect::<Vec<_>>()));
+        }
+    }
+    out
 }

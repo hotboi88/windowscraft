@@ -385,6 +385,9 @@ public final class TheaterMode {
      */
     public static void glideTo(Display d) {
         if (!active || leaving || d == null || d == controlled || !d.isLive()) return;
+        // (flat on your screen: the next monitor simply takes its place, like on a real desk —
+        // no swing through the room in between)
+        boolean flat = deskViewDisplay() != null;
         glideFrom = lastPose;
         glideCenter = rect != null ? center() : null;
         glideNormal = rect != null ? rect.normal() : null;
@@ -399,6 +402,10 @@ public final class TheaterMode {
         allowedMax = fitDistance * MAX_FACTOR;
         distance = fitDistance * zoom;
         clampDistance();
+        if (flat) {
+            glideFrom = null;
+            glideAt = 0;
+        }
     }
 
     /**
