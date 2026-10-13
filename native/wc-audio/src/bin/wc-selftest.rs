@@ -761,7 +761,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     }
     sleep(100);
     unsafe {
-        let _ = SetCursorPos(ra.right - 140, mid_y); // (140 px onto A: just over the edge)
+        let _ = SetCursorPos(ra.right - 70, mid_y); // (70 px onto A: just over the edge)
     }
     sleep(700);
     // (a glance over the edge isn't a move: only going well onto it and staying)

@@ -15,7 +15,8 @@ import java.util.Set;
 /**
  * The sound of an in-game monitor: the apps that have a window on it, each captured on its own and
  * mixed into one stream — other apps (a call in Discord on your desk) aren't heard. An app counts
- * as a whole: if it also has a window on your desk, that window's sound comes along too. With
+ * as a whole, so one that also has a window on your desk (the same browser on both) keeps its
+ * sound on your desk: Windows can't split one app's sound by window. With
  * "hear it in the game", those apps go quiet on your speakers and play from the wall instead.
  */
 final class MonitorAudio extends AudioCapture {
@@ -23,6 +24,9 @@ final class MonitorAudio extends AudioCapture {
     // each app keeps 60 ms queued (its packets arrive unevenly); more than 200 ms is cut back to 80
     private static final int PRIME = AudioCapture.BYTES_PER_SECOND * 60 / 1000 / 4 * 4, MAX = AudioCapture.BYTES_PER_SECOND / 5,
             TRIM_TO = AudioCapture.BYTES_PER_SECOND * 80 / 1000 / 4 * 4;
+
+    /** Apps already told about (their sound stays on your desk). */
+    private static final Set<Long> TOLD = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private final SourceInfo source;
     private final boolean hearInGame;
@@ -60,9 +64,22 @@ final class MonitorAudio extends AudioCapture {
             if (m != null && b != null) {
                 try {
                     Set<Long> pids = new HashSet<>();
+                    Map<Long, String> titles = new HashMap<>();
                     for (MonitorBackend.Win w : b.windowsOn(m).get(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                        if (w.pid() > 0 && w.pid() != me) pids.add(w.pid());
+                        if (w.pid() > 0 && w.pid() != me) {
+                            pids.add(w.pid());
+                            titles.putIfAbsent(w.pid(), w.title());
+                        }
                     }
+                    // an app that also has a window on your desk (your browser open on both): its
+                    // sound can't be split by window, so it stays where you are — on your desk —
+                    // never pulled away from you onto the monitor
+                    Set<Long> onDesk = new HashSet<>();
+                    for (MonitorBackend.Win w : b.deskWindows().get(5, java.util.concurrent.TimeUnit.SECONDS)) onDesk.add(w.pid());
+                    for (Long pid : pids) {
+                        if (onDesk.contains(pid) && TOLD.add(pid)) InGameMonitors.sharedAppSound(titles.getOrDefault(pid, "That app"));
+                    }
+                    pids.removeAll(onDesk);
                     // a program on another monitor too (Brave on two of them): heard from just one
                     SoundHome.seen(source.id(), pids);
                     pids.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));

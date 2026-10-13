@@ -1146,11 +1146,11 @@ static SEAT_CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bot
 /// Moving to a joined monitor: when it happened, and the moment after it the cursor stays there.
 static SWITCHED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 static NARROWED: AtomicBool = AtomicBool::new(false);
-const SWITCH_REST: Duration = Duration::from_millis(1500);
+const SWITCH_REST: Duration = Duration::from_millis(1200);
 /// …and how far (pixels) onto the other monitor the cursor has to go, and how long it has to stay
 /// there, before you move to it.
-const SWITCH_DEPTH: i32 = 200;
-const SWITCH_DWELL: Duration = Duration::from_millis(350);
+const SWITCH_DEPTH: i32 = 120;
+const SWITCH_DWELL: Duration = Duration::from_millis(220);
 static SWITCH_CANDIDATE: Mutex<Option<(i32, Instant)>> = Mutex::new(None);
 /// Joined monitors (from "arrange"): each index → every index of its group (itself included).
 static GROUPS: Mutex<Option<HashMap<i32, Vec<i32>>>> = Mutex::new(None);

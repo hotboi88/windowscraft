@@ -351,7 +351,17 @@ public final class TheaterMode {
             double g = Math.min(1, (now - glideAt) / 0.35e9);
             double s2 = g * g * (3 - 2 * g);
             if (g >= 1) glideFrom = null;
-            else {
+            else if (glideCenter != null && glideNormal != null && lookYaw == 0 && lookPitch == 0) {
+                // swing round from one screen to the next at the same distance from them (a
+                // straight line between the two seats would dip in toward angled monitors)
+                Vec3d c = glideCenter.lerp(center(), s2);
+                Vec3d nn = glideNormal.lerp(n, s2);
+                nn = nn.lengthSquared() < 1e-6 ? n : nn.normalize();
+                pos = c.add(nn.multiply(distance));
+                Vec3d f = nn.negate();
+                yaw = (float) Math.toDegrees(Math.atan2(-f.x, f.z));
+                pitch = (float) -Math.toDegrees(Math.asin(MathHelper.clamp(f.y, -1, 1)));
+            } else {
                 pos = glideFrom.pos().lerp(pos, s2);
                 yaw = glideFrom.yaw() + MathHelper.wrapDegrees(yaw - glideFrom.yaw()) * (float) s2;
                 pitch = glideFrom.pitch() + (pitch - glideFrom.pitch()) * (float) s2;
@@ -365,6 +375,7 @@ public final class TheaterMode {
 
     /** Gliding over to a joined monitor: where the view was, and since when. */
     private static Pose glideFrom;
+    private static Vec3d glideCenter, glideNormal;
     private static long glideAt;
     private static Pose lastPose;
 
@@ -375,14 +386,19 @@ public final class TheaterMode {
     public static void glideTo(Display d) {
         if (!active || leaving || d == null || d == controlled || !d.isLive()) return;
         glideFrom = lastPose;
+        glideCenter = rect != null ? center() : null;
+        glideNormal = rect != null ? rect.normal() : null;
         glideAt = System.nanoTime();
         targetOwn(d);
         lookYaw = lookPitch = 0;
         recentering = false;
         MinecraftClient mc = MinecraftClient.getInstance();
+        // (the same zoom as at the one you came from: switching never moves you closer or further)
+        double zoom = fitDistance > 0 ? distance / fitDistance : MIN_FACTOR;
         fitDistance = fitDistance(mc, rect);
         allowedMax = fitDistance * MAX_FACTOR;
-        distance = fitDistance * MIN_FACTOR;
+        distance = fitDistance * zoom;
+        clampDistance();
     }
 
     /**

@@ -96,6 +96,17 @@ public final class InGameMonitors {
     /** The monitor a source shows (any thread), or null. */
     public static Mon monitorOf(SourceInfo s) { return s == null ? null : LIVE.get(s.id()); }
 
+    /**
+     * (Any thread) An app on a monitor also has a window on your desk, so its sound stays on your
+     * desk: say so once, and how to give the monitor its own.
+     */
+    public static void sharedAppSound(String title) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        String name = title == null || title.isBlank() ? "That app" : title.length() > 40 ? title.substring(0, 40) + "…" : title;
+        mc.execute(() -> say(mc, "\"" + name + "\" is also open on your desk, so its sound stays on your desk (Windows can't split one app's sound). "
+                + "For a browser with its own sound on the monitor: sneak + U on it → \"Own browser\".", Formatting.GRAY));
+    }
+
     /** Are you using that in-game monitor right now (sitting at it, or holding it up as your tablet)? */
     public static boolean inUse(SourceInfo s) {
         Mon m = monitorOf(s), at = seatedMon;
