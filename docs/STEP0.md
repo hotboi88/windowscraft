@@ -31,25 +31,35 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    Fix (branch `step0-fix-prototypes`): sound clock = sample count from the wall clock at start
    (`asetpts=N/SR/TB+RTCSTART/(TB*1000000)`), CPU path `-copyts`. Viewer sound 0 → 21.8 MB; and
    capture → encoded 21/61/67 → 4/22/26 ms (the muxer had held pictures in ~80 ms clumps).
-   Also: pin a tested FFmpeg build.
+   Also: pin a tested FFmpeg build. With real sound packets the muxer's 100 ms interleave wait
+   now holds the CPU path's pictures (capture → encoded 17.6/55/61 ms); `-max_interleave_delta`
+   of 1 µs brings it to 3.3/6.6/12.5 ms (GPU path: 4/22/26 already) and lip sync doesn't change
+   (256 vs 265 ms) — on the branch as the default.
 2. **New viewers drop to light playback (30 fps) ~2 s after starting** and ask the sharer for a
    lighter stream: the decoder reads ~0.5 s before its first picture, the queue looks "behind".
    Fix (branch): catch-ups in the first 5 s after the first picture don't count.
 3. **Direct GPU sharing is off on the owner's PC** ("the shared pictures came out black in the
    game", saved per driver), so walls take the CPU route (three copies per picture). Same card and
-   driver passed and worked in tests (window and in-game monitor). Likely a false "black" (new or
-   unchanging monitor). Proposal: re-test; call it black only if the CPU capture of the same
-   source isn't. In-game monitor on the fast route: captured → wall 0/7/10 ms (CPU route at 720p30:
-   13/17/18 ms).
+   driver passed and worked in every test (window and in-game monitor). The verdict came on
+   12 Oct 18:54, 9 s after it started, with Iris + the Solas shader pack and Xaero's minimap/world
+   map loaded. Ruled out: a new monitor showing only the desktop for 12 s; a pixel-pack buffer
+   left bound. Proposal: re-test in the real game with logging (copy vs blit path, scissor/pack
+   state at the read-back); call it black only if the CPU capture of the same source isn't.
+   In-game monitor on the fast route: captured → wall 0/7/10 ms (CPU route at 720p30: 13/17/18 ms).
 4. **Lip sync**, measurable now that sound flows: sound 256 ms after the picture (115 beeps,
-   140–340 ms). Proposal: hold pictures back by the measured audio delay on viewers or shrink the
-   reserves.
+   140–340 ms). Roughly: ~80 ms sender cushion + ~45 ms AAC + ~60 ms viewer decoder + 120–170 ms
+   playback reserve and device, against ~145 ms for the picture. Proposal: shrink the reserves
+   (listen for crackles) or hold pictures back on viewers.
 5. **Viewer decode**: after the fixes a 1080p60 picture arrives ~5 ms after capture but leaves the
-   viewer's FFmpeg ~130 ms later; CPU NV12→BGRA conversion costs 1–1.5 cores at 1080p60.
+   viewer's FFmpeg ~130 ms later; CPU NV12→BGRA conversion costs 1–1.5 cores at 1080p60. The
+   decoder type doesn't matter (software 125, d3d11va 134, cuda 138 ms, auto 123 ms in the game).
+   Standalone on a game-like 1080p60 stream fed in real time, the same command holds each
+   picture 64/68/72 ms (half-size output or NV12: ~58 ms; one filter thread: much worse). Going
+   well below ~60 ms needs decoding in our own helper rather than the FFmpeg CLI.
 6. **Extra render frame** (copy in frame N, show in N+1): same-frame test switch 13.0 → 5.6 ms
-   (own wall), 12.2 → 4.0 ms (viewer). Waiting isn't acceptable and starting the copy at frame
-   start didn't finish in time in a light world; proposal: copy on arrival into a slot reserved
-   by the render thread.
+   (own wall), 12.2 → 4.0 ms (viewer). Prototype on the branch: copy on arrival into a slot the
+   render thread sets aside (pump thread) — own wall 13.0/16.7/17.6 → 6.2/10.6/11.7 ms, viewer
+   12.2/16.4/17.0 → 7.4/13.5/15.1 ms, the render thread never waits.
 7. **wc-capture 15.6 ms timer**: its 2 ms waits last up to 15.6 ms. `timeBeginPeriod(1)` (branch):
    captured → wall P99 9.8 → 1.4 ms (in-game monitor).
 8. **Guest input waits for the host's next frame**: 3.3/7.8/8.5 ms at 120 fps; idle server
