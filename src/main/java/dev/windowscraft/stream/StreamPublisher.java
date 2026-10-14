@@ -452,10 +452,15 @@ public final class StreamPublisher {
         // (several screens at once: your upload is shared among those someone's watching)
         int kb = Math.min(ownKb, budgetKb());
         boolean gpu = gpuEligible(enc);
-        List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
-                // Both inputs are stamped with the wall clock, so video and audio share one timeline
-                // even when the PC is too busy to keep a perfect frame rate.
-                "-use_wallclock_as_timestamps", "1"));
+        List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats"));
+        // Video and audio share one timeline: the wall clock. Pictures are stamped with it as they
+        // come in (they may come unevenly). Sound is NOT stamped per packet — loopback reads hand
+        // it over in uneven bursts, and stamping each one with the time it arrived made its
+        // timestamps run backwards: the AAC encoder then threw most of it away (a few packets a
+        // second; viewers heard nothing) and FFmpeg logged thousands of warnings a second. Instead
+        // its clock is its own sample count, started at the wall clock when its first sound comes
+        // in (it's fed at exactly 48 kHz in real time, so the two clocks stay together).
+        List<String> audioTime = List.of("-af", "asetpts=N/SR/TB+RTCSTART/(TB*1000000)");
         ServerSocket previewListen = null;
         int[] pv = {ew, eh};
         if (gpu) { // give direct GPU sharing a moment to start, so we know if a preview is needed
@@ -487,7 +492,9 @@ public final class StreamPublisher {
                     : gfxSource(ps, fps, ew, eh) + ",setpts=RTCTIME/(TB*1000000)," + toEncoder + "[ev]";
             cmd.addAll(List.of("-copyts",
                     "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "tcp://127.0.0.1:" + audioListen.getLocalPort(),
-                    "-filter_complex", graph, "-map", "[ev]", "-map", "0:a",
+                    "-filter_complex", graph, "-map", "[ev]", "-map", "0:a"));
+            cmd.addAll(audioTime);
+            cmd.addAll(List.of(
                     // each picture goes out as it comes (none held back to even out the rate)
                     "-fps_mode:v", "passthrough",
                     // pictures only come when the screen changes: a fresh start point for viewers
@@ -496,11 +503,15 @@ public final class StreamPublisher {
         } else {
             String sizeFilter = (ew == (w & ~1) && eh == (h & ~1)) ? "crop=" + ew + ":" + eh + ":0:0" : "scale=" + ew + ":" + eh;
             cmd.addAll(List.of(
+                    "-use_wallclock_as_timestamps", "1",
                     "-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", w + "x" + h, "-framerate", Integer.toString(fps),
                     "-i", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
-                    "-use_wallclock_as_timestamps", "1",
                     "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "tcp://127.0.0.1:" + audioListen.getLocalPort(),
-                    "-map", "0:v", "-map", "1:a",
+                    // absolute times kept (as on the GPU path), so the sound's wall-clock start lines up
+                    "-copyts",
+                    "-map", "0:v", "-map", "1:a"));
+            cmd.addAll(audioTime);
+            cmd.addAll(List.of(
                     "-vf", sizeFilter + ",format=" + (enc.name().equals("h264_qsv") ? "nv12" : "yuv420p")));
         }
         cmd.addAll(enc.args());

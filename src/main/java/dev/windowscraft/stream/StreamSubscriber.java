@@ -84,6 +84,10 @@ public final class StreamSubscriber implements FrameSource {
     private final ArrayDeque<Long> arrivals = new ArrayDeque<>();
     private long lastArrival, lastDecoded, connectStarted;
     private volatile boolean matchDecode;
+    /** When this connection's first picture came out of the decoder (0: not yet). */
+    private volatile long firstPictureNanos;
+    /** Catching up this soon after the first picture is the decoder starting, not this PC being too slow. */
+    private static final long SETTLE_NANOS = 5_000_000_000L;
     private static final dev.windowscraft.measure.Measure.Metric FIRST_PICTURE = dev.windowscraft.measure.Measure.ms("view.first_picture",
             "starting to watch (or reconnecting) → the first picture decoded (waits for the next keyframe)");
 
@@ -217,6 +221,7 @@ public final class StreamSubscriber implements FrameSource {
 
     private void runOnce() throws Exception {
         status = "Connecting…";
+        firstPictureNanos = 0;
         connectStarted = System.nanoTime();
         Socket relay;
         InputStream net;
@@ -262,7 +267,7 @@ public final class StreamSubscriber implements FrameSource {
         if (windows && !hw.equals("none")) cmd.addAll(List.of("-hwaccel", hw));
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
-                "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough",
+                "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
                 "-f", "rawvideo", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
                 "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "tcp://127.0.0.1:" + audioListen.getLocalPort()));
         Process ff = Proc.start(cmd, "ffmpeg-dec");
@@ -461,7 +466,12 @@ public final class StreamSubscriber implements FrameSource {
         CATCHUPS.inc();
         synchronized (arrivals) { arrivals.clear(); } // (those pictures will never be decoded)
         matchDecode = false; // (and the ones still in the decoder would shift every match from here on)
-        fellBehind();
+        // while the decoder is still starting (it reads ~0.5 s before its first picture), data
+        // piles up in front of it once: that's not this PC being too slow — skip ahead, but don't
+        // switch to light playback or ask the owner for a lighter stream over it
+        long first = firstPictureNanos;
+        if (first != 0 && System.nanoTime() - first > SETTLE_NANOS) fellBehind();
+        else WindowsCraftClient.LOGGER.info("Viewer for {} caught up while starting (not counted as falling behind)", streamId.substring(0, 8));
         WindowsCraftClient.LOGGER.info("Viewer for {} was behind; skipped {} KB to get back to live", streamId.substring(0, 8), dropped / 1024);
         return newestKey != null;
     }
@@ -486,6 +496,7 @@ public final class StreamSubscriber implements FrameSource {
             Frame old = latest.getAndSet(f);
             if (old != null) pool.release(old);
             framesDecoded++;
+            if (firstPictureNanos == 0) firstPictureNanos = System.nanoTime();
             if (connectStarted != 0) { // (the first picture since connecting: always cleared, recorded only while measuring)
                 FIRST_PICTURE.since(connectStarted);
                 connectStarted = 0;

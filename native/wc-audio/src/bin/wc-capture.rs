@@ -564,9 +564,11 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    if a.hires {
-        unsafe { timeBeginPeriod(1) };
-    }
+    // Windows' default timer is 15.6 ms: the 2 ms waits for the next picture (and the pacing
+    // sleeps) would really last up to 15.6 ms — measured: up to ~10 ms later on the wall at P99,
+    // ~1 ms with this. Only this helper's timer changes (Windows 10 2004+ keeps it per process).
+    let _ = a.hires; // (the old experiment switch: now always on)
+    unsafe { timeBeginPeriod(1) };
     if a.selftest {
         println!("{}", gpu_selftest::run(a.luid));
         return std::process::ExitCode::SUCCESS;

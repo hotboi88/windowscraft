@@ -53,7 +53,7 @@ final class Proc {
         s.setTcpNoDelay(true);
         // publishing: keep the unsent backlog small, so a connection that's too slow is noticed (and
         // the stream turned down) within a second or two instead of seconds of video piling up
-        if (role.equals("PUB")) s.setSendBufferSize(512 * 1024);
+        if (role.startsWith("PUB")) s.setSendBufferSize(512 * 1024); // (PUB and PUB2)
         s.connect(new java.net.InetSocketAddress(host, port), 5000);
         s.setSoTimeout(15_000);
         dev.windowscraft.relay.RelayProtocol.writeLine(s.getOutputStream(), String.join(" ", dev.windowscraft.relay.RelayProtocol.MAGIC, role, token, streamId));
