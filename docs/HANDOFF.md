@@ -103,9 +103,12 @@ no picture held in the viewer's FFmpeg at all (`-threads:v 1` on the raw output 
 `relay.PictureEnds` for pictures over 64 KB; `windowscraft.pictureEnds`); the GPU-sharing black
 check made hard to fool (key v4); lip sync on viewers while just watching (`stream.AvSync`,
 `windowscraft.lipSync=off`). Plans: docs/SETTINGS.md (Automatic / Advanced / per screen).
-Next for input (VISION 3): guests' input goes guest → server thread (waits for the tick) → your
-render thread (waits for the next frame) → helper; carry it over the relay instead (its own
-threads; owner's PUB socket back down; permission from ServerHub), behind a capability flag. Needs the owner's PC (with nothing else running): viewer CPU
+Guests' input over the relay (VISION 3: not between the server's ticks): UDP viewers' control line
+carries it up (relay "OK … C"), the relay checks it with ServerHub's rules and writes it down the
+owner's PUB3 connection (else the server's way); `windowscraft.relayInput=false`; CI two-player
+test checks it. Next: the owner still handles it on the render thread (waits for the next
+frame) — measure `input.host_wait_relay` in a real session before moving the in-game-monitor
+path off it. CI now also runs the two-player test (`tools/mptest/run.sh`, mp-test.yml). Needs the owner's PC (with nothing else running): viewer CPU
 and in-game latency with the bench, Iris + his shader pack with a viewer (the colour pass puts
 GL state back — check), the 40/60 sound reserves (CI runners have no sound device), the
 Task Manager / self-test items (his UAC is the Windows default: Task Manager auto-elevates).
