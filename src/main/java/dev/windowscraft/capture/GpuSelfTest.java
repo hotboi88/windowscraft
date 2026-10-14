@@ -33,7 +33,9 @@ public final class GpuSelfTest {
      */
     public static synchronized Boolean check(String glVendor, String glRenderer, String glVersion, int[] luid) {
         // (v2: the test now also tries the memory sizes drivers round pictures up to — tested again)
-        String k = "v2 " + glVendor + " / " + glRenderer + " / " + glVersion;
+        // (v3: tested again once — a "black" verdict on a card where it works elsewhere may have
+        // been the check misreading; if it's really black it's turned off again, with details)
+        String k = "v3 " + glVendor + " / " + glRenderer + " / " + glVersion;
         if (k.equals(key) && (result != null || running)) return result;
         key = k;
         result = null;

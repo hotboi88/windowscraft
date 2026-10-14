@@ -231,9 +231,40 @@ public final class GpuShareTexture extends AbstractTexture {
         if (sampledBlack()) blackChecks++;
         if (checks == 6 && blackChecks == 6) {
             String why = "the shared pictures came out black in the game";
+            // what was going on, so a misreading can be told from a real black picture
+            dev.windowscraft.WindowsCraftClient.LOGGER.warn("Direct GPU sharing looked black: {}", blackDetails());
             GpuInterop.broken(why);
             throw new IllegalStateException(why);
         }
+    }
+
+    private String lastProbe = "";
+
+    /** The copy route and the OpenGL state around the read-back (only when it's judged black). */
+    private String blackDetails() {
+        StringBuilder b = new StringBuilder();
+        try (org.lwjgl.system.MemoryStack st = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.IntBuffer box = st.mallocInt(4);
+            GL11.glGetIntegerv(GL11.GL_SCISSOR_BOX, box);
+            java.nio.ByteBuffer mask = st.malloc(4);
+            GL11.glGetBooleanv(GL11.GL_COLOR_WRITEMASK, mask);
+            b.append("route ").append(blit ? "blit" : "copy").append(", ").append(width).append('×').append(height)
+                    .append(", scissor ").append(GL11.glIsEnabled(GL11.GL_SCISSOR_TEST)).append(' ')
+                    .append(box.get(0)).append(',').append(box.get(1)).append(' ').append(box.get(2)).append('×').append(box.get(3))
+                    .append(", colour mask ").append(mask.get(0)).append(mask.get(1)).append(mask.get(2)).append(mask.get(3))
+                    .append(", sRGB ").append(GL11.glIsEnabled(GL30.GL_FRAMEBUFFER_SRGB))
+                    .append(", rasterizer discard ").append(GL11.glIsEnabled(GL30.GL_RASTERIZER_DISCARD))
+                    .append(", pack buffer ").append(GL11.glGetInteger(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING))
+                    .append(", pack row/skip/align ").append(GL11.glGetInteger(GL11.GL_PACK_ROW_LENGTH)).append('/')
+                    .append(GL11.glGetInteger(GL11.GL_PACK_SKIP_PIXELS)).append('/').append(GL11.glGetInteger(GL11.GL_PACK_ALIGNMENT))
+                    .append(", read/draw fbo ").append(GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)).append('/')
+                    .append(GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING))
+                    .append(", last probe ").append(lastProbe);
+        } catch (Throwable t) {
+            b.append(" (").append(t).append(')');
+        }
+        while (GL11.glGetError() != 0) { /* (a query this driver doesn't know: no matter) */ }
+        return b.toString();
     }
 
     /** True if every one of a grid of spots (plus the bottom edge, where a taskbar is) is pure black. */
@@ -242,6 +273,7 @@ public final class GpuShareTexture extends AbstractTexture {
         if (probeFbo == 0) probeFbo = GL30.glGenFramebuffers();
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
         GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, getGlId(), 0);
+        int fboStatus = GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER);
         boolean black = true;
         try (org.lwjgl.system.MemoryStack st = org.lwjgl.system.MemoryStack.stackPush()) {
             java.nio.ByteBuffer px = st.malloc(4);
@@ -249,6 +281,8 @@ public final class GpuShareTexture extends AbstractTexture {
                 for (int gx = 0; gx <= 4 && black; gx++) {
                     int x = Math.min(width - 1, gx * (width - 1) / 4), y = gy == 0 ? 6 : Math.min(height - 1, gy * (height - 1) / 4);
                     GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, px);
+                    if (gx == 2 && gy == 2) lastProbe = "fbo 0x" + Integer.toHexString(fboStatus) + ", gl error 0x" + Integer.toHexString(GL11.glGetError())
+                            + ", middle " + (px.get(0) & 0xFF) + "," + (px.get(1) & 0xFF) + "," + (px.get(2) & 0xFF) + "," + (px.get(3) & 0xFF);
                     if ((px.get(0) & 0xFF) > 1 || (px.get(1) & 0xFF) > 1 || (px.get(2) & 0xFF) > 1) black = false;
                 }
             }
