@@ -101,7 +101,11 @@ Measured and CI-tested, not yet released: FFmpeg pinned to 9.0.2; viewer picture
 coloured on the GPU (`render.Nv12Converter`, off for good if it fails; `windowscraft.gpuConvert`);
 no picture held in the viewer's FFmpeg at all (`-threads:v 1` on the raw output +
 `relay.PictureEnds` for pictures over 64 KB; `windowscraft.pictureEnds`); the GPU-sharing black
-check made hard to fool (key v4). Needs the owner's PC (with nothing else running): viewer CPU
+check made hard to fool (key v4); lip sync on viewers while just watching (`stream.AvSync`,
+`windowscraft.lipSync=off`). Plans: docs/SETTINGS.md (Automatic / Advanced / per screen).
+Next for input (VISION 3): guests' input goes guest → server thread (waits for the tick) → your
+render thread (waits for the next frame) → helper; carry it over the relay instead (its own
+threads; owner's PUB socket back down; permission from ServerHub), behind a capability flag. Needs the owner's PC (with nothing else running): viewer CPU
 and in-game latency with the bench, Iris + his shader pack with a viewer (the colour pass puts
 GL state back — check), the 40/60 sound reserves (CI runners have no sound device), the
 Task Manager / self-test items (his UAC is the Windows default: Task Manager auto-elevates).

@@ -67,6 +67,11 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    sender `-pes_payload_size 0` (sound packets out 18–22 ms sooner, but the viewer's adaptive
    reserve grew: 301 → 356 ms). Proposal: shrink the reserves (listen for crackles) or hold
    pictures back on viewers when a screen plays a movie.
+   On `next-0.15.2` (lip sync): the viewer holds the *compressed* video packets back by the
+   measured gap while the screen has sound and nobody there is working it (`stream.AvSync`: per
+   stream arrival − timestamp, median; + sound still queued to the card − ~28 ms picture way;
+   straight there when you start watching, then 20 ms/s up, at once down). Sound is never
+   delayed. To check on the owner's PC: multiplayer A/V offset (beeps) → ~0, `view.lip_hold`.
 5. **Viewer decode holds pictures, counted in pictures**: after the fixes a 1080p60 picture arrives
    ~5 ms after capture but leaves the viewer's FFmpeg ~130 ms later. The decoder type doesn't
    matter (software 125, d3d11va 134, cuda 138 ms, auto 123 ms in the game; `-threads 1` the
