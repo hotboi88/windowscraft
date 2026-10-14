@@ -26,7 +26,7 @@ import net.fabricmc.loader.api.FabricLoader;
  * itself within a second — nothing can be left behind.
  */
 public final class VDisplayHelper implements MonitorBackend {
-    private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single", "gkey", "ownbrowser");
+    private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single", "gkey", "deskrestart");
 
     private record Pending(Set<String> ends, List<String> lines, CompletableFuture<List<String>> done) {}
 
@@ -151,7 +151,7 @@ public final class VDisplayHelper implements MonitorBackend {
                 case "gone" -> e.monitorGone(Integer.parseInt(p[1]));
                 case "adminapp" -> e.adminApp();
                 case "moved" -> e.monitorsMoved();
-                case "ownbrowser" -> e.ownBrowser(Integer.parseInt(p[1]), Long.parseLong(p[2]));
+                case "deskrestart" -> e.deskRestarted(p.length > 1 ? p[1] : "browser");
                 case "gkey" -> e.gameKey(Integer.parseInt(p[1]), Integer.parseInt(p[2]), p[3].equals("1"));
                 case "single" -> e.singleInstance(line.length() > 7 ? line.substring(7) : "That app");
                 default -> {}
@@ -256,6 +256,11 @@ public final class VDisplayHelper implements MonitorBackend {
     }
 
     @Override public void beat() { send("beat"); }
+    @Override public void profileKey(Mon m, String key) { send("profilekey " + m.index() + " " + key); }
+    @Override
+    public CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) {
+        return call("ownbrowser\t" + m.index() + "\t" + exePath.replace('\t', ' ').replace('\n', ' '), "ownbrowser").thenApply(l -> last(l).endsWith("ok"));
+    }
 
     @Override
     public void point(Mon m, long gameWindow, double u, double v) {

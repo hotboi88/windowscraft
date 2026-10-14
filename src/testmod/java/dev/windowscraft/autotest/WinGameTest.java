@@ -114,38 +114,6 @@ public final class WinGameTest implements ClientModInitializer {
     private BlockPos wall(int dx, int dy) { return new BlockPos(dx, ground + 2 + dy, -6); }
     private BlockPos mon() { return new BlockPos(6, ground + 1, -4); }
 
-    /** A monitor's own browser starts with your profile; what's locked follows once it's free. */
-    private void profileSeedTest() {
-        try {
-            java.nio.file.Path base = java.nio.file.Files.createTempDirectory("wc-seed");
-            java.nio.file.Path from = base.resolve("User Data"), to = base.resolve("monitor");
-            java.nio.file.Files.createDirectories(from.resolve("Profile 1/Network"));
-            java.nio.file.Files.createDirectories(from.resolve("Profile 1/Cache/Cache_Data"));
-            java.nio.file.Files.writeString(from.resolve("Local State"), "{\"profile\":{\"last_used\":\"Profile 1\"},\"os_crypt\":{\"encrypted_key\":\"x\"}}");
-            java.nio.file.Files.writeString(from.resolve("Profile 1/Preferences"), "{}");
-            java.nio.file.Files.writeString(from.resolve("Profile 1/Login Data"), "passwords");
-            java.nio.file.Files.writeString(from.resolve("Profile 1/Cache/Cache_Data/data_0"), "cache");
-            java.nio.file.Files.writeString(from.resolve("Profile 1/Network/Cookies"), "cookies");
-            java.util.List<java.nio.file.Path> pending;
-            try (var ch = java.nio.channels.FileChannel.open(from.resolve("Profile 1/Network/Cookies"), java.nio.file.StandardOpenOption.WRITE);
-                 var lock = ch.lock()) { // (like an open browser holding its sign-in cookies)
-                var r = dev.windowscraft.monitor.ProfileSeed.seed(from, to);
-                pending = new java.util.ArrayList<>(r.locked());
-                check(java.nio.file.Files.exists(to.resolve("Local State")) && java.nio.file.Files.exists(to.resolve("Profile 1/Login Data"))
-                        && java.nio.file.Files.exists(to.resolve("Profile 1/Preferences")),
-                        "a monitor's own browser starts with your profile (settings, saved passwords): " + r.copied() + " files");
-                check(!java.nio.file.Files.exists(to.resolve("Profile 1/Cache")), "…without the caches");
-                check(pending.size() == 1 && pending.get(0).getFileName().toString().equals("Cookies"),
-                        "…and the sign-in cookies your open browser holds wait: " + pending);
-            }
-            boolean all = dev.windowscraft.monitor.ProfileSeed.retry(from, to, pending);
-            check(all && java.nio.file.Files.readString(to.resolve("Profile 1/Network/Cookies")).equals("cookies"),
-                    "…and come over once the browser lets go of them");
-        } catch (Exception e) {
-            check(false, "profile copy: " + e);
-        }
-    }
-
     private int fs;
 
     /** The game in fullscreen: sit down, and nothing of the screen is under your taskbar or cut off. */
@@ -176,7 +144,8 @@ public final class WinGameTest implements ClientModInitializer {
                 log("fullscreen seated: visible part " + java.util.Arrays.toString(dev.windowscraft.client.GameArea.visible()));
                 shot(mc, "4b_seated_fullscreen");
                 checkUncovered(mc, "fullscreen");
-                checkTaskbarShows(mc);
+                int[] vis = dev.windowscraft.client.GameArea.visible();
+                check(vis[3] == mc.getWindow().getFramebufferHeight(), "fullscreen: the screen may use the full height (no taskbar shows there): " + java.util.Arrays.toString(vis));
                 dev.windowscraft.client.TheaterMode.leaveNow();
                 fs = 5;
                 tick = 0;
@@ -311,7 +280,6 @@ public final class WinGameTest implements ClientModInitializer {
                 var sw = mc.getServer().getOverworld();
                 ground = sw.getTopY(Heightmap.Type.MOTION_BLOCKING, 0, 0) - 1;
                 log("ground " + ground + "; driver " + InGameMonitors.knownDriver() + "; supported " + InGameMonitors.supported());
-                profileSeedTest();
                 mc.getServer().execute(() -> {
                     for (BlockPos q : BlockPos.iterate(-8, ground + 1, -8, 10, ground + 6, 2)) sw.setBlockState(q, Blocks.AIR.getDefaultState());
                     for (int x = -2; x <= 2; x++) for (int y = 1; y <= 3; y++) sw.setBlockState(new BlockPos(x, ground + y, -6), Blocks.BLACK_CONCRETE.getDefaultState());

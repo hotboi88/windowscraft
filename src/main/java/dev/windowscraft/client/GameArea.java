@@ -38,7 +38,7 @@ public final class GameArea {
     }
 
     private static int[] measure(int fw, int fh) {
-        int[] v = dev.windowscraft.capture.win.WinGeom.visibleClient(dev.windowscraft.capture.win.WinGeom.gameWindow);
+        int[] v = dev.windowscraft.capture.win.WinGeom.visibleClient(dev.windowscraft.capture.win.WinGeom.gameWindow, !MinecraftClient.getInstance().getWindow().isFullscreen());
         if (v == null) return new int[]{0, 0, fw, fh};
         double sx = fw / (double) v[4], sy = fh / (double) v[5];
         int x = (int) Math.round(v[0] * sx), y = (int) Math.round(v[1] * sy);

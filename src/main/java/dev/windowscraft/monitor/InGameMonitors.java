@@ -223,6 +223,7 @@ public final class InGameMonitors {
                 SourceInfo src = sourceFor(m, n);
                 LIVE.put(src.id(), m);
                 NUMBER.put(src.id(), n);
+                b.profileKey(m, d.tablet ? "tablet" : d.id.toString().substring(0, 8));
                 DisplayManager.get().start(d, src, settingsFor(d));
                 if (d.tablet) hint(mc, "Your tablet is on");
                 else hint(mc, name(src) + " is on · sit down with " + TheaterMode.keyName() + " to use it · sneak + "
@@ -401,7 +402,7 @@ public final class InGameMonitors {
     }
 
     /** Browsers that can run a separate copy of themselves (their own sign-ins, their own sound). */
-    private static final java.util.Set<String> OWN_COPY = java.util.Set.of("chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "firefox.exe");
+    private static final java.util.Set<String> OWN_COPY = java.util.Set.of("chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe");
     private static final Map<Long, String> EXE_OF = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The program file of that process ("" if unknown). */
@@ -434,88 +435,8 @@ public final class InGameMonitors {
         Mon m = monitorOf(d);
         String exe = exeOf(pid);
         if (m == null || backend() == null || exe.isEmpty() || ownCopyName(pid) == null) return CompletableFuture.completedFuture(false);
-        String file = exe.substring(Math.max(exe.lastIndexOf('\\'), exe.lastIndexOf('/')) + 1).toLowerCase(java.util.Locale.ROOT);
-        String base = System.getenv("LOCALAPPDATA");
-        java.nio.file.Path dir = java.nio.file.Path.of(base != null ? base : System.getProperty("user.home"), "WindowsCraft", "profiles",
-                file.replace(".exe", "") + "-" + (d.tablet ? "tablet" : d.id.toString().substring(0, 8)));
-        try {
-            java.nio.file.Files.createDirectories(dir);
-        } catch (java.io.IOException e) {
-            return CompletableFuture.completedFuture(false);
-        }
-        seedOnce(file, dir);
-        String params = file.equals("firefox.exe")
-                ? "-no-remote -new-instance -profile \"" + dir + "\""
-                : "--user-data-dir=\"" + dir + "\" --no-first-run --no-default-browser-check --new-window";
         guardFocus();
-        return backend().launch(m, exe, params, file);
-    }
-
-    /** Profiles whose sign-ins are still to come over (your desk browser had them locked). */
-    private static final Map<java.nio.file.Path, List<java.nio.file.Path>> SEED_PENDING = new java.util.concurrent.ConcurrentHashMap<>();
-    private static volatile boolean seedWatcher;
-
-    /**
-     * A monitor's new copy of your browser starts out with your sign-ins, passwords, bookmarks and
-     * extensions (once, when it's made). What your open desk browser keeps locked (its sign-in
-     * cookies) follows the next time that browser isn't running.
-     */
-    private static void seedOnce(String exeFile, java.nio.file.Path dir) {
-        if (java.nio.file.Files.exists(dir.resolve("Local State"))) return; // (made before: it's its own now)
-        java.nio.file.Path from = ProfileSeed.userData(exeFile);
-        if (from == null) return;
-        try {
-            ProfileSeed.Result r = ProfileSeed.seed(from, dir);
-            WindowsCraftClient.LOGGER.info("The monitor's own {} starts with your profile: {} files copied{}", exeFile, r.copied(),
-                    r.locked().isEmpty() ? "" : "; in use right now (they follow once it's closed): " + ProfileSeed.names(from, r.locked()));
-            if (!r.locked().isEmpty()) {
-                SEED_PENDING.put(dir, new java.util.ArrayList<>(r.locked()));
-                PENDING_FROM.put(dir, from);
-                PENDING_EXE.put(dir, exeFile);
-                boolean cookies = r.locked().stream().anyMatch(f -> f.getFileName().toString().equalsIgnoreCase("Cookies"));
-                if (cookies) {
-                    MinecraftClient mc = MinecraftClient.getInstance();
-                    mc.execute(() -> hint(mc, "Your passwords, bookmarks and extensions came over to this monitor's browser. "
-                            + "Your logged-in sites follow the next time the browser is closed everywhere."));
-                }
-                startSeedWatcher();
-            }
-        } catch (Exception e) {
-            WindowsCraftClient.LOGGER.warn("Couldn't copy your browser profile for the monitor", e);
-        }
-    }
-
-    private static final Map<java.nio.file.Path, java.nio.file.Path> PENDING_FROM = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final Map<java.nio.file.Path, String> PENDING_EXE = new java.util.concurrent.ConcurrentHashMap<>();
-
-    private static synchronized void startSeedWatcher() {
-        if (seedWatcher) return;
-        seedWatcher = true;
-        Thread t = new Thread(() -> {
-            while (!SEED_PENDING.isEmpty()) {
-                try {
-                    Thread.sleep(20_000);
-                } catch (InterruptedException e) {
-                    return;
-                }
-                for (var e : new java.util.ArrayList<>(SEED_PENDING.entrySet())) {
-                    String exe = PENDING_EXE.get(e.getKey());
-                    if (running(exe)) continue; // (either copy open: its files are locked)
-                    if (ProfileSeed.retry(PENDING_FROM.get(e.getKey()), e.getKey(), e.getValue())) {
-                        WindowsCraftClient.LOGGER.info("The monitor's own {} now has your sign-ins too", exe);
-                        SEED_PENDING.remove(e.getKey());
-                    }
-                }
-            }
-            seedWatcher = false;
-        }, "WindowsCraft profile copy");
-        t.setDaemon(true);
-        t.start();
-    }
-
-    private static boolean running(String exeFile) {
-        return ProcessHandle.allProcesses().anyMatch(p -> p.info().command()
-                .map(c -> c.toLowerCase(java.util.Locale.ROOT).endsWith("\\" + exeFile) || c.toLowerCase(java.util.Locale.ROOT).endsWith("/" + exeFile)).orElse(false));
+        return backend().ownBrowser(m, exe);
     }
 
     public static void sendHome(long hwnd) {
@@ -749,13 +670,10 @@ public final class InGameMonitors {
         seatedMon = m;
         seatedOn = d;
         altLooking = false;
-        // your real taskbar stays where you can see it while you sit, also in fullscreen (where the
-        // game normally keeps itself above everything): the screen sits right above it
+        // a fullscreen game stays above your taskbar while you sit (Windows keeps the taskbar
+        // behind a fullscreen game; it mustn't come up over the screen's bottom meanwhile)
         onTop = mc.getWindow().isFullscreen() && !testing;
-        if (onTop) {
-            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
-            dev.windowscraft.capture.win.WinGeom.taskbarOverGame(dev.windowscraft.capture.win.WinGeom.gameWindow);
-        }
+        if (onTop) dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true);
         b.seat(m, u, v, dev.windowscraft.capture.win.WinGeom.gameWindow).whenComplete((r, e) -> mc.execute(() -> {
             if ("ok".equals(r) || seatedOn != d) return;
             String why = e != null ? e.getMessage() : r;
@@ -776,9 +694,9 @@ public final class InGameMonitors {
         if (seatedMon == null) return;
         seatedMon = null;
         seatedOn = null;
-        if (onTop) { // (fullscreen again as it was: above everything)
+        if (onTop) {
             onTop = false;
-            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true);
+            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
         }
         MonitorBackend b = backend();
         if (b != null) b.unseat();
@@ -828,20 +746,6 @@ public final class InGameMonitors {
     public static void tick(MinecraftClient mc) {
         MonitorBackend b = backend;
         if (b != null && (seatedMon != null || pointMon != null)) b.beat();
-        // seated in fullscreen: the game stays below your taskbar (the game or Windows may put it back on top)
-        if (onTop && seatedMon != null && ticks % 5 == 0) {
-            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
-            dev.windowscraft.capture.win.WinGeom.taskbarOverGame(dev.windowscraft.capture.win.WinGeom.gameWindow);
-        } // "the game is still here" (a frozen game never keeps your mouse)
-        if (pointMon != null) {
-            // you opened a menu, or switched to another window for real: your cursor is yours again
-            // (an app on that monitor in front — you clicked it while pointing — isn't "away")
-            if (!focused(mc) && !frontOn(pointMon)) {
-                if (unfocusedSince == 0) unfocusedSince = System.nanoTime();
-            } else unfocusedSince = 0;
-            boolean away = unfocusedSince != 0 && System.nanoTime() - unfocusedSince > 1_500_000_000L;
-            if (mc.currentScreen != null || away || !isOn(pointOn)) endPoint();
-        }
         if (b != null && !LIVE.isEmpty() && ++ticks % 40 == 0) refreshRects(mc); // Windows may have moved them
         if (b != null && ticks % 10 == 5) arrangeIfChanged(b);
         // back from the monitor: the game takes the mouse again (once Windows hands it the keyboard)
@@ -1058,20 +962,16 @@ public final class InGameMonitors {
         @Override public void altUp() { onGame(InGameMonitors::ownerStopPointing); }
 
         @Override
-        public void ownBrowser(int index, long pid) {
+        public void deskRestarted(String exe) {
             onGame(() -> {
-                for (Display d : DisplayManager.get().all()) {
-                    Mon m = monitorOf(d);
-                    if (m == null || m.index() != index) continue;
-                    String name = ownCopyName(pid);
-                    openOwnCopy(d, pid).thenAccept(ok -> MinecraftClient.getInstance().execute(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (ok && name != null && OWN_TOLD.add(d.id)) {
-                            hint(mc, "This monitor has its own " + name + ": its sound plays from this monitor only. Sign in to it once - it remembers.");
-                        }
-                    }));
-                    return;
-                }
+                String name = switch (exe) {
+                    case "brave.exe" -> "Brave";
+                    case "chrome.exe" -> "Chrome";
+                    case "msedge.exe" -> "Edge";
+                    default -> "browser";
+                };
+                hint(MinecraftClient.getInstance(), "Your " + name + " restarted for a moment so this monitor's own " + name
+                        + " has your sign-ins (once per monitor)");
             });
         }
 
@@ -1133,7 +1033,7 @@ public final class InGameMonitors {
                 boolean wasSeated = seatedMon != null;
                 seatedMon = null;
                 seatedOn = null;
-                if (onTop) { onTop = false; dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true); }
+                if (onTop) { onTop = false; dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false); }
                 restorePause();
                 if (backend instanceof dev.windowscraft.capture.win.VDisplayHelper) dev.windowscraft.capture.win.VDisplayHelper.unclip();
                 if (wasSeated) TheaterMode.leaveNow();

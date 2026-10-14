@@ -15,8 +15,8 @@ import java.util.Set;
 /**
  * The sound of an in-game monitor: the apps that have a window on it, each captured on its own and
  * mixed into one stream — other apps (a call in Discord on your desk) aren't heard. An app counts
- * as a whole, so one that also has a window on your desk (the same browser on both) keeps its
- * sound on your desk: Windows can't split one app's sound by window. With
+ * as a whole (Windows can't split one app's sound by window): one with windows in several places
+ * — another monitor, your desk — is heard where it was last used (see SoundHome). With
  * "hear it in the game", those apps go quiet on your speakers and play from the wall instead.
  */
 final class MonitorAudio extends AudioCapture {
@@ -24,9 +24,6 @@ final class MonitorAudio extends AudioCapture {
     // each app keeps 60 ms queued (its packets arrive unevenly); more than 200 ms is cut back to 80
     private static final int PRIME = AudioCapture.BYTES_PER_SECOND * 60 / 1000 / 4 * 4, MAX = AudioCapture.BYTES_PER_SECOND / 5,
             TRIM_TO = AudioCapture.BYTES_PER_SECOND * 80 / 1000 / 4 * 4;
-
-    /** Apps already told about (their sound stays on your desk). */
-    private static final Set<Long> TOLD = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private final SourceInfo source;
     private final boolean hearInGame;
@@ -71,16 +68,11 @@ final class MonitorAudio extends AudioCapture {
                             titles.putIfAbsent(w.pid(), w.title());
                         }
                     }
-                    // an app that also has a window on your desk (your browser open on both): its
-                    // sound can't be split by window, so it stays where you are — on your desk —
-                    // never pulled away from you onto the monitor
+                    // an app with windows in several places — monitors, your desk — is heard where it
+                    // was last used (Windows can't split one program's sound by window)
                     Set<Long> onDesk = new HashSet<>();
                     for (MonitorBackend.Win w : b.deskWindows().get(5, java.util.concurrent.TimeUnit.SECONDS)) onDesk.add(w.pid());
-                    for (Long pid : pids) {
-                        if (onDesk.contains(pid) && TOLD.add(pid)) InGameMonitors.sharedAppSound(titles.getOrDefault(pid, "That app"));
-                    }
-                    pids.removeAll(onDesk);
-                    // a program on another monitor too (Brave on two of them): heard from just one
+                    SoundHome.seenOnDesk(onDesk);
                     SoundHome.seen(source.id(), pids);
                     pids.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));
                     update(pids);

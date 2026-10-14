@@ -54,8 +54,8 @@ public interface MonitorBackend {
         default void seatMoved(int index) {}
         /** Pointing, with an app on the monitor in front (you clicked it): your key, for the game ({@code vk} Windows' key code). */
         default void gameKey(int vk, int scancode, boolean down) {}
-        /** A blank window of a browser open elsewhere too opened on monitor {@code index}: it gets its own copy of that browser instead. */
-        default void ownBrowser(int index, long pid) {}
+        /** Your desk browser closed and reopened for a moment, so a monitor's own copy got your sign-ins. */
+        default void deskRestarted(String exe) {}
     }
 
     CompletableFuture<Driver> status();
@@ -101,6 +101,12 @@ public interface MonitorBackend {
 
     /** "The game is still here" while seated or pointing. */
     void beat();
+
+    /** Which wall this monitor is (its own browser copies are kept per wall). */
+    default void profileKey(Mon m, String key) {}
+
+    /** The monitor's own copy of that browser (made from your profile the first time) opens on it. */
+    default CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) { return CompletableFuture.completedFuture(false); }
 
     /**
      * Your real cursor goes onto that monitor while the game keeps the keyboard (Alt-pointing at

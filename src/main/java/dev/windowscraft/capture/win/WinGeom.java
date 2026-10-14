@@ -187,7 +187,10 @@ public final class WinGeom {
      * of it: {x, y, width, height} from the inside's top left, then the inside's own {width,
      * height}; physical pixels. Null if it can't be told.
      */
-    public static int[] visibleClient(long handle) {
+    public static int[] visibleClient(long handle) { return visibleClient(handle, true); }
+
+    /** As above; {@code workArea}: also keep clear of where the taskbar lives when it isn't showing right now. */
+    public static int[] visibleClient(long handle, boolean workArea) {
         if (!WINDOWS || handle == 0) return null;
         try {
             dpiAware();
@@ -223,7 +226,7 @@ public final class WinGeom {
             }
             // and never under where your taskbar lives, shown or not at this moment (it comes up
             // over the game whenever the game isn't in front — as while you sit at a monitor)
-            try {
+            if (workArea) try {
                 var mon = com.sun.jna.platform.win32.User32.INSTANCE.MonitorFromWindow(game, 2); // MONITOR_DEFAULTTONEAREST
                 var mi = new com.sun.jna.platform.win32.WinUser.MONITORINFO();
                 if (com.sun.jna.platform.win32.User32.INSTANCE.GetMonitorInfo(mon, mi).booleanValue()) {

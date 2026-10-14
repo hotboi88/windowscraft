@@ -157,12 +157,15 @@ one of your real screens instead, as before.
   open it from your own Start menu or taskbar while it's on a monitor, and it comes back to your
   desk the same way.
 - **Store apps** (Calculator, Settings…) open on the monitor you open them from, like any app.
-- **Each monitor's sound is its own**: a monitor plays only what's on it — never your desk's
-  sound, never another monitor's. Open your browser on a monitor while it's open on your desk too,
-  and the monitor gets its own copy of that browser (its own program, so its own sound; sign in
-  to it once, it remembers). A window a link opens there keeps its page; that one shares your
-  desk browser's sound, which stays on your desk ("Own Brave/Chrome/Edge" in the monitor's menu
-  gives it its own).
+- **Each monitor's sound is its own — never mixed**: a monitor plays only what's on it, never
+  another monitor's sound or your desk's. Windows only knows sound per program, so a browser
+  (Brave, Chrome, Edge, Vivaldi) opened on an in-game monitor is that monitor's own copy of it:
+  its own program, so its own sound, and every window and tab in it plays from that monitor, all
+  at once. It's made from your own browser profile — sign-ins, passwords, bookmarks, extensions —
+  so there's nothing to sign in to. The first time a monitor gets its copy, your desk browser
+  closes for a moment and reopens with its tabs (it keeps your sign-ins locked while it runs);
+  never again for that monitor. A link opened on the monitor opens in its copy too. Any other app
+  open in several places at once plays from wherever you last used it (never from two places).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.
   (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
   while in-game monitors are on it starts with your normal rights instead — no permission
