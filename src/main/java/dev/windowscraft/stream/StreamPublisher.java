@@ -522,7 +522,12 @@ public final class StreamPublisher {
                 // delay to the encoder's output: 17.6/55/61 ms → 3.3/6.6/12.5 ms (CPU path), and
                 // lip sync on viewers didn't change (they play sound and picture separately)
                 "-max_interleave_delta", System.getProperty("windowscraft.exp.interleave", "1"),
-                "-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "pipe:1"));
+                "-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1",
+                // each picture's packet says how long it is (FFmpeg leaves video's out by default),
+                // so a viewer's TS reader passes it on without waiting for the next picture to
+                // start: one picture less of delay (pictures up to 64 KB; bigger ones wait as before)
+                "-omit_video_pes_length", StreamSubscriber.promptDecode() ? "0" : "1",
+                "pipe:1"));
         if (wantPreview) {
             cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
         }

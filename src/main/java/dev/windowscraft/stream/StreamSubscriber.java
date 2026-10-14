@@ -182,6 +182,11 @@ public final class StreamSubscriber implements FrameSource {
     // ---- a screen nobody looks at: only its sound is decoded ----
     /** When the game last asked for a picture (it only asks while one of the walls is drawn). */
     private volatile long lastTakenNanos = System.nanoTime();
+
+    /** Pictures through FFmpeg without its picture-counted waits (see the decoder's command). */
+    public static boolean promptDecode() {
+        return !"false".equals(System.getProperty("windowscraft.promptDecode"));
+    }
     /** This long without being asked: the picture side pauses (the sound goes on, from the wall). */
     private static final long HIDDEN_NANOS = 2_000_000_000L;
     private static final dev.windowscraft.measure.Measure.Counter PAUSED_BYTES = dev.windowscraft.measure.Measure.counter("view.hidden_video_skipped",
@@ -274,14 +279,24 @@ public final class StreamSubscriber implements FrameSource {
         ServerSocket audioListen = track(Proc.loopbackListener());
         audioListen.setReceiveBufferSize(32 * 1024); // no room for a hidden audio backlog
         boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        // Each picture to the decoder as soon as it's in, and out as soon as it's decoded. FFmpeg's
+        // H.264 splitter would hold every picture until the next one starts (the stream already
+        // comes one whole picture per packet), and with the sender's packet lengths
+        // (StreamPublisher) the TS reader doesn't wait for the next one either. Those waits were
+        // counted in pictures, about three of them: 64 ms at 60 pictures/s but 114 ms at 30 and
+        // 315 ms at 10 — and pictures only come when the screen changes. Measured outside the game:
+        // 114 → 48 ms at 30/s, decoded pictures bit-identical. windowscraft.promptDecode=false: the
+        // old way (on this PC as a viewer and as a sharer).
+        boolean prompt = promptDecode();
         List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
-                "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "500000"));
+                "-fflags", prompt ? "nobuffer+noparse+nofillin" : "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "500000"));
         // (Step 0 experiment, dev only: windowscraft.exp.hwaccel = none / auto / d3d11va / cuda …)
         String hw = System.getProperty("windowscraft.exp.hwaccel", "auto");
         if (windows && !hw.equals("none")) cmd.addAll(List.of("-hwaccel", hw));
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
                 "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
+                "-flush_packets", prompt ? "1" : "-1",
                 "-f", "rawvideo", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
                 "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "tcp://127.0.0.1:" + audioListen.getLocalPort()));
         Process ff = Proc.start(cmd, "ffmpeg-dec");

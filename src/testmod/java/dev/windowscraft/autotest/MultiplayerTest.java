@@ -381,8 +381,11 @@ public final class MultiplayerTest implements ClientModInitializer {
             check(mc, sub != null && sub.framesDecoded() > 200, "viewer decoded > 200 frames (" + (sub == null ? 0 : sub.framesDecoded()) + ")");
             check(mc, sub != null && sub.audio().bytesPlayed() > 48000 * 4 * 5, "viewer received > 5 s of audio");
             double avg = syncOffsets.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
-            log(String.format("A/V offset over %d beeps: avg %.0f ms (positive = sound after picture), samples %s", syncOffsets.size(), avg,
-                    syncOffsets.subList(0, Math.min(12, syncOffsets.size()))));
+            // (the median too: a beep matched to the wrong flash, ±0.5–1 s, drags the average)
+            double median = syncOffsets.stream().mapToDouble(Double::doubleValue).sorted()
+                    .skip(Math.max(0, (syncOffsets.size() - 1) / 2)).findFirst().orElse(Double.NaN);
+            log(String.format("A/V offset over %d beeps: avg %.0f ms, median %.0f ms (positive = sound after picture), samples %s", syncOffsets.size(), avg,
+                    median, syncOffsets.subList(0, Math.min(12, syncOffsets.size()))));
             check(mc, syncOffsets.size() >= 5 && Math.abs(avg) < 250, "audio and video within 250 ms of each other");
             check(mc, ctrlTick > 0, "Bob was allowed to use Alice's wall");
             shot(mc, "mp_viewer_end");
