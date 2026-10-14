@@ -1,0 +1,33 @@
+# Does Sandboxie-Plus give each in-game monitor its own copies of apps, hidden and kept? (tools/sandbox/probe.ps1)
+name: Sandbox probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/sandbox/**'
+      - '.github/workflows/sandbox-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Sandboxie-Plus
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\sbie" | Out-Null
+          gh release download -R sandboxie-plus/Sandboxie -p "Sandboxie-Plus-x64-v*.exe" -D "$env:RUNNER_TEMP\sbie"
+          Get-ChildItem "$env:RUNNER_TEMP\sbie"
+      - name: Probe
+        shell: pwsh
+        run: tools/sandbox/probe.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-probe
+          path: out/
