@@ -11,6 +11,46 @@ function Check($name, $ok, $detail) {
 }
 function Note($s) { Add-Content $report "     $s"; Write-Host "     $s" }
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+# Window titles read without asking the window (Get-Process's MainWindowTitle asks it, and waits
+# forever if that app hangs): visible top-level windows, by process.
+Add-Type -TypeDefinition @"
+using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+public static class Wins {
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int InternalGetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+    public static List<object[]> All() {
+        var r = new List<object[]>();
+        EnumWindows((h, l) => {
+            if (!IsWindowVisible(h)) return true;
+            var sb = new StringBuilder(512); InternalGetWindowText(h, sb, 512);
+            if (sb.Length == 0) return true;
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            r.Add(new object[] { (int)pid, sb.ToString(), h });
+            return true;
+        }, IntPtr.Zero);
+        return r;
+    }
+    public static void Close(IntPtr h) { PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+}
+"@
+# like Get-Process, but only processes with a titled window: Id, ProcessName, MainWindowTitle, Hwnd
+function Procs([string[]]$names) {
+    $seen = @{}
+    foreach ($w in [Wins]::All()) {
+        $id = [int]$w[0]
+        if ($seen.ContainsKey($id)) { continue }
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if (-not $p) { continue }
+        if ($names -and -not ($names -contains $p.ProcessName)) { continue }
+        $seen[$id] = 1
+        [pscustomobject]@{ Id = $id; ProcessName = $p.ProcessName; MainWindowTitle = [string]$w[1]; Hwnd = $w[2] }
+    }
+}
+function Section($s) { Write-Host "== $s (at $((Get-Date).ToString('HH:mm:ss')))" }
 function Shot($name) {
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -19,6 +59,7 @@ function Shot($name) {
 }
 
 # ---- 1. silent install
+Section '1. silent install'
 $inst = Get-ChildItem "$env:RUNNER_TEMP\sbie\*.exe" | Select-Object -First 1
 Note "installer: $($inst.Name)"
 $t0 = Get-Date
@@ -38,6 +79,7 @@ foreach ($r in $hklmRun) { Remove-ItemProperty HKLM:\Software\Microsoft\Windows\
 Note "HKLM autostart entries removed: $(($hklmRun | ForEach-Object Name) -join ',')"
 
 # ---- 2. two boxes, configured without the UI: no border, no [#] in titles, kept (not deleted)
+Section '2. two boxes, configured without the UI: no border, n'
 $ini = "$dir\SbieIni.exe"
 Check "the config tool is there" (Test-Path $ini) $ini
 foreach ($b in "WCMon1", "WCMon2") {
@@ -54,6 +96,7 @@ Note "WCMon1 BoxNameTitle = $q"
 Note "Sandboxie.ini: $((Get-Content C:\Windows\Sandboxie.ini -ErrorAction SilentlyContinue) -join ' | ')"
 
 # ---- 3. a little "site": sets a sign-in cookie; its page title shows what cookie it got
+Section '3. a little "site": sets a sign-in cookie; its page t'
 $port = 18080
 $server = Start-Job -ScriptBlock {
     param($port)
@@ -70,7 +113,7 @@ $server = Start-Job -ScriptBlock {
 Start-Sleep 2
 $edge = @("C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "C:\Program Files\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 $flags = "--no-first-run --no-default-browser-check --disable-features=msEdgeWelcomePage"
-function Titles { Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.Id):$($_.MainWindowTitle)" } }
+function Titles { Procs msedge | ForEach-Object { "$($_.Id):$($_.MainWindowTitle)" } }
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices; using System.Text;
 public static class Sbie {
@@ -86,7 +129,7 @@ public static class Sbie {
 function IniNow() { (Get-Content C:\Windows\Sandboxie.ini -ErrorAction SilentlyContinue | Where-Object { $_ -match '^(\[|Force|Breakout)' }) -join ' | ' }
 function BoxOf($id) { try { [Sbie]::BoxOf($id) } catch { "?" } }
 function BoxPids($b) { Get-Process msedge, powershell -ErrorAction SilentlyContinue | Where-Object { (BoxOf $_.Id) -eq $b } | ForEach-Object Id }
-function BoxWins($b) { Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and (BoxOf $_.Id) -eq $b } }
+function BoxWins($b) { Procs msedge | Where-Object { (BoxOf $_.Id) -eq $b } }
 function WaitBox($b, $pattern, $sec) { $t = (Get-Date).AddSeconds($sec); while ((Get-Date) -lt $t) { $w = BoxWins $b | Where-Object { $_.MainWindowTitle -match $pattern }; if ($w) { return $w }; Start-Sleep 1 }; return $null }
 function WaitTitle($pattern, $sec) { $t = (Get-Date).AddSeconds($sec); while ((Get-Date) -lt $t) { $w = Titles | Where-Object { $_ -match $pattern }; if ($w) { return $w }; Start-Sleep 1 }; return $null }
 
@@ -101,6 +144,7 @@ $deskWin = [int]("$desk".Split(':')[0])
 Note "desk Edge window's box: '$(BoxOf $deskWin)' (empty = not boxed)"
 
 # ---- 4. Edge in box 1 and box 2, while your desk Edge keeps running
+Section '4. Edge in box 1 and box 2, while your desk Edge keep'
 & "$dir\Start.exe" /box:WCMon1 /silent $edge $flags.Split(' ') "http://127.0.0.1:$port/?probe=1"
 $null = WaitBox WCMon1 "wc\[" 40
 & "$dir\Start.exe" /box:WCMon2 /silent $edge $flags.Split(' ') "http://127.0.0.1:$port/?probe=2"
@@ -118,15 +162,16 @@ Check "a boxed window's title has no [#] marker" ($t1 -and $t1 -notmatch '\[#\]'
 Note "box 1 starts with your desk login: $(if ($t1 -match 'wclogin=desk') { 'yes' } else { 'no' }) ('$t1')"
 Shot "1-desk-and-two-boxes"
 $ui = Get-Process SandMan -ErrorAction SilentlyContinue
-$sbWins = Get-Process | Where-Object { $_.MainWindowTitle -match "Sandboxie" } | ForEach-Object { "$($_.ProcessName):$($_.MainWindowTitle)" }
+$sbWins = Procs | Where-Object { $_.MainWindowTitle -match "Sandboxie" } | ForEach-Object { "$($_.ProcessName):$($_.MainWindowTitle)" }
 Check "no Sandboxie window or app showed up" (-not $ui -and -not $sbWins) "SandMan: $([bool]$ui); windows: $($sbWins -join ',')"
 
 # ---- 5. a login made in box 1 stays in box 1: after closing it, and only there
+Section '5. a login made in box 1 stays in box 1: after closin'
 & "$dir\Start.exe" /box:WCMon1 /silent $edge "http://127.0.0.1:$port/?login=mon1"
 $null = WaitBox WCMon1 "login=mon1" 20
 Start-Sleep 3
 # closed the way you'd close it (as the monitor turning off does), not killed: it saves what it has
-foreach ($w in BoxWins WCMon1) { $null = $w.CloseMainWindow() }
+foreach ($w in BoxWins WCMon1) { [Wins]::Close($w.Hwnd) }
 $t = (Get-Date).AddSeconds(15); while ((Get-Date) -lt $t -and (BoxPids WCMon1)) { Start-Sleep 1 }
 Note "box 1 closed by itself: $(-not (BoxPids WCMon1))"
 & "$dir\Start.exe" /box:WCMon1 /terminate | Out-Null
@@ -144,6 +189,7 @@ $m2 = WaitBox WCMon2 "mon2check" 25
 Check "…nor monitor 2's (each box keeps its own logins)" ($m2 -and -not ("$($m2.MainWindowTitle)" -match 'wclogin=mon1')) "box 2: $((BoxWins WCMon2 | ForEach-Object MainWindowTitle) -join ' ; ')"
 
 # ---- 6. an app that only runs once (named mutex): a second copy in a box
+Section '6. an app that only runs once (named mutex): a second'
 $single = @'
 $m = New-Object System.Threading.Mutex($false, "Local\WindowsCraftSingleTest")
 if (-not $m.WaitOne(0)) { exit 7 }
@@ -159,6 +205,7 @@ $code = $LASTEXITCODE
 Check "an app that only runs once runs again inside a box (a second copy)" ($b2.ExitCode -eq 7 -and $code -ne 7) "outside: $($b2.ExitCode), in box: $code"
 
 # ---- 8. "force" rules: anything started while you sit at monitor 1 lands in its box by itself
+Section '8. "force" rules: anything started while you sit at m'
 #         (switched on and off as you sit down and get up)
 & "$dir\Start.exe" /terminate_all | Out-Null
 Start-Sleep 2
@@ -171,7 +218,7 @@ Note "turning the force rule on took $ms ms"
 $before = (Get-Process msedge -ErrorAction SilentlyContinue).Id
 Start-Process $edge -ArgumentList "$flags http://127.0.0.1:$port/?forced=1"   # (as if from the monitor's own Start menu)
 Start-Sleep 8
-$forced = Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match "forced=1" }
+$forced = Procs msedge | Where-Object { $_.MainWindowTitle -match "forced=1" }
 Check "with the force rule on, an app started the normal way opens in monitor 1's box by itself" ($forced -and (BoxOf $forced[0].Id) -eq "WCMon1") "$($forced | ForEach-Object { "$($_.Id) box '$(BoxOf $_.Id)': $($_.MainWindowTitle)" })"
 $np = Start-Process notepad -PassThru; Start-Sleep 3
 Note "notepad started then: box '$(BoxOf $np.Id)'"
@@ -185,10 +232,11 @@ Note "turning it off took $([int]((Get-Date) - $t0).TotalMilliseconds) ms; confi
 $np = Start-Process notepad -PassThru; Start-Sleep 3
 Check "with it off again, apps start normally (on your desk)" ((BoxOf $np.Id) -eq "") "notepad box '$(BoxOf $np.Id)'"
 $np | Stop-Process -Force -ErrorAction SilentlyContinue
-foreach ($w in BoxWins WCMon1) { $null = $w.CloseMainWindow() }
+foreach ($w in BoxWins WCMon1) { [Wins]::Close($w.Hwnd) }
 Start-Sleep 5
 
 # ---- 10. exceptions while the force rule is on: programs that must never be boxed
+Section '10. exceptions while the force rule is on: programs th'
 #          (Sandboxie's own tools, WindowsCraft's helpers, games with anti-cheat, apps you picked)
 #          The rules are written straight into Sandboxie.ini and reloaded through Sandboxie's own
 #          programming interface (as WindowsCraft's helper does), never by starting its tools.
@@ -221,11 +269,11 @@ function StartGui($exe, $t) {
     $stem = [IO.Path]::GetFileNameWithoutExtension($exe)
     $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
     $w = $null; $end = (Get-Date).AddSeconds(12)
-    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Select-Object -First 1 }
+    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Procs | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Select-Object -First 1 }
     if (-not $w) { return "no window" }
     $b = BoxOf $w.Id
     Note "($stem → box '$b', window title '$($w.MainWindowTitle)')"
-    Get-Process | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Procs | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
     return $b
 }
 $n0 = StartGui "C:\wcforce\wcapp_a.exe" "wc-plain"
@@ -252,11 +300,13 @@ $z = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-after"
 Check "with the rules removed, nothing is boxed any more" ($z -eq "") "box '$z'"
 
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
+Section '9. the installer: its signature and fingerprint (to c'
 $sig = Get-AuthenticodeSignature $inst.FullName
 Note "installer signature: $($sig.Status) by $($sig.SignerCertificate.Subject)"
 Note "installer sha256: $((Get-FileHash $inst.FullName -Algorithm SHA256).Hash)"
 
 # ---- 7. where the boxes keep things, and their size
+Section '7. where the boxes keep things, and their size'
 $root = "C:\Sandbox"
 if (Test-Path $root) {
     Get-ChildItem $root -Directory -Recurse -Depth 1 | ForEach-Object { Note "box folder $($_.FullName): $([int]((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB)) MB" }
