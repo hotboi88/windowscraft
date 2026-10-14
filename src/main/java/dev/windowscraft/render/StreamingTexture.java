@@ -81,6 +81,96 @@ public final class StreamingTexture extends AbstractTexture {
     private static final boolean SAME_FRAME = Boolean.getBoolean("windowscraft.exp.sameFrame");
     private boolean pendingRemote;
 
+    // ---- copying on arrival: the render thread sets a free buffer slot aside; the pump copies the
+    // newest picture into it the moment one arrives (not when the next frame asks for it), so the
+    // frame after that only hands it to the graphics card — about one frame sooner on the wall,
+    // and the render thread never waits. (windowscraft.copyOnArrival=false: the old way.)
+    private static final boolean ON_ARRIVAL = !"false".equals(System.getProperty("windowscraft.copyOnArrival"));
+    private record Armed(int slot, ByteBuffer target, int width, int height) {}
+    private record Filled(int slot, boolean opaque, long captureNanos, boolean remote) {}
+    private final java.util.concurrent.atomic.AtomicReference<Armed> armed = new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicReference<Filled> filled = new java.util.concurrent.atomic.AtomicReference<>();
+    /** A picture the pump couldn't use (a new size): the render thread takes it the old way. */
+    private final java.util.concurrent.atomic.AtomicReference<Frame> stash = new java.util.concurrent.atomic.AtomicReference<>();
+    private volatile FrameSource pumpSource;
+    private volatile long lastUpdateNanos;
+    private final Object pumpLock = new Object(); // (the pump never writes into a buffer being freed)
+    private static final java.util.Set<StreamingTexture> PUMPED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static volatile Thread pump;
+
+    private static void startPump() {
+        if (pump != null) return;
+        synchronized (PUMPED) {
+            if (pump != null) return;
+            Thread t = new Thread(StreamingTexture::pumpLoop, "WindowsCraft frame pump");
+            t.setDaemon(true);
+            pump = t;
+            t.start();
+        }
+    }
+
+    private static void pumpLoop() {
+        while (true) {
+            long now = System.nanoTime();
+            for (StreamingTexture t : PUMPED) {
+                // only walls drawn lately (one that's off screen isn't copied for nothing)
+                if (now - t.lastUpdateNanos > 250_000_000L) continue;
+                t.pumpOnce();
+            }
+            try {
+                Thread.sleep(1); // (1 ms: the JVM raises Windows' timer for short sleeps)
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
+    }
+
+    /** Pump thread: the newest picture into the slot set aside, if there is one. */
+    private void pumpOnce() {
+        FrameSource src = pumpSource;
+        if (src == null || armed.get() == null || stash.get() != null) return;
+        Frame f = src.takeFrame();
+        if (f == null) return;
+        synchronized (pumpLock) {
+            Armed a = armed.get();
+            if (a == null || f.width != a.width() || f.height != a.height()) {
+                if (!stash.compareAndSet(null, f)) src.recycle(f); // (a new size: the render thread sets it up)
+                return;
+            }
+            try {
+                long c0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
+                ByteBuffer target = a.target().duplicate();
+                f.data.position(0).limit(a.width() * a.height() * 4);
+                target.put(f.data);
+                f.data.position(0);
+                COPY.since(c0);
+                armed.set(null);
+                filled.set(new Filled(a.slot(), !f.alphaValid, f.captureNanos, src instanceof dev.windowscraft.stream.StreamSubscriber));
+            } finally {
+                src.recycle(f);
+            }
+        }
+    }
+
+    /** Render thread: set a free slot aside for the pump (if none is). */
+    private void arm() {
+        if (!ON_ARRIVAL || plain || pbo == 0 || mapped == null || armed.get() != null || filled.get() != null) return;
+        int slot = freeSlot();
+        if (slot < 0) return;
+        ByteBuffer dst = mapped.duplicate();
+        dst.position(slot * frameBytes).limit(slot * frameBytes + frameBytes);
+        armed.set(new Armed(slot, dst.slice(), width, height));
+        PUMPED.add(this);
+        startPump();
+    }
+
+    /** Render thread: take back a slot set aside (before using slots the old way, or freeing them). */
+    private void disarm() {
+        synchronized (pumpLock) {
+            armed.set(null);
+        }
+    }
+
     @Override public void load(ResourceManager manager) {}
     @Override public void setFilter(boolean bilinear, boolean mipmap) {}
 
@@ -121,6 +211,20 @@ public final class StreamingTexture extends AbstractTexture {
             source.recycle(f);
             return true;
         }
+        lastUpdateNanos = System.nanoTime();
+        pumpSource = source;
+        // a picture the pump copied on arrival: straight to the graphics card
+        Filled fl = filled.getAndSet(null);
+        if (fl != null) {
+            pendingSlot = fl.slot();
+            pendingOpaque = fl.opaque();
+            pendingCapture = fl.captureNanos();
+            pendingRemote = fl.remote();
+            transfer();
+            arm();
+            return true;
+        }
+        if (pending == null && armed.get() != null && stash.get() == null) return false; // (the pump has it)
         if (pending != null) {
             if (!pending.isDone()) { // the copy of the previous frame is still running
                 COPY_WAIT.inc();
@@ -133,10 +237,20 @@ public final class StreamingTexture extends AbstractTexture {
                 WindowsCraftClient.LOGGER.warn("Frame copy failed", e);
             }
             pending = null;
+            // from here on the pump brings new pictures (unless one in a new size is waiting)
+            if (ON_ARRIVAL && !plain && pbo != 0 && stash.get() == null) {
+                arm(); // (no free slot yet: the next frame tries again)
+                return true;
+            }
         }
         if (source == null) return false;
-        Frame f = source.takeFrame();
-        if (f == null) return false;
+        disarm();
+        Frame stashed = stash.getAndSet(null);
+        Frame f = stashed != null ? stashed : source.takeFrame();
+        if (f == null) {
+            arm();
+            return false;
+        }
         if (f.width != width || f.height != height || pbo == 0) allocate(f.width, f.height);
         if (plain) { // the driver refused the mapping: plain uploads for this screen from now on
             fallback.upload(f);
@@ -264,6 +378,9 @@ public final class StreamingTexture extends AbstractTexture {
     }
 
     private void freeGpu() {
+        disarm();
+        filled.set(null);
+        PUMPED.remove(this);
         if (pending != null) {
             try { pending.get(); } catch (Exception ignored) {} // never unmap under a running copy
             pending = null;
