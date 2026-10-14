@@ -2693,8 +2693,13 @@ fn tidy_taskbars() {
             if GetWindowRect(tray, &mut tr).is_err() {
                 continue;
             }
-            let (cx, cy) = ((tr.left + tr.right) / 2, (tr.top + tr.bottom) / 2);
-            let Some(a) = rects.iter().find(|a| cx >= a.left && cx < a.right && cy >= a.top && cy < a.bottom) else { continue };
+            // its monitor: the one of ours it covers most (a taskbar pushed half off its monitor
+            // has its middle right on the edge)
+            let overlap = |a: &RECT| ((tr.right.min(a.right) - tr.left.max(a.left)).max(0) as i64) * ((tr.bottom.min(a.bottom) - tr.top.max(a.top)).max(0) as i64);
+            let Some(a) = rects.iter().filter(|a| overlap(a) > 0).max_by_key(|a| overlap(a)) else { continue };
+            if IsWindowVisible(tray).as_bool() {
+                fix_misplaced_tray(tray, &tr, a);
+            }
             let full = apps.iter().any(|&h| is_full_screen(h, a));
             let mut hidden = hidden_trays().lock().unwrap();
             if full && IsWindowVisible(tray).as_bool() && !hidden.contains(&(tray.0 as isize)) {
@@ -2709,6 +2714,46 @@ fn tidy_taskbars() {
         }
     }
 }
+
+static TRAY_FIXED: Mutex<Option<HashMap<isize, (Instant, u32)>>> = Mutex::new(None);
+
+/// A monitor's taskbar must lie along its monitor's edge, its full width, entirely on it. Windows
+/// sometimes leaves it where an earlier layout had it (after monitors are joined, moved or change
+/// size): half off the bottom, too narrow, sticking out. Then Windows is asked to lay its
+/// taskbars out again; if that doesn't do it, the taskbar is put in place directly.
+fn fix_misplaced_tray(tray: HWND, tr: &RECT, a: &RECT) {
+    let (h, w) = (tr.bottom - tr.top, tr.right - tr.left);
+    let full_width = (tr.left - a.left).abs() <= 1 && (tr.right - a.right).abs() <= 1;
+    let full_height = (tr.top - a.top).abs() <= 1 && (tr.bottom - a.bottom).abs() <= 1;
+    let along = (full_width && ((tr.bottom - a.bottom).abs() <= 1 || (tr.top - a.top).abs() <= 1))
+        || (full_height && ((tr.left - a.left).abs() <= 1 || (tr.right - a.right).abs() <= 1));
+    let inside = tr.left >= a.left - 1 && tr.top >= a.top - 1 && tr.right <= a.right + 1 && tr.bottom <= a.bottom + 1;
+    if (along && inside) || h <= 0 || w <= 0 {
+        return;
+    }
+    let key = tray.0 as isize;
+    let mut fixed = TRAY_FIXED.lock().unwrap();
+    let m = fixed.get_or_insert_with(HashMap::new);
+    let (last, tries) = m.get(&key).copied().unwrap_or((Instant::now() - Duration::from_secs(60), 0));
+    if last.elapsed() < Duration::from_millis(1500) {
+        return;
+    }
+    m.insert(key, (Instant::now(), tries + 1));
+    drop(fixed);
+    eprintln!("info=a monitor's taskbar is out of place ({} on a monitor at {}): {}", rect_str(tr), rect_str(a),
+        if tries % 2 == 0 { "Windows asked to lay it out again" } else { "putting it in place" });
+    if tries % 2 == 0 {
+        tell_taskbar();
+        return;
+    }
+    // along the bottom (where Windows puts it), its own height — never taller than a quarter of the screen
+    let th = (if w >= h { h } else { 48 }).clamp(24, ((a.bottom - a.top) / 4).max(24));
+    unsafe {
+        let _ = SetWindowPos(tray, None, a.left, a.bottom - th, a.right - a.left, th, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+    }
+}
+
+fn rect_str(r: &RECT) -> String { format!("[{},{} {}×{}]", r.left, r.top, r.right - r.left, r.bottom - r.top) }
 
 static STRAY_TRAYS: std::sync::LazyLock<Mutex<std::collections::HashSet<isize>>> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 static STRAY_TOLD: Mutex<Option<Instant>> = Mutex::new(None);

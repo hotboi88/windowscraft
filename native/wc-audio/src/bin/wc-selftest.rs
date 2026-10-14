@@ -737,6 +737,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     rep.check("joined monitors sit edge to edge (B right of A)", rb.left == ra.right && rb.top == ra.top,
         format!("{r:?} → A {} B {}", fmt(&ra), fmt(&rb)));
     rep.check("…and still don't touch your screens", !touches_real(&ra) && !touches_real(&rb), format!("A {} B {}", fmt(&ra), fmt(&rb)));
+    sleep(1500);
+    taskbars_in_place(rep, &h, "right after joining");
     shot("2-joined-monitors");
 
     // sitting at A: the cursor goes on to B (dragging a window across works)
@@ -1295,6 +1297,24 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         rep.check(&format!("  {w}×{hh} keeps clear of your screens"), !touches_real(&rb), fmt(&rb));
     }
     rep.line(format!("     cursor/text size per resolution: {}", sizes.join(" · ")));
+    // after all those changes: each monitor's taskbar lies whole along its own monitor's edge
+    sleep(1500);
+    taskbars_in_place(rep, &h, "after joining, resolution changes and moving monitors");
+    // pushed half off its monitor on purpose (as Windows sometimes leaves it): put back by itself
+    if let Some(rb2) = now_rect(&h, b.idx) {
+        if let Some(tb) = taskbar_on(&rb2) {
+            let r = rect_of(tb);
+            let th = r.bottom - r.top;
+            unsafe {
+                let _ = SetWindowPos(tb, None, r.left, rb2.bottom - th / 2, r.right - r.left, th, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            sleep(300);
+            let moved = rect_of(tb);
+            let back = wait_for(6000, || { let t = rect_of(tb); t.bottom <= rb2.bottom && t.top >= rb2.top && t.left == rb2.left && t.right == rb2.right });
+            rep.check("a monitor's taskbar pushed half off its monitor goes back in place by itself", moved.bottom > rb2.bottom && back,
+                format!("pushed to {}, now {} (monitor {})", fmt(&moved), fmt(&rect_of(tb)), fmt(&rb2)));
+        }
+    }
 
     // ---- 12. your camera never flings: the helper moving the cursor isn't your mouse moving
     let rb = now_rect(&h, b.idx).unwrap_or(rb);
@@ -1668,6 +1688,35 @@ fn taskbar_on(r: &RECT) -> Option<HWND> {
         after = Some(h);
     }
     found
+}
+
+/// Every in-game monitor's taskbar: whole, along its own monitor's edge, its full width.
+fn taskbars_in_place(rep: &mut Report, h: &Helper, when: &str) {
+    let mut bad = Vec::new();
+    let mut n = 0;
+    for m in rects(h) {
+        let a = now_rect(h, m.idx).unwrap_or(m.r);
+        let Some(tb) = taskbar_on(&a).or_else(|| {
+            // (half off: its middle may be just past the edge)
+            let class = wide("Shell_SecondaryTrayWnd");
+            let mut after: Option<HWND> = None;
+            loop {
+                let t = unsafe { FindWindowExW(None, after, PCWSTR(class.as_ptr()), PCWSTR::null()) }.unwrap_or_default();
+                if t.0.is_null() { return None; }
+                let r = rect_of(t);
+                if r.left < a.right && r.right > a.left && r.top < a.bottom && r.bottom > a.top { return Some(t); }
+                after = Some(t);
+            }
+        }) else { continue };
+        if unsafe { !IsWindowVisible(tb).as_bool() } { continue; }
+        n += 1;
+        let r = rect_of(tb);
+        let ok = r.left == a.left && r.right == a.right && r.top >= a.top && r.bottom <= a.bottom && (r.bottom == a.bottom || r.top == a.top);
+        if !ok {
+            bad.push(format!("monitor {} at {}: taskbar at {}", m.idx, fmt(&a), fmt(&r)));
+        }
+    }
+    rep.check(&format!("every monitor's taskbar lies whole along its own monitor ({when})"), bad.is_empty() && n > 0, format!("{n} taskbars; {bad:?}"));
 }
 
 fn has_taskbar_on(r: &RECT) -> bool {
