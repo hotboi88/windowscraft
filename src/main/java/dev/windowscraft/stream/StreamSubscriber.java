@@ -513,7 +513,7 @@ public final class StreamSubscriber implements FrameSource {
                         }
                         continue;
                     }
-                    if (holdNanos > 0 || !held.isEmpty()) {
+                    if ((holdNanos > 0 || !held.isEmpty()) && splitter.videoPid() >= 0) {
                         // lip sync: the pictures wait their turn; sound and tables go on now
                         int vpid = splitter.videoPid();
                         byte[] rest = TsSplitter.without(c.data(), vpid), pictures = TsSplitter.only(c.data(), vpid);

@@ -132,6 +132,7 @@ public final class Nv12Converter {
      */
     static boolean convert(int luma, int chroma, int target, int w, int h) {
         if (state != State.READY) return false;
+        if (!checkedFirst) for (int i = 0; i < 16 && GL11.glGetError() != GL11.GL_NO_ERROR; i++) { /* (others' errors: not ours to judge by) */ }
         // what's bound and set now (put back exactly, below)
         int prevProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
         int prevDraw = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
