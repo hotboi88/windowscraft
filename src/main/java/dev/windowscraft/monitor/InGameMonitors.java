@@ -443,11 +443,79 @@ public final class InGameMonitors {
         } catch (java.io.IOException e) {
             return CompletableFuture.completedFuture(false);
         }
+        seedOnce(file, dir);
         String params = file.equals("firefox.exe")
                 ? "-no-remote -new-instance -profile \"" + dir + "\""
                 : "--user-data-dir=\"" + dir + "\" --no-first-run --no-default-browser-check --new-window";
         guardFocus();
         return backend().launch(m, exe, params, file);
+    }
+
+    /** Profiles whose sign-ins are still to come over (your desk browser had them locked). */
+    private static final Map<java.nio.file.Path, List<java.nio.file.Path>> SEED_PENDING = new java.util.concurrent.ConcurrentHashMap<>();
+    private static volatile boolean seedWatcher;
+
+    /**
+     * A monitor's new copy of your browser starts out with your sign-ins, passwords, bookmarks and
+     * extensions (once, when it's made). What your open desk browser keeps locked (its sign-in
+     * cookies) follows the next time that browser isn't running.
+     */
+    private static void seedOnce(String exeFile, java.nio.file.Path dir) {
+        if (java.nio.file.Files.exists(dir.resolve("Local State"))) return; // (made before: it's its own now)
+        java.nio.file.Path from = ProfileSeed.userData(exeFile);
+        if (from == null) return;
+        try {
+            ProfileSeed.Result r = ProfileSeed.seed(from, dir);
+            WindowsCraftClient.LOGGER.info("The monitor's own {} starts with your profile: {} files copied{}", exeFile, r.copied(),
+                    r.locked().isEmpty() ? "" : "; in use right now (they follow once it's closed): " + ProfileSeed.names(from, r.locked()));
+            if (!r.locked().isEmpty()) {
+                SEED_PENDING.put(dir, new java.util.ArrayList<>(r.locked()));
+                PENDING_FROM.put(dir, from);
+                PENDING_EXE.put(dir, exeFile);
+                boolean cookies = r.locked().stream().anyMatch(f -> f.getFileName().toString().equalsIgnoreCase("Cookies"));
+                if (cookies) {
+                    MinecraftClient mc = MinecraftClient.getInstance();
+                    mc.execute(() -> hint(mc, "Your passwords, bookmarks and extensions came over to this monitor's browser. "
+                            + "Your logged-in sites follow the next time the browser is closed everywhere."));
+                }
+                startSeedWatcher();
+            }
+        } catch (Exception e) {
+            WindowsCraftClient.LOGGER.warn("Couldn't copy your browser profile for the monitor", e);
+        }
+    }
+
+    private static final Map<java.nio.file.Path, java.nio.file.Path> PENDING_FROM = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<java.nio.file.Path, String> PENDING_EXE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static synchronized void startSeedWatcher() {
+        if (seedWatcher) return;
+        seedWatcher = true;
+        Thread t = new Thread(() -> {
+            while (!SEED_PENDING.isEmpty()) {
+                try {
+                    Thread.sleep(20_000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                for (var e : new java.util.ArrayList<>(SEED_PENDING.entrySet())) {
+                    String exe = PENDING_EXE.get(e.getKey());
+                    if (running(exe)) continue; // (either copy open: its files are locked)
+                    if (ProfileSeed.retry(PENDING_FROM.get(e.getKey()), e.getKey(), e.getValue())) {
+                        WindowsCraftClient.LOGGER.info("The monitor's own {} now has your sign-ins too", exe);
+                        SEED_PENDING.remove(e.getKey());
+                    }
+                }
+            }
+            seedWatcher = false;
+        }, "WindowsCraft profile copy");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static boolean running(String exeFile) {
+        return ProcessHandle.allProcesses().anyMatch(p -> p.info().command()
+                .map(c -> c.toLowerCase(java.util.Locale.ROOT).endsWith("\\" + exeFile) || c.toLowerCase(java.util.Locale.ROOT).endsWith("/" + exeFile)).orElse(false));
     }
 
     public static void sendHome(long hwnd) {
