@@ -1631,7 +1631,9 @@ fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND,
     let _ = std::fs::create_dir_all(&profile);
     let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
     let r = h.call(&format!("launch\t{}\t{e}\t--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank\tmsedge.exe", a.idx, profile.display()), "launched", 10000);
-    let Some(w) = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty()) else {
+    // (its browser window: not one of the little pop-ups Edge sometimes shows first)
+    let big = |w: &HWND| { let r = rect_of(*w); r.right - r.left >= 500 && r.bottom - r.top >= 350 };
+    let Some(w) = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty() && big(w)) else {
         rep.check("a full-screen browser keeps its monitor after Esc", false, format!("{r:?}: no Edge window"));
         return;
     };
