@@ -22,12 +22,28 @@ public final class TestPatternProducer implements FrameProducer {
 
     /** Reads the timing strip back from a decoded BGRA frame of any size; -1 if it isn't there. */
     public static long readTimestamp(byte[] bgra, int width, int height) {
+        return readStrip(width, height, (x, y) -> {
+            int o = (y * width + x) * 4;
+            return ((bgra[o] & 0xFF) + (bgra[o + 1] & 0xFF) + (bgra[o + 2] & 0xFF)) / 3;
+        });
+    }
+
+    /** The same from an NV12 frame (its brightness plane comes first). */
+    public static long readTimestampLuma(byte[] nv12, int width, int height) {
+        return readStrip(width, height, (x, y) -> lumaToLum(nv12[y * width + x]));
+    }
+
+    /** A video brightness byte (16–235) as 0–255. */
+    public static int lumaToLum(byte y) {
+        return Math.max(0, Math.min(255, ((y & 0xFF) - 16) * 255 / 219));
+    }
+
+    private static long readStrip(int width, int height, java.util.function.IntBinaryOperator lumAt) {
         long v = 0;
         for (int i = 0; i < TIMING_BITS; i++) {
             int x = (int) ((TIMING_X + i * TIMING_W + TIMING_W / 2.0) * width / W);
             int y = (int) ((TIMING_Y + TIMING_H / 2.0) * height / H);
-            int o = (y * width + x) * 4;
-            int lum = ((bgra[o] & 0xFF) + (bgra[o + 1] & 0xFF) + (bgra[o + 2] & 0xFF)) / 3;
+            int lum = lumAt.applyAsInt(x, y);
             if (lum > 90 && lum < 165) return -1; // grey: not our strip
             v = (v << 1) | (lum >= 128 ? 1 : 0);
         }

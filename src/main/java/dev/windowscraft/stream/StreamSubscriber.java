@@ -38,6 +38,10 @@ public final class StreamSubscriber implements FrameSource {
     private final UUID displayId;
     private final String streamId;
     private final int width, height, fps;
+    // what the decoder hands over this time: NV12 (coloured on the graphics card, see
+    // render.Nv12Converter) or BGRA, and its size (NV12 needs even sides)
+    private volatile boolean planes;
+    private volatile int outW, outH;
     private final FramePool pool = new FramePool();
     private final AtomicReference<Frame> latest = new AtomicReference<>();
     private final SpatialAudioPlayer audio;
@@ -288,6 +292,15 @@ public final class StreamSubscriber implements FrameSource {
         // the game, decoded pictures bit-identical. (One picture's wait is left inside FFmpeg.)
         // windowscraft.promptDecode=false: the old way (on this PC as a viewer and as a sharer).
         boolean prompt = promptDecode();
+        // Pictures as the decoder makes them (NV12, 1.5 bytes a pixel), coloured on the graphics
+        // card — not converted to BGRA here (4 bytes a pixel through the socket, Java and the
+        // upload; 1–1.5 cores at 1080p60 with the conversion). BGRA while that isn't set up yet, or
+        // if it doesn't work on this PC.
+        boolean nv12 = dev.windowscraft.render.Nv12Converter.ready();
+        int ow = nv12 ? width & ~1 : width, oh = nv12 ? height & ~1 : height;
+        planes = nv12;
+        outW = ow;
+        outH = oh;
         List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
                 "-fflags", prompt ? "nobuffer+noparse+nofillin" : "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "500000"));
         // (Step 0 experiment, dev only: windowscraft.exp.hwaccel = none / auto / d3d11va / cuda …)
@@ -295,7 +308,7 @@ public final class StreamSubscriber implements FrameSource {
         if (windows && !hw.equals("none")) cmd.addAll(List.of("-hwaccel", hw));
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
-                "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
+                "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + ow + ":" + oh + ",format=" + (nv12 ? "nv12" : "bgra"), "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
                 "-f", "rawvideo", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
                 "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "tcp://127.0.0.1:" + audioListen.getLocalPort()));
         Process ff = Proc.start(cmd, "ffmpeg-dec");
@@ -529,7 +542,9 @@ public final class StreamSubscriber implements FrameSource {
     }
 
     private void readFrames(InputStream in) throws IOException {
-        int size = width * height * 4;
+        boolean nv12 = planes;
+        int w = outW, h = outH;
+        int size = Frame.bytes(w, h, nv12);
         byte[] buf = new byte[size];
         long windowStart = System.nanoTime();
         int windowFrames = 0;
@@ -540,10 +555,14 @@ public final class StreamSubscriber implements FrameSource {
                 if (n < 0) return;
                 got += n;
             }
-            Frame f = pool.acquire(width, height);
+            if (nv12 && !dev.windowscraft.render.Nv12Converter.ready()) { // (it didn't work on this PC)
+                quickRestart = true;
+                throw new IOException("pictures as BGRA from now on");
+            }
+            Frame f = pool.acquire(w, h, nv12);
             f.data.clear();
             f.data.put(buf, 0, size).flip();
-            f.alphaValid = true;
+            f.alphaValid = !nv12; // (FFmpeg's BGRA is opaque with a real alpha; NV12 has none)
             f.captureNanos = System.nanoTime();
             Frame old = latest.getAndSet(f);
             if (old != null) pool.release(old);
@@ -571,7 +590,7 @@ public final class StreamSubscriber implements FrameSource {
             }
             if (damaged) { damagedFrames++; DAMAGED.inc(); }
             lastFrameNanos = gapNow;
-            measureTestPattern(buf);
+            measureTestPattern(buf, w, h, nv12);
             long now = System.nanoTime();
             if (now - windowStart > 1_000_000_000L) {
                 status = String.format(Locale.ROOT, "Live · %.0f fps%s", windowFrames / ((now - windowStart) / 1e9), udp != null ? " · UDP" : "");
@@ -599,8 +618,8 @@ public final class StreamSubscriber implements FrameSource {
     }
 
     /** The test pattern carries a timing strip and a once-a-second flash (with a beep). */
-    private void measureTestPattern(byte[] bgra) {
-        long ts = TestPatternProducer.readTimestamp(bgra, width, height);
+    private void measureTestPattern(byte[] px, int width, int height, boolean nv12) {
+        long ts = nv12 ? TestPatternProducer.readTimestampLuma(px, width, height) : TestPatternProducer.readTimestamp(px, width, height);
         if (ts > 0) {
             long lat = System.currentTimeMillis() - ts;
             E2E.record(lat * 1_000_000L);
@@ -609,8 +628,13 @@ public final class StreamSubscriber implements FrameSource {
             latencyMax = Math.max(latencyMax, lat);
         }
         int x = (int) (width * (1280 - 80) / 1280.0), y = (int) (height * 200 / 720.0);
-        int o = (y * width + x) * 4;
-        boolean white = (bgra[o] & 0xFF) > 220 && (bgra[o + 1] & 0xFF) > 220 && (bgra[o + 2] & 0xFF) > 220;
+        boolean white;
+        if (nv12) {
+            white = TestPatternProducer.lumaToLum(px[y * width + x]) > 220;
+        } else {
+            int o = (y * width + x) * 4;
+            white = (px[o] & 0xFF) > 220 && (px[o + 1] & 0xFF) > 220 && (px[o + 2] & 0xFF) > 220;
+        }
         if (white && !flashing) lastFlashNanos = System.nanoTime();
         flashing = white;
     }

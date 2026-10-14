@@ -52,6 +52,8 @@ public final class StreamingTexture extends AbstractTexture {
     private static float maxAniso = -1;
 
     private int width, height, frameBytes;
+    private boolean nv12;              // pictures come as NV12 planes (someone else's screen): coloured on the GPU
+    private int luma, chroma;          // (their planes: R8 w×h, RG8 w/2×h/2)
     private final int[] textures = new int[2];
     private final Boolean[] opaque = new Boolean[2];
     private int front;                 // the texture being drawn
@@ -86,7 +88,7 @@ public final class StreamingTexture extends AbstractTexture {
     // frame after that only hands it to the graphics card — about one frame sooner on the wall,
     // and the render thread never waits. (windowscraft.copyOnArrival=false: the old way.)
     private static final boolean ON_ARRIVAL = !"false".equals(System.getProperty("windowscraft.copyOnArrival"));
-    private record Armed(int slot, ByteBuffer target, int width, int height) {}
+    private record Armed(int slot, ByteBuffer target, int width, int height, boolean nv12) {}
     private record Filled(int slot, boolean opaque, long captureNanos, boolean remote) {}
     private final java.util.concurrent.atomic.AtomicReference<Armed> armed = new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.concurrent.atomic.AtomicReference<Filled> filled = new java.util.concurrent.atomic.AtomicReference<>();
@@ -133,14 +135,14 @@ public final class StreamingTexture extends AbstractTexture {
         if (f == null) return;
         synchronized (pumpLock) {
             Armed a = armed.get();
-            if (a == null || f.width != a.width() || f.height != a.height()) {
+            if (a == null || f.width != a.width() || f.height != a.height() || f.nv12 != a.nv12()) {
                 if (!stash.compareAndSet(null, f)) src.recycle(f); // (a new size: the render thread sets it up)
                 return;
             }
             try {
                 long c0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
                 ByteBuffer target = a.target().duplicate();
-                f.data.position(0).limit(a.width() * a.height() * 4);
+                f.data.position(0).limit(f.byteSize());
                 target.put(f.data);
                 f.data.position(0);
                 COPY.since(c0);
@@ -159,7 +161,7 @@ public final class StreamingTexture extends AbstractTexture {
         if (slot < 0) return;
         ByteBuffer dst = mapped.duplicate();
         dst.position(slot * frameBytes).limit(slot * frameBytes + frameBytes);
-        armed.set(new Armed(slot, dst.slice(), width, height));
+        armed.set(new Armed(slot, dst.slice(), width, height, nv12));
         PUMPED.add(this);
         startPump();
     }
@@ -194,6 +196,7 @@ public final class StreamingTexture extends AbstractTexture {
     public boolean update(FrameSource source) {
         RenderSystem.assertOnRenderThread();
         detectCaps();
+        Nv12Converter.init();
         if (mips.due() && textures[front] != 0) { // a skipped update: the picture settled, catch up
             GlStateManager._bindTexture(textures[front]);
             GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
@@ -206,6 +209,11 @@ public final class StreamingTexture extends AbstractTexture {
         if (plain) {
             Frame f = source == null ? null : source.takeFrame();
             if (f == null) return false;
+            if (f.nv12) { // (plain uploads only take BGRA: the viewer goes back to it)
+                Nv12Converter.off("this screen uses plain uploads");
+                source.recycle(f);
+                return false;
+            }
             if (dev.windowscraft.measure.Measure.ON) (source instanceof dev.windowscraft.stream.StreamSubscriber ? AGE_REMOTE : AGE_LOCAL).since(f.captureNanos);
             fallback.upload(f);
             source.recycle(f);
@@ -251,8 +259,13 @@ public final class StreamingTexture extends AbstractTexture {
             arm();
             return false;
         }
-        if (f.width != width || f.height != height || pbo == 0) allocate(f.width, f.height);
+        if (f.width != width || f.height != height || f.nv12 != nv12 || pbo == 0) allocate(f.width, f.height, f.nv12);
         if (plain) { // the driver refused the mapping: plain uploads for this screen from now on
+            if (f.nv12) {
+                Nv12Converter.off("this screen uses plain uploads");
+                source.recycle(f);
+                return false;
+            }
             fallback.upload(f);
             source.recycle(f);
             return true;
@@ -330,6 +343,29 @@ public final class StreamingTexture extends AbstractTexture {
         GlStateManager._pixelStore(GL11.GL_UNPACK_ROW_LENGTH, 0);
         GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_PIXELS, 0);
         GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_ROWS, 0);
+        if (nv12) {
+            // the two planes into their textures, then coloured into the wall's texture on the GPU
+            long base = (long) pendingSlot * frameBytes;
+            GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1);
+            GlStateManager._bindTexture(luma);
+            GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, width, height, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, base);
+            GlStateManager._bindTexture(chroma);
+            GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, width / 2, height / 2, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, base + (long) width * height);
+            GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
+            GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4);
+            boolean converted = Nv12Converter.convert(luma, chroma, textures[back], width, height);
+            fences[pendingSlot] = GL32.glFenceSync(GL32.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            if (!converted) { // (off from now on: the viewer reconnects with BGRA pictures)
+                GPU_UPLOAD.end();
+                return;
+            }
+            GlStateManager._bindTexture(textures[back]);
+            if (mips.now()) GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
+            GPU_UPLOAD.end();
+            front = back;
+            hasContent = true;
+            return;
+        }
         GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4);
         GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, width, height, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV,
                 (long) pendingSlot * frameBytes);
@@ -341,11 +377,16 @@ public final class StreamingTexture extends AbstractTexture {
         hasContent = true;
     }
 
-    private void allocate(int w, int h) {
+    private void allocate(int w, int h, boolean planes) {
         freeGpu();
         width = w;
         height = h;
-        frameBytes = w * h * 4;
+        nv12 = planes;
+        frameBytes = Frame.bytes(w, h, planes);
+        if (planes) {
+            luma = plane(GL30.GL_R8, GL11.GL_RED, w, h);
+            chroma = plane(GL30.GL_RG8, GL30.GL_RG, w / 2, h / 2);
+        }
         int levels = 31 - Integer.numberOfLeadingZeros(Math.max(w, h));
         for (int i = 0; i < 2; i++) {
             textures[i] = TextureUtil.generateTextureId();
@@ -377,6 +418,20 @@ public final class StreamingTexture extends AbstractTexture {
         hasContent = false;
     }
 
+    /** A plane's texture: one level, read texel by texel by the conversion. */
+    private static int plane(int internal, int format, int w, int h) {
+        int t = TextureUtil.generateTextureId();
+        GlStateManager._bindTexture(t);
+        GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, internal, w, h, 0, format, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+        GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+        GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+        GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        return t;
+    }
+
     private void freeGpu() {
         disarm();
         filled.set(null);
@@ -401,6 +456,9 @@ public final class StreamingTexture extends AbstractTexture {
             if (textures[i] != 0) TextureUtil.releaseTextureId(textures[i]);
             textures[i] = 0;
         }
+        if (luma != 0) TextureUtil.releaseTextureId(luma);
+        if (chroma != 0) TextureUtil.releaseTextureId(chroma);
+        luma = chroma = 0;
     }
 
     @Override
@@ -414,6 +472,12 @@ public final class StreamingTexture extends AbstractTexture {
     @Override
     public void close() {
         clearGlId();
+    }
+
+    /** Can walls use the fast way (persistent upload buffers)? Render thread. */
+    static boolean fastUploads() {
+        detectCaps();
+        return capable;
     }
 
     private static void detectCaps() {

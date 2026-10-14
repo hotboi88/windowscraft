@@ -11,14 +11,18 @@ public final class FramePool {
     private final ConcurrentLinkedQueue<Frame> free = new ConcurrentLinkedQueue<>();
 
     public Frame acquire(int width, int height) {
+        return acquire(width, height, false);
+    }
+
+    public Frame acquire(int width, int height, boolean nv12) {
         Frame f;
         while ((f = free.poll()) != null) {
-            if (f.width == width && f.height == height) {
+            if (f.width == width && f.height == height && f.nv12 == nv12) {
                 f.data.clear();
                 return f;
             }
         }
-        return Frame.allocate(width, height);
+        return Frame.allocate(width, height, nv12);
     }
 
     public void release(Frame frame) {

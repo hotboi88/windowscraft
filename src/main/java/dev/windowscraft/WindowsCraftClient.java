@@ -50,6 +50,8 @@ public final class WindowsCraftClient implements ClientModInitializer {
         dev.windowscraft.client.Tablet.register();
         dev.windowscraft.client.Updater.register(); // updates from the server you play on (once you say yes)
         dev.windowscraft.render.GpuCrashGuard.checkAtStartup();
+        // others' screens coloured on the graphics card: set up before the first one connects
+        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STARTED.register(mc -> dev.windowscraft.render.Nv12Converter.init());
         // a normal exit isn't a crash (only a sudden death leaves the marker behind)
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> {
             dev.windowscraft.render.GpuCrashGuard.disarm();
