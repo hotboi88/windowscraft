@@ -601,9 +601,9 @@ public final class HubScreen extends Screen {
             }
             y += ROW - 2;
         }
-        // always normal: apps that must never be a copy (games with anti-cheat are found by themselves)
+        // always normal: apps that must never be a copy (Discord, WhatsApp and anti-cheat games already are)
         List<String> normal = ClientSettings.isoPrograms();
-        UiKit.text(g, textRenderer, "Always run normally" + (normal.isEmpty() ? " (games with anti-cheat are found by themselves):" : ":"), x + 4, y + 4, UiKit.TEXT_2);
+        UiKit.text(g, textRenderer, "Always run normally" + (normal.isEmpty() ? " (Discord, WhatsApp and games with anti-cheat already do):" : ":"), x + 4, y + 4, UiKit.TEXT_2);
         y += 14;
         int ax = x + 4;
         for (String p : normal) {
