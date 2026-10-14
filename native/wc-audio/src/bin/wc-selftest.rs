@@ -1634,7 +1634,8 @@ fn own_browser_flow(rep: &mut Report, h: &Helper, b: &Mon, game: HWND, shot: &dy
         return;
     };
     let _ = Command::new("taskkill").args(["/IM", "msedge.exe", "/F"]).output();
-    sleep(1500);
+    let _ = h.call("unseat", "unseated", 8000);
+    sleep(21000); // (earlier launches for a monitor are over: this Edge is just yours, on your desk)
     // the "site": sets a sign-in cookie
     let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else { return };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);

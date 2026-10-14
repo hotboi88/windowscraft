@@ -3260,6 +3260,11 @@ fn maybe_own_browser(h: HWND, idx: i32) {
     if !BROWSERS.contains(&exe.as_str()) || is_own_copy(p) {
         return;
     }
+    // only your everyday browser: not one started with a profile of its own, nor one WindowsCraft
+    // started for this monitor
+    if owned().lock().unwrap().get(&p) == Some(&idx) || cmdline(p).to_lowercase().contains("--user-data-dir") {
+        return;
+    }
     let Some(exe_path) = exe_full(p) else { return };
     let hv = h.0 as isize;
     std::thread::spawn(move || {
