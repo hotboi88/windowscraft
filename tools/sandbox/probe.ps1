@@ -63,7 +63,7 @@ $server = Start-Job -ScriptBlock {
         $got = $c.Request.Headers["Cookie"]; if (-not $got) { $got = "none" }
         $set = $c.Request.QueryString["login"]
         if ($set) { $c.Response.Headers.Add("Set-Cookie", "wclogin=$set; Max-Age=86400; Path=/") }
-        $b = [Text.Encoding]::UTF8.GetBytes("<html><head><title>wc[$got]</title></head><body>$got</body></html>")
+        $b = [Text.Encoding]::UTF8.GetBytes("<html><head><title>wc[$got]#$($c.Request.Url.Query)</title></head><body>$got</body></html>")
         $c.Response.ContentType = "text/html"; $c.Response.OutputStream.Write($b, 0, $b.Length); $c.Response.Close()
     }
 } -ArgumentList $port
@@ -122,9 +122,14 @@ Check "no Sandboxie window or app showed up" (-not $ui -and -not $sbWins) "SandM
 
 # ---- 5. a login made in box 1 stays in box 1: after closing it, and only there
 & "$dir\Start.exe" /box:WCMon1 /silent $edge "http://127.0.0.1:$port/?login=mon1"
-Start-Sleep 6
+$null = WaitBox WCMon1 "login=mon1" 20
+Start-Sleep 3
+# closed the way you'd close it (as the monitor turning off does), not killed: it saves what it has
+foreach ($w in BoxWins WCMon1) { $null = $w.CloseMainWindow() }
+$t = (Get-Date).AddSeconds(15); while ((Get-Date) -lt $t -and (BoxPids WCMon1)) { Start-Sleep 1 }
+Note "box 1 closed by itself: $(-not (BoxPids WCMon1))"
 & "$dir\Start.exe" /box:WCMon1 /terminate | Out-Null
-Start-Sleep 4
+Start-Sleep 2
 & "$dir\Start.exe" /box:WCMon1 /silent $edge $flags.Split(' ') "http://127.0.0.1:$port/?again=1"
 $again = WaitBox WCMon1 "wc\[wclogin=mon1\]" 40
 Check "a login made on monitor 1's box is still there after closing and reopening it" ([bool]$again) "box 1 windows: $((BoxWins WCMon1 | ForEach-Object MainWindowTitle) -join ' ; ')"
@@ -134,7 +139,7 @@ $deskT = Titles | Where-Object { (BoxOf ([int]($_.Split(':')[0]))) -eq "" }
 Check "…and it never touched your desk's login" (-not ($deskT -match 'wclogin=mon1')) "$($deskT -join ' ; ')"
 & "$dir\Start.exe" /box:WCMon2 /silent $edge "http://127.0.0.1:$port/?mon2check=1"
 Start-Sleep 6
-$m2 = WaitBox WCMon2 "mon2check" 20
+$m2 = WaitBox WCMon2 "mon2check" 25
 Check "…nor monitor 2's (each box keeps its own logins)" ($m2 -and -not ("$($m2.MainWindowTitle)" -match 'wclogin=mon1')) "box 2: $((BoxWins WCMon2 | ForEach-Object MainWindowTitle) -join ' ; ')"
 
 # ---- 6. an app that only runs once (named mutex): a second copy in a box
