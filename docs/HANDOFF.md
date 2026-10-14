@@ -94,7 +94,17 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
-## Waiting on the owner (Windows test list for 0.15.0)
+## Waiting on the owner: 0.15.1 (branch step0-fix-prototypes; zip built on his PC)
+
+Approve and install, then: 1. Same jar on server and PC (exactly one windowscraft jar per mods
+folder). 2. Share a monitor playing a video: the friend hears it from the wall. 3. The friend starts
+watching: stays smooth, no immediate "a viewer's PC can't play it fast enough". 4. A minute in front
+of an in-game monitor with his usual shader pack: Direct GPU sharing on in ⚙ Settings, or send the
+"Direct GPU sharing looked black" log line. 5. Friend looks away and back: picture back within a
+second, sound never stopped. 6. Lip sync feel (≈¼ s late expected; next fix). 7. Both run
+`/windowscraft measure start 60` in a session and send the reports.
+
+## Also waiting on the owner (Windows test list for 0.15.0)
 
 1. Install on PC and server. 2. U on a monitor → Own copies of apps → Set up (no Sandboxie window
 ever). 3. Brave + video on monitor 1 and on monitor 2: each only from its own wall; desk Brave
