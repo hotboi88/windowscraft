@@ -94,7 +94,7 @@ public final class Share {
                     gpuFailed();
                 } else if (gpu.delivering()) {
                     try {
-                        lastPolled = texture.pollGpu(gpu);
+                        lastPolled = texture.pollGpu(gpu, session::looksBlack);
                     } catch (Throwable t) {
                         gpu.fail(String.valueOf(t.getMessage()));
                         gpuFailed();

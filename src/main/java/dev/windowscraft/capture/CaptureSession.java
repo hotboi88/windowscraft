@@ -158,6 +158,25 @@ public final class CaptureSession implements FrameSource {
         running = false;
     }
 
+    /**
+     * Is the newest picture pure black at a grid of spots (as the GPU-sharing check looks)? Null if
+     * there's none. (Read in place: the capture may replace it meanwhile — a rough look is enough.)
+     */
+    public Boolean looksBlack() {
+        Frame f = latest.get();
+        if (f == null || f.nv12 || f.width < 2 || f.height < 2) return null;
+        java.nio.ByteBuffer d = f.data;
+        for (int gy = 0; gy <= 4; gy++) {
+            for (int gx = 0; gx <= 4; gx++) {
+                int x = Math.min(f.width - 1, gx * (f.width - 1) / 4), y = gy == 0 ? 6 : Math.min(f.height - 1, gy * (f.height - 1) / 4);
+                int o = (Math.min(y, f.height - 1) * f.width + x) * 4;
+                if (o + 3 >= d.capacity()) return null;
+                if ((d.get(o) & 0xFF) > 1 || (d.get(o + 1) & 0xFF) > 1 || (d.get(o + 2) & 0xFF) > 1) return false;
+            }
+        }
+        return true;
+    }
+
     /** Render thread: take the newest frame, if any. Caller must hand it back via {@link #recycle}. */
     @Override
     public Frame takeFrame() {

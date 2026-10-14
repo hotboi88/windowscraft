@@ -10,6 +10,7 @@ import org.lwjgl.opengl.EXTMemoryObject;
 import org.lwjgl.opengl.EXTMemoryObjectWin32;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL43;
@@ -216,10 +217,22 @@ public final class GpuShareTexture extends AbstractTexture {
     // black. For its first seconds, the wall looks at a few spots of what it got: if every one of
     // them is pure black every time, direct GPU sharing doesn't work here — the wall goes back to
     // the normal way, and the game remembers it for this graphics driver.
+    //
+    // A wrong verdict switches it off for good on that driver, so it must be sure: the spots are
+    // read with the read-back settings put to plain values (another mod — a minimap, a shader
+    // pack — can leave a buffer bound that would catch the read, leaving "black" behind), a read
+    // that didn't land counts as no verdict, and a screen whose own picture is black (the normal
+    // capture of it sees black too: a black wallpaper on an empty monitor) is looked at again
+    // later instead.
 
     private long checkStarted, lastCheck;
-    private int checks, blackChecks;
+    private int checks, blackChecks, blackSourceRounds, noCompareRounds, unreadable;
     private int probeFbo;
+    private boolean unreadableSaid;
+    /** Does the normal (CPU) capture of the same screen see black too? (null: no picture of it yet) */
+    private java.util.function.Supplier<Boolean> sourceBlack;
+
+    void sourceBlack(java.util.function.Supplier<Boolean> s) { sourceBlack = s; }
 
     private void checkNotBlack() {
         long now = System.nanoTime();
@@ -227,12 +240,32 @@ public final class GpuShareTexture extends AbstractTexture {
         if (checkStarted == 0) checkStarted = now;
         if (now - lastCheck < 700_000_000L || now - checkStarted < 300_000_000L) return;
         lastCheck = now;
+        Boolean black = sampledBlack();
+        if (black == null) { // (the read-back didn't land: no verdict — after a few, stop looking)
+            if (++unreadable >= 6) checks = 6;
+            return;
+        }
         checks++;
-        if (sampledBlack()) blackChecks++;
+        if (black) blackChecks++;
         if (checks == 6 && blackChecks == 6) {
+            Boolean cpu = sourceBlack == null ? null : sourceBlack.get();
+            // the screen really is black right now (or there's nothing to compare with yet): no
+            // verdict — look again in a while (it keeps showing through GPU sharing meanwhile)
+            if (Boolean.TRUE.equals(cpu) || (cpu == null && noCompareRounds++ < 3)) {
+                if (blackSourceRounds++ == 0)
+                    dev.windowscraft.WindowsCraftClient.LOGGER.info("Direct GPU sharing: {}; checking again later",
+                            cpu == null ? "nothing to compare its black picture with yet" : "the screen's own picture is black too (normal capture)");
+                if (blackSourceRounds < 20) {
+                    checks = blackChecks = 0;
+                    checkStarted = now + 10_000_000_000L; // (10 s from now)
+                    lastCheck = 0;
+                }
+                return;
+            }
             String why = "the shared pictures came out black in the game";
             // what was going on, so a misreading can be told from a real black picture
-            dev.windowscraft.WindowsCraftClient.LOGGER.warn("Direct GPU sharing looked black: {}", blackDetails());
+            dev.windowscraft.WindowsCraftClient.LOGGER.warn("Direct GPU sharing looked black: {}; normal capture {}", blackDetails(),
+                    cpu == null ? "had no picture to compare" : "saw a picture");
             GpuInterop.broken(why);
             throw new IllegalStateException(why);
         }
@@ -267,28 +300,56 @@ public final class GpuShareTexture extends AbstractTexture {
         return b.toString();
     }
 
-    /** True if every one of a grid of spots (plus the bottom edge, where a taskbar is) is pure black. */
-    private boolean sampledBlack() {
+    /**
+     * True if every one of a grid of spots (plus the top and bottom edges) is pure black; null if
+     * the read-back didn't land (no verdict).
+     */
+    private Boolean sampledBlack() {
         int prevRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        // the read goes into our memory with plain settings, whatever the last mod left set
+        int prevPack = GL11.glGetInteger(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING);
+        int prevRow = GL11.glGetInteger(GL11.GL_PACK_ROW_LENGTH), prevSkipPx = GL11.glGetInteger(GL11.GL_PACK_SKIP_PIXELS),
+                prevSkipRows = GL11.glGetInteger(GL11.GL_PACK_SKIP_ROWS), prevAlign = GL11.glGetInteger(GL11.GL_PACK_ALIGNMENT);
+        GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0);
+        GL11.glPixelStorei(GL11.GL_PACK_ROW_LENGTH, 0);
+        GL11.glPixelStorei(GL11.GL_PACK_SKIP_PIXELS, 0);
+        GL11.glPixelStorei(GL11.GL_PACK_SKIP_ROWS, 0);
+        GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 4);
         if (probeFbo == 0) probeFbo = GL30.glGenFramebuffers();
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
         GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, getGlId(), 0);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         int fboStatus = GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER);
-        boolean black = true;
+        boolean black = true, landed = true;
         try (org.lwjgl.system.MemoryStack st = org.lwjgl.system.MemoryStack.stackPush()) {
             java.nio.ByteBuffer px = st.malloc(4);
-            for (int gy = 0; gy <= 4 && black; gy++) {
-                for (int gx = 0; gx <= 4 && black; gx++) {
+            for (int gy = 0; gy <= 4 && black && landed; gy++) {
+                for (int gx = 0; gx <= 4 && black && landed; gx++) {
                     int x = Math.min(width - 1, gx * (width - 1) / 4), y = gy == 0 ? 6 : Math.min(height - 1, gy * (height - 1) / 4);
+                    px.putInt(0, 0x5A5A5A5A); // (still there afterwards: nothing was read)
                     GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, px);
                     if (gx == 2 && gy == 2) lastProbe = "fbo 0x" + Integer.toHexString(fboStatus) + ", gl error 0x" + Integer.toHexString(GL11.glGetError())
-                            + ", middle " + (px.get(0) & 0xFF) + "," + (px.get(1) & 0xFF) + "," + (px.get(2) & 0xFF) + "," + (px.get(3) & 0xFF);
-                    if ((px.get(0) & 0xFF) > 1 || (px.get(1) & 0xFF) > 1 || (px.get(2) & 0xFF) > 1) black = false;
+                            + ", middle " + (px.get(0) & 0xFF) + "," + (px.get(1) & 0xFF) + "," + (px.get(2) & 0xFF) + "," + (px.get(3) & 0xFF)
+                            + ", pack buffer before " + prevPack;
+                    if (px.getInt(0) == 0x5A5A5A5A) landed = false;
+                    else if ((px.get(0) & 0xFF) > 1 || (px.get(1) & 0xFF) > 1 || (px.get(2) & 0xFF) > 1) black = false;
                 }
             }
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
+            GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, prevPack);
+            GL11.glPixelStorei(GL11.GL_PACK_ROW_LENGTH, prevRow);
+            GL11.glPixelStorei(GL11.GL_PACK_SKIP_PIXELS, prevSkipPx);
+            GL11.glPixelStorei(GL11.GL_PACK_SKIP_ROWS, prevSkipRows);
+            GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, prevAlign);
             while (GL11.glGetError() != 0) { /* (a driver that can't read this back: no verdict) */ }
+        }
+        if (!landed) {
+            if (!unreadableSaid) {
+                unreadableSaid = true;
+                dev.windowscraft.WindowsCraftClient.LOGGER.info("Direct GPU sharing: the picture couldn't be read back to check it ({}); not judged", lastProbe);
+            }
+            return null;
         }
         return black;
     }

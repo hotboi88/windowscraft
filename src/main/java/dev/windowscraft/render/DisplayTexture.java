@@ -32,9 +32,10 @@ public final class DisplayTexture {
      * Direct GPU sharing: the newest frame, copied graphics-memory to graphics-memory. Returns
      * null until the first frame; throws if the driver won't cooperate (caller falls back).
      */
-    public Identifier pollGpu(dev.windowscraft.capture.GpuShare share) {
+    public Identifier pollGpu(dev.windowscraft.capture.GpuShare share, java.util.function.Supplier<Boolean> sourceBlack) {
         if (gpuTexture == null) {
             gpuTexture = new GpuShareTexture();
+            gpuTexture.sourceBlack(sourceBlack); // (its black check asks the normal capture before judging)
             gpuId = Identifier.of("windowscraft", key + "_gpu");
             MinecraftClient.getInstance().getTextureManager().registerTexture(gpuId, gpuTexture);
         }

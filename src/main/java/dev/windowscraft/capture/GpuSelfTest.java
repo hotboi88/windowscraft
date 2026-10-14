@@ -35,14 +35,18 @@ public final class GpuSelfTest {
         // (v2: the test now also tries the memory sizes drivers round pictures up to — tested again)
         // (v3: tested again once — a "black" verdict on a card where it works elsewhere may have
         // been the check misreading; if it's really black it's turned off again, with details)
-        String k = "v3 " + glVendor + " / " + glRenderer + " / " + glVersion;
+        // (v4: the in-game black check can't be fooled by a read-back another mod catches, nor by a
+        // screen that's black itself — a "black" verdict is tested again once; other results stay)
+        String gl = glVendor + " / " + glRenderer + " / " + glVersion;
+        String k = "v4 " + gl, before = "v3 " + gl;
         if (k.equals(key) && (result != null || running)) return result;
         key = k;
         result = null;
         try {
             for (String line : Files.readAllLines(cacheFile())) {
                 String[] p = line.split("\t", 3);
-                if (p.length == 3 && p[0].equals(k)) {
+                boolean carried = p.length == 3 && p[0].equals(before) && !p[2].contains("black in the game");
+                if (p.length == 3 && (p[0].equals(k) || carried)) {
                     reason = p[2];
                     swapped = p[2].contains("(bgra");
                     blit = p[2].contains("+blit)");
