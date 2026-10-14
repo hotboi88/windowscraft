@@ -15,7 +15,7 @@ mkdir -p "$OUT" run-bench/saves/bench
 rm -rf run-bench/windowscraft/measurements
 # (a clean GPU sharing verdict each time: what a first start on this PC would decide)
 rm -f run-bench/windowscraft/gpu-selftest-ext.txt run-bench/windowscraft/gpu-sharing-ext-crashed.txt
-java tools/bench/BenchWindow.java 60 80 80 1920 1080 > "$OUT/window-$NAME.log" 2>&1 &
+java tools/bench/BenchWindow.java 60 80 80 ${BW_W:-1920} ${BW_H:-1080} > "$OUT/window-$NAME.log" 2>&1 &
 BW=$!
 sleep 4
 timeout 900 gradle runBenchMonitor -q -PwcArgs="-Dwindowscraft.bench.seconds=$S -Dwindowscraft.bench.name=$NAME ${EXTRA:-}" > "$OUT/host-$NAME.log" 2>&1

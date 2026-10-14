@@ -69,8 +69,20 @@ public final class BenchMonitor implements ClientModInitializer {
             }
             case 2 -> {
                 if (tick < 10) return;
-                log("pressing U at the wall");
-                KeyBinding.onKeyPressed(InputUtil.fromKeyCode(GLFW.GLFW_KEY_U, 0));
+                // windowscraft.bench.monitorSize=WxH: the monitor at that size (as the Picture tab would set it)
+                String size = System.getProperty("windowscraft.bench.monitorSize");
+                if (size != null) {
+                    String dim = mc.world.getRegistryKey().getValue().toString();
+                    var rect = dev.windowscraft.display.WallDetector.detect(mc.world, new BlockPos(0, ground + 5, -10), net.minecraft.util.math.Direction.SOUTH, p -> false);
+                    Display d = DisplayManager.get().create(dim, rect);
+                    d.monitorW = Integer.parseInt(size.split("x")[0]);
+                    d.monitorH = Integer.parseInt(size.split("x")[1]);
+                    log("turning on a " + size + " monitor");
+                    InGameMonitors.turnOn(mc, dim, rect, d);
+                } else {
+                    log("pressing U at the wall");
+                    KeyBinding.onKeyPressed(InputUtil.fromKeyCode(GLFW.GLFW_KEY_U, 0));
+                }
                 next();
             }
             case 3 -> {

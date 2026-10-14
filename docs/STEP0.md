@@ -46,6 +46,11 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    left bound. Proposal: re-test in the real game with logging (copy vs blit path, scissor/pack
    state at the read-back); call it black only if the CPU capture of the same source isn't.
    In-game monitor on the fast route: captured → wall 0/7/10 ms (CPU route at 720p30: 13/17/18 ms).
+   The owner's actual case — a 4K in-game monitor on the CPU route, his settings: ~21 pictures/s
+   on the wall from a 60 fps window (24 ms to copy each 33 MB picture out of the helper, 16 ms
+   into the GPU buffer), captured → wall well over 100 ms, ~2.3 cores in the game + 1 in the
+   helper, 1 % lows 47 fps (≈95 idle). The fixes branch barely changes it (24/s): copying is the
+   bottleneck at 4K. (`monitor.sh` with `BW_W/BW_H` and `-Dwindowscraft.bench.monitorSize=WxH`.)
 4. **Lip sync**, measurable now that sound flows: sound 256 ms after the picture (115 beeps,
    140–340 ms). Roughly: ~80 ms sender cushion + ~45 ms AAC + ~60 ms viewer decoder + 120–170 ms
    playback reserve and device, against ~145 ms for the picture. Proposal: shrink the reserves
