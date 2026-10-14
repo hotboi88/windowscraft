@@ -1,7 +1,7 @@
 # Handoff: where WindowsCraft stands (read this first in a new session)
 
 The owner is not a programmer: explain things plainly, in terms of what he'll see and do.
-He hosts; his girlfriend joins over Tailscale. The long-term goal is docs/VISION.md.
+He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
 
 ## Current state: 0.15.0 (all cloud tests green)
 

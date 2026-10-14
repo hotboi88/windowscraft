@@ -5,5 +5,5 @@ long-term goal (WaylandCraft-level local responsiveness on Windows, an equally g
 remote peers, minimal Minecraft overhead, all existing in-world features preserved). Prefer small,
 measurable, reversible improvements to existing systems over rewrites; benchmark before optimizing.
 
-Starting a new session? Read docs/HANDOFF.md first: current state, the owner's rules, how to build
+Starting a new session? Read docs/SPEC.md, then docs/HANDOFF.md: current state, the owner's rules, how to build
 and test, and what's next.
