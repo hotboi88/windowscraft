@@ -3200,7 +3200,6 @@ fn breakout_dirs() -> Vec<String> {
 // in the background and kept; new folders are picked up on the next pass.
 static CARVED: Mutex<Option<(String, Instant, Vec<String>)>> = Mutex::new(None);
 static CARVING: AtomicBool = AtomicBool::new(false);
-const CARVE_DEPTH: u32 = 4;
 
 fn norm_dir(p: &str) -> String {
     p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
@@ -3211,14 +3210,14 @@ fn carve_sig() -> String {
 }
 
 /// None: nothing in here is an exception (force all of it). Some(list): the parts to force.
-fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, ex: &[String], names: &std::collections::HashSet<String>, budget: &mut usize) -> Option<Vec<String>> {
+fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, max_depth: u32, ex: &[String], names: &std::collections::HashSet<String>, budget: &mut usize) -> Option<Vec<String>> {
     use std::os::windows::fs::MetadataExt;
     if ex.iter().any(|e| e == lower) {
         return Some(Vec::new());
     }
     let pre = format!("{lower}\\");
     let ex_inside = ex.iter().any(|e| e.starts_with(&pre));
-    if (depth > CARVE_DEPTH || *budget == 0) && !ex_inside {
+    if (depth > max_depth || *budget == 0) && !ex_inside {
         return None;
     }
     *budget = budget.saturating_sub(1);
@@ -3238,7 +3237,7 @@ fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, ex: &[String], nam
     let mut clean = !ex_inside;
     for k in kids {
         let kl = format!("{pre}{}", k.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
-        match carve_walk(&k, &kl, depth + 1, ex, names, budget) {
+        match carve_walk(&k, &kl, depth + 1, max_depth, ex, names, budget) {
             None => parts.push(k.display().to_string()),
             Some(v) => {
                 clean = false;
@@ -3249,18 +3248,20 @@ fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, ex: &[String], nam
     if clean { None } else { Some(parts) }
 }
 
-fn carve() -> Vec<String> {
+/// The app folders, carved around the exceptions — looking `max_depth` folders deep for programs
+/// that must run normally (deeper ones are assumed not to be there).
+fn carve(max_depth: u32, budget: usize) -> Vec<String> {
     let t0 = Instant::now();
     let ex: Vec<String> = breakout_dirs().iter().map(|d| norm_dir(d)).filter(|d| !d.is_empty()).collect();
     let names: std::collections::HashSet<String> = breakout_exes().into_iter().collect();
-    let mut budget = 40_000usize;
+    let mut left = budget;
     let mut out: Vec<String> = Vec::new();
     for root in app_folders() {
         let rl = norm_dir(&root);
         if ex.iter().any(|e| rl == *e || rl.starts_with(&format!("{e}\\"))) {
             continue;
         }
-        match carve_walk(std::path::Path::new(root.trim_end_matches('\\')), &rl, 0, &ex, &names, &mut budget) {
+        match carve_walk(std::path::Path::new(root.trim_end_matches('\\')), &rl, 0, max_depth, &ex, &names, &mut left) {
             None => out.push(root.trim_end_matches('\\').to_string()),
             Some(v) => out.extend(v),
         }
@@ -3275,40 +3276,67 @@ fn carve() -> Vec<String> {
             kept.push(d);
         }
     }
-    eprintln!("info=own copies: {} app folders to box ({} ms{})", kept.len(), t0.elapsed().as_millis(), if budget == 0 { ", stopped looking deeper" } else { "" });
+    eprintln!("info=own copies: {} app folders to box (looked {max_depth} deep, {} folders, {} ms{})", kept.len(), budget - left,
+        t0.elapsed().as_millis(), if left == 0 { ", stopped there" } else { "" });
     kept
 }
 
-/// The folders whose programs land in the box while you sit there.
+/// The folders whose programs land in the box while you sit there (worked out ahead of time;
+/// only if that hasn't happened yet is it waited for, briefly).
 fn force_folders() -> Vec<String> {
     let sig = carve_sig();
     if let Some((s, at, v)) = CARVED.lock().unwrap().as_ref() {
         if *s == sig {
-            if at.elapsed() > Duration::from_secs(60) {
+            if at.elapsed() > Duration::from_secs(300) {
                 refresh_carve();
             }
             return v.clone();
         }
     }
-    let v = carve();
-    *CARVED.lock().unwrap() = Some((sig, Instant::now(), v.clone()));
-    v
+    refresh_carve();
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(20));
+        if let Some((s, _, v)) = CARVED.lock().unwrap().as_ref() {
+            if *s == sig {
+                return v.clone();
+            }
+        }
+    }
+    carve(1, 400) // (still not there: a shallow look now)
 }
 
-/// Works the folders out again in the background (when they've changed, the rule is rewritten).
+/// Works the folders out (again) in the background, at low priority: a quick look first, then a
+/// deeper one. When they've changed while you sit somewhere, the rule is rewritten.
 fn refresh_carve() {
     if CARVING.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(|| {
-        let sig = carve_sig();
-        let v = carve();
-        let changed = CARVED.lock().unwrap().as_ref().map_or(true, |(s, _, old)| *s != sig || *old != v);
-        *CARVED.lock().unwrap() = Some((sig, Instant::now(), v));
-        CARVING.store(false, Ordering::SeqCst);
-        if changed {
-            ISO_DIRTY.store(true, Ordering::SeqCst);
+        unsafe {
+            let _ = windows::Win32::System::Threading::SetThreadPriority(windows::Win32::System::Threading::GetCurrentThread(),
+                windows::Win32::System::Threading::THREAD_MODE_BACKGROUND_BEGIN);
         }
+        loop {
+            let sig = carve_sig();
+            for (depth, budget) in [(2u32, 4_000usize), (5, 40_000)] {
+                let v = carve(depth, budget);
+                if carve_sig() != sig {
+                    break; // (the exceptions changed meanwhile: start over)
+                }
+                let mut c = CARVED.lock().unwrap();
+                let changed = c.as_ref().map_or(true, |(s, _, old)| *s != sig || *old != v);
+                *c = Some((sig.clone(), Instant::now(), v));
+                drop(c);
+                if changed {
+                    ISO_DIRTY.store(true, Ordering::SeqCst);
+                }
+            }
+            if carve_sig() == sig {
+                break;
+            }
+        }
+        CARVING.store(false, Ordering::SeqCst);
     });
 }
 
@@ -3470,7 +3498,9 @@ fn box_launch(idx: i32, file: &str, params: &str) -> bool {
         args.extend(split_args(params));
     }
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    sbie_start(&refs)
+    let ok = sbie_start(&refs);
+    eprintln!("info=opening {exe} in box {b}: {}", if ok { "started" } else { "Sandboxie's launcher didn't start" });
+    ok
 }
 
 fn split_args(s: &str) -> Vec<String> {

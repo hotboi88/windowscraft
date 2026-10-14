@@ -14,10 +14,6 @@ jobs:
   probe:
     runs-on: windows-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        probe: ['probe-old', 'probe']   # (bisecting a runner hang: the last probe that finished vs now)
     steps:
       - uses: actions/checkout@v4
       - name: Download Sandboxie-Plus
@@ -32,7 +28,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 14
         continue-on-error: true
-        run: tools/sandbox/${{ matrix.probe }}.ps1
+        run: tools/sandbox/probe.ps1
       - name: Install the Parsec virtual display driver
         shell: pwsh
         run: |
@@ -53,5 +49,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: sandbox-${{ matrix.probe }}
+          name: sandbox-probe
           path: out/

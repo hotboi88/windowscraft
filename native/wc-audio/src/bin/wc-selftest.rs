@@ -1864,10 +1864,13 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
             sleep(300);
             let rm = now_rect(&h5, m.idx).unwrap_or(m.r);
             let r = h5.call(&format!("boxlaunch\t{}\t{}\t", m.idx, app("wcapp_c").display()), "boxlaunched", 20000);
-            let c = (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains("wcapp_c") && class_name(*w) != "ConsoleWindowClass") });
+            let c = (0..80).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains("wcapp_c") && class_name(*w) != "ConsoleWindowClass") });
             sleep(600);
-            let boxed = c.map_or(false, |w| in_box(&h5, m.idx).contains(&pid(w)));
-            rep.check("\"Open another copy here\" starts it in that monitor's box, on that monitor", boxed && on(c, &rm), format!("{r:?} · {:?} at {}", c.map(pid), c.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
+            let inb = in_box(&h5, m.idx);
+            let boxed = c.map_or(false, |w| inb.contains(&pid(w)));
+            let theirs: Vec<String> = top_windows().into_iter().filter(|w| inb.contains(&pid(*w))).map(|w| format!("{}:{:?}/{}", pid(w), title(w), class_name(w))).collect();
+            rep.check("\"Open another copy here\" starts it in that monitor's box, on that monitor", boxed && on(c, &rm),
+                format!("{r:?} · {:?} at {} · in the box: {inb:?} · their windows: {theirs:?}", c.map(pid), c.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
             let _ = h5.call(&format!("remove {}", m.idx), "removed", 30000);
             sleep(1500);
             let left = c.map_or(false, |w| unsafe { IsWindow(Some(w)).as_bool() });

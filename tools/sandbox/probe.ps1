@@ -269,11 +269,12 @@ function StartGui($exe, $t) {
     $stem = [IO.Path]::GetFileNameWithoutExtension($exe)
     $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
     $w = $null; $end = (Get-Date).AddSeconds(12)
-    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Procs | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Select-Object -First 1 }
+    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Procs | Where-Object { $_.ProcessName -like 'wcapp_*' -and ($_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*") } | Select-Object -First 1 }
     if (-not $w) { return "no window" }
     $b = BoxOf $w.Id
-    Note "($stem → box '$b', window title '$($w.MainWindowTitle)')"
-    Procs | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+    Note "($stem: process $($w.ProcessName) $($w.Id) in box '$b', window title '$($w.MainWindowTitle)')"
+    # (only the test apps themselves: never anything else with a matching title)
+    Get-Process -Name 'wcapp_*' -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
     return $b
 }
 $n0 = StartGui "C:\wcforce\wcapp_a.exe" "wc-plain"
