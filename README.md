@@ -158,14 +158,21 @@ one of your real screens instead, as before.
   desk the same way.
 - **Store apps** (Calculator, Settings…) open on the monitor you open them from, like any app.
 - **Each monitor's sound is its own — never mixed**: a monitor plays only what's on it, never
-  another monitor's sound or your desk's. Windows only knows sound per program, so a browser
-  (Brave, Chrome, Edge, Vivaldi) opened on an in-game monitor is that monitor's own copy of it:
-  its own program, so its own sound, and every window and tab in it plays from that monitor, all
-  at once. It's made from your own browser profile — sign-ins, passwords, bookmarks, extensions —
-  so there's nothing to sign in to. The first time a monitor gets its copy, your desk browser
-  closes for a moment and reopens with its tabs (it keeps your sign-ins locked while it runs);
-  never again for that monitor. A link opened on the monitor opens in its copy too. Any other app
-  open in several places at once plays from wherever you last used it (never from two places).
+  another monitor's sound or your desk's. Windows only knows sound per program, so:
+  - **Own copies of apps** (U → the monitor → "Own copies of apps"; a one-time setup of the free
+    Sandboxie-Plus, which WindowsCraft downloads, checks and installs hidden — Windows asks for
+    permission once, and it never shows itself): every app you start while sitting at a monitor
+    (or pointing at it) runs as that monitor's own copy — its own program, so its own sound, and
+    all its windows and tabs play from that monitor, all at once. Its logins and data are its own
+    and kept (sign in to a site once on that monitor, it stays), and apps that only run once can
+    run there too ("Open another copy here"). The apps on your desk are never touched. Discord,
+    WhatsApp, game launchers, games with anti-cheat, Java and Minecraft, and anything you add to
+    "Always run normally" are never copies (Discord and WhatsApp come over instead). Getting up,
+    turning it off, closing the game or the game crashing leave nothing behind that would affect
+    your desk's apps. "Reset this monitor's apps" wipes its logins and data.
+  - Without it, an app open in several places plays from wherever you last used it (never from two
+    places), and a browser open both on your desk and on a monitor can get a separate one there
+    ("Own Brave" in the monitor manager — its own profile, so you sign in there once).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.
   (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
   while in-game monitors are on it starts with your normal rights instead — no permission

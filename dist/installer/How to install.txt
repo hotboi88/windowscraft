@@ -1,4 +1,4 @@
-WindowsCraft 0.14.8 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.0 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
 1. Close Minecraft.
 2. Right-click this zip and choose "Extract All...", then open the extracted folder.
@@ -21,9 +21,11 @@ scroll out: still sharp, just smaller); Esc gets up.
 Hold Alt and look at your monitor to point and click on it without sitting down.
 An app that only runs once (Discord, Calculator...) already open on your desk: opening it from a
 monitor brings it over, in the middle of that monitor (and opening it from your own taskbar brings
-it back). Each monitor plays only its own sound, never mixed: a browser opened on a monitor is that
-monitor's own copy, made from your profile (already signed in) - the first time, your desk browser
-restarts for a moment with its tabs. Full-screen videos stay full screen when you press Esc. U again turns it off; sneak + U opens its menu.
+it back). Each monitor plays only its own sound, never mixed: U on a monitor -> "Own copies of apps" -> Set up
+(free Sandboxie-Plus, installed hidden; Windows asks once). Then every app you start at that monitor
+is its own copy: its own sound, its own logins (sign in once there, it stays). Your desk's apps are
+never touched; Discord and WhatsApp come over instead. Full-screen videos stay full screen when you
+press Esc. U again turns it off; sneak + U opens its menu.
 Gaming monitors and tablets: creative tab "WindowsCraft" (or craft them). A gaming monitor faces
 you when placed (8 directions). Placed right beside, above or below another one it joins it (no
 stand, edge to edge, turned to face you - stand at your seat while placing; sneak to keep it flat)
