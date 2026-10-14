@@ -171,7 +171,18 @@ public final class StreamSubscriber implements FrameSource {
     public SpatialAudioPlayer audio() { return audio; }
 
     @Override
-    public Frame takeFrame() { return latest.getAndSet(null); }
+    public Frame takeFrame() {
+        lastTakenNanos = System.nanoTime();
+        return latest.getAndSet(null);
+    }
+
+    // ---- a screen nobody looks at: only its sound is decoded ----
+    /** When the game last asked for a picture (it only asks while one of the walls is drawn). */
+    private volatile long lastTakenNanos = System.nanoTime();
+    /** This long without being asked: the picture side pauses (the sound goes on, from the wall). */
+    private static final long HIDDEN_NANOS = 2_000_000_000L;
+    private static final dev.windowscraft.measure.Measure.Counter PAUSED_BYTES = dev.windowscraft.measure.Measure.counter("view.hidden_video_skipped",
+            "bytes of picture not decoded because nobody was looking at the screen");
 
     @Override
     public void recycle(Frame f) { pool.release(f); }
@@ -369,6 +380,7 @@ public final class StreamSubscriber implements FrameSource {
         });
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
+            boolean videoPaused = false; // (nobody looks at it: sound only, the picture resumes at a keyframe)
             // a piece of the picture never arrived: the pictures after it would be smeared and
             // streaky until the next keyframe — show the last good one until then instead (the
             // sound carries on), and if it keeps happening, ask the owner to send less
@@ -389,6 +401,29 @@ public final class StreamSubscriber implements FrameSource {
                     }
                     if (c == END) break;
                     QUEUE_WAIT.since(c.madeNanos());
+                    // nobody has looked at any of its walls for a while (and it has shown a picture):
+                    // decode its sound only — decoding and converting pictures nobody sees cost a
+                    // viewer 1–1.5 cores at 1080p60. Seen again: the picture comes back at the next
+                    // keyframe (at most a second; until then the wall keeps its last picture).
+                    boolean hidden = framesDecoded > 0 && System.nanoTime() - lastTakenNanos > HIDDEN_NANOS && splitter.videoPid() >= 0;
+                    if (hidden || (videoPaused && !c.keyframe())) {
+                        if (!videoPaused) {
+                            videoPaused = true;
+                            WindowsCraftClient.LOGGER.info("Viewer for {}: nobody's looking, decoding its sound only", streamId.substring(0, 8));
+                        }
+                        byte[] rest = TsSplitter.without(c.data(), splitter.videoPid());
+                        PAUSED_BYTES.add(c.data().length - rest.length);
+                        if (rest.length > 0) {
+                            ffIn.write(rest);
+                            ffIn.flush();
+                        }
+                        continue;
+                    }
+                    if (videoPaused) {
+                        videoPaused = false;
+                        waitForKey = false;
+                        WindowsCraftClient.LOGGER.info("Viewer for {}: looked at again, pictures back", streamId.substring(0, 8));
+                    }
                     if (waitForKey) {
                         if (!c.keyframe()) continue;
                         waitForKey = false;

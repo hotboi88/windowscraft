@@ -162,7 +162,11 @@ public final class BenchTest implements ClientModInitializer {
         float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
         // windowscraft.bench.lookAway: turn your back on it (is a screen nobody looks at still decoded?)
-        mc.player.setYaw(Boolean.getBoolean("windowscraft.bench.lookAway") ? yaw + 180 : yaw);
+        // (…and windowscraft.bench.lookBackAfter=S: face it again S seconds into the measuring)
+        int back = Integer.getInteger("windowscraft.bench.lookBackAfter", -1);
+        boolean away = Boolean.getBoolean("windowscraft.bench.lookAway")
+                && !(back >= 0 && measureFrom > 0 && System.nanoTime() > measureFrom + back * 1_000_000_000L);
+        mc.player.setYaw(away ? yaw + 180 : yaw);
         mc.player.setPitch(pitch);
     }
 
