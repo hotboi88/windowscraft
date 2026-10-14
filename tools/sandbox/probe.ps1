@@ -146,16 +146,50 @@ Check "…nor monitor 2's (each box keeps its own logins)" ($m2 -and -not ("$($m
 $single = @'
 $m = New-Object System.Threading.Mutex($false, "Local\WindowsCraftSingleTest")
 if (-not $m.WaitOne(0)) { exit 7 }
-Start-Sleep 25
+Start-Sleep 40
 '@
 Set-Content "$env:RUNNER_TEMP\single.ps1" $single
 $a = Start-Process powershell -ArgumentList "-NoProfile -File $env:RUNNER_TEMP\single.ps1" -PassThru -WindowStyle Hidden
-Start-Sleep 3
+Start-Sleep 9
 $b2 = Start-Process powershell -ArgumentList "-NoProfile -File $env:RUNNER_TEMP\single.ps1" -PassThru -WindowStyle Hidden -Wait
 Note "a second plain copy of the single-instance app: exit $($b2.ExitCode) (7 = refused)"
 & "$dir\Start.exe" /box:WCMon1 /silent /wait powershell -NoProfile -File "$env:RUNNER_TEMP\single.ps1"
 $code = $LASTEXITCODE
 Check "an app that only runs once runs again inside a box (a second copy)" ($b2.ExitCode -eq 7 -and $code -ne 7) "outside: $($b2.ExitCode), in box: $code"
+
+# ---- 8. "force" rules: anything started while you sit at monitor 1 lands in its box by itself
+#         (switched on and off as you sit down and get up)
+& "$dir\Start.exe" /terminate_all | Out-Null
+Start-Sleep 2
+$t0 = Get-Date
+& $ini set WCMon1 ForceFolder "C:\" | Out-Null
+& "$dir\Start.exe" /reload | Out-Null
+$ms = [int]((Get-Date) - $t0).TotalMilliseconds
+Note "turning the force rule on took $ms ms"
+$before = (Get-Process msedge -ErrorAction SilentlyContinue).Id
+Start-Process $edge -ArgumentList "$flags http://127.0.0.1:$port/?forced=1"   # (as if from the monitor's own Start menu)
+Start-Sleep 8
+$forced = Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match "forced=1" }
+Check "with the force rule on, an app started the normal way opens in monitor 1's box by itself" ($forced -and (BoxOf $forced[0].Id) -eq "WCMon1") "$($forced | ForEach-Object { "$($_.Id) box '$(BoxOf $_.Id)': $($_.MainWindowTitle)" })"
+$np = Start-Process notepad -PassThru; Start-Sleep 3
+Note "notepad started then: box '$(BoxOf $np.Id)'"
+$np | Stop-Process -Force -ErrorAction SilentlyContinue
+$shellBox = Get-Process explorer -ErrorAction SilentlyContinue | ForEach-Object { BoxOf $_.Id }
+Check "…and the Windows shell itself stays out of it" (-not ($shellBox -match "WCMon")) "explorer boxes: '$($shellBox -join ',')'"
+$t0 = Get-Date
+& $ini delete WCMon1 ForceFolder | Out-Null
+& "$dir\Start.exe" /reload | Out-Null
+Note "turning it off took $([int]((Get-Date) - $t0).TotalMilliseconds) ms"
+$np = Start-Process notepad -PassThru; Start-Sleep 3
+Check "with it off again, apps start normally (on your desk)" ((BoxOf $np.Id) -eq "") "notepad box '$(BoxOf $np.Id)'"
+$np | Stop-Process -Force -ErrorAction SilentlyContinue
+foreach ($w in BoxWins WCMon1) { $null = $w.CloseMainWindow() }
+Start-Sleep 5
+
+# ---- 9. the installer: its signature and fingerprint (to check downloads against)
+$sig = Get-AuthenticodeSignature $inst.FullName
+Note "installer signature: $($sig.Status) by $($sig.SignerCertificate.Subject)"
+Note "installer sha256: $((Get-FileHash $inst.FullName -Algorithm SHA256).Hash)"
 
 # ---- 7. where the boxes keep things, and their size
 $root = "C:\Sandbox"
