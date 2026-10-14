@@ -64,6 +64,22 @@ public final class StreamingTexture extends AbstractTexture {
     private int pendingSlot;
     private boolean pendingOpaque;
     private final CaptureTexture fallback = new CaptureTexture(true);
+    // measurements (off by default)
+    private static final dev.windowscraft.measure.Measure.Metric COPY = dev.windowscraft.measure.Measure.ms("wall.copy",
+            "a frame copied into the GPU buffer (background thread)");
+    private static final dev.windowscraft.measure.Measure.Metric AGE_LOCAL = dev.windowscraft.measure.Measure.ms("wall.show_age",
+            "your own wall: captured → its picture handed to the graphics card (CPU-fed walls)");
+    private static final dev.windowscraft.measure.Measure.Metric AGE_REMOTE = dev.windowscraft.measure.Measure.ms("view.show_age",
+            "someone else's screen: decoded → its picture handed to the graphics card");
+    private static final dev.windowscraft.measure.Measure.Counter SLOT_BUSY = dev.windowscraft.measure.Measure.counter("wall.slots_busy",
+            "a new frame skipped: the graphics card was still reading all three buffers");
+    private static final dev.windowscraft.measure.Measure.Counter COPY_WAIT = dev.windowscraft.measure.Measure.counter("wall.copy_not_done",
+            "frames where the previous copy wasn't finished yet (the picture waits a frame)");
+    private static final GpuTimer GPU_UPLOAD = new GpuTimer(dev.windowscraft.measure.Measure.ms("gpu.wall_upload",
+            "graphics card time: buffer → texture (+ mipmaps) for one CPU-fed wall frame"));
+    private long pendingCapture;
+    private static final boolean SAME_FRAME = Boolean.getBoolean("windowscraft.exp.sameFrame");
+    private boolean pendingRemote;
 
     @Override public void load(ResourceManager manager) {}
     @Override public void setFilter(boolean bilinear, boolean mipmap) {}
@@ -100,12 +116,16 @@ public final class StreamingTexture extends AbstractTexture {
         if (plain) {
             Frame f = source == null ? null : source.takeFrame();
             if (f == null) return false;
+            if (dev.windowscraft.measure.Measure.ON) (source instanceof dev.windowscraft.stream.StreamSubscriber ? AGE_REMOTE : AGE_LOCAL).since(f.captureNanos);
             fallback.upload(f);
             source.recycle(f);
             return true;
         }
         if (pending != null) {
-            if (!pending.isDone()) return false; // the copy of the previous frame is still running
+            if (!pending.isDone()) { // the copy of the previous frame is still running
+                COPY_WAIT.inc();
+                return false;
+            }
             try {
                 pending.get();
                 transfer();
@@ -125,6 +145,7 @@ public final class StreamingTexture extends AbstractTexture {
         }
         int slot = freeSlot();
         if (slot < 0) { // GPU is still reading all three slots (very busy): skip this frame
+            SLOT_BUSY.inc();
             source.recycle(f);
             return false;
         }
@@ -135,15 +156,32 @@ public final class StreamingTexture extends AbstractTexture {
         int bytes = frameBytes;
         pendingSlot = slot;
         pendingOpaque = wantOpaque;
-        pending = COPIER.submit(() -> {
+        pendingCapture = f.captureNanos;
+        pendingRemote = source instanceof dev.windowscraft.stream.StreamSubscriber;
+        Future<?> job = COPIER.submit(() -> {
             try {
+                long c0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
                 f.data.position(0).limit(bytes);
                 target.put(f.data);
                 f.data.position(0);
+                COPY.since(c0);
             } finally {
                 source.recycle(f);
             }
         });
+        pending = job;
+        if (SAME_FRAME) { // Step 0 experiment (dev only): wait for a short copy and show it this frame
+            try {
+                job.get(3, java.util.concurrent.TimeUnit.MILLISECONDS);
+                transfer();
+                pending = null;
+            } catch (java.util.concurrent.TimeoutException e) {
+                // (longer: shown next frame, as usual)
+            } catch (Exception e) {
+                WindowsCraftClient.LOGGER.warn("Frame copy failed", e);
+                pending = null;
+            }
+        }
         return true;
     }
 
@@ -166,6 +204,8 @@ public final class StreamingTexture extends AbstractTexture {
 
     /** Buffer slot → the back texture (asynchronous on the GPU), then show it. */
     private void transfer() {
+        if (dev.windowscraft.measure.Measure.ON) (pendingRemote ? AGE_REMOTE : AGE_LOCAL).since(pendingCapture);
+        GPU_UPLOAD.begin();
         int back = 1 - front;
         GlStateManager._bindTexture(textures[back]);
         if (opaque[back] == null || opaque[back] != pendingOpaque) {
@@ -182,6 +222,7 @@ public final class StreamingTexture extends AbstractTexture {
         GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
         if (mips.now()) GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
         fences[pendingSlot] = GL32.glFenceSync(GL32.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        GPU_UPLOAD.end();
         front = back;
         hasContent = true;
     }

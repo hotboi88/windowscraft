@@ -56,6 +56,37 @@ public final class StreamSubscriber implements FrameSource {
     private volatile long latencyMin = Long.MAX_VALUE, latencyMax;
     private boolean flashing;
 
+    // ---- measurements (off by default) ----
+    private static final dev.windowscraft.measure.Measure.Metric ARRIVAL_AGE = dev.windowscraft.measure.Measure.ms("view.arrival_age",
+            "a picture arriving at this viewer: how long since it was captured (GPU-captured streams; this PC's clock vs the sharer's)");
+    private static final dev.windowscraft.measure.Measure.Metric ARRIVAL_AGE_SYNCED = dev.windowscraft.measure.Measure.ms("view.arrival_age_synced",
+            "the same, with this PC's clock lined up to the relay's (UDP) — exact when the server runs on the sharer's PC");
+    private static final dev.windowscraft.measure.Measure.Metric ARRIVAL_GAP = dev.windowscraft.measure.Measure.ms("view.arrival_interval",
+            "one picture's arrival to the next (pacing after the network)");
+    private static final dev.windowscraft.measure.Measure.Metric QUEUE_WAIT = dev.windowscraft.measure.Measure.ms("view.queue_wait",
+            "a piece of the stream waiting in this viewer's queue before the decoder");
+    private static final dev.windowscraft.measure.Measure.Metric DECODE = dev.windowscraft.measure.Measure.ms("view.decode",
+            "arrived → decoded picture back from FFmpeg (incl. scaling and conversion to BGRA; matched in order)");
+    private static final dev.windowscraft.measure.Measure.Metric FRAME_GAP = dev.windowscraft.measure.Measure.ms("view.decoded_interval",
+            "one decoded picture to the next");
+    private static final dev.windowscraft.measure.Measure.Metric E2E = dev.windowscraft.measure.Measure.ms("view.e2e_testpattern",
+            "test pattern only: captured on the sharer's PC → decoded here (from the timing strip in the picture)");
+    private static final dev.windowscraft.measure.Measure.Counter DECODED = dev.windowscraft.measure.Measure.counter("view.frames_decoded", "pictures decoded");
+    private static final dev.windowscraft.measure.Measure.Counter NOT_SHOWN = dev.windowscraft.measure.Measure.counter("view.frames_not_shown",
+            "pictures decoded but replaced by a newer one before the game took them");
+    private static final dev.windowscraft.measure.Measure.Counter CATCHUPS = dev.windowscraft.measure.Measure.counter("view.catchups", "fell behind and skipped to the newest keyframe");
+    private static final dev.windowscraft.measure.Measure.Counter STALLS = dev.windowscraft.measure.Measure.counter("view.stalls", "over 250 ms without a new picture");
+    private static final dev.windowscraft.measure.Measure.Counter DAMAGED = dev.windowscraft.measure.Measure.counter("view.frames_damaged", "pictures shown after a lost piece (until the next keyframe)");
+    private static final dev.windowscraft.measure.Measure.Counter BYTES = dev.windowscraft.measure.Measure.counter("view.bytes", "bytes received for streams");
+    private static final dev.windowscraft.measure.Measure.Counter DECODE_RESYNC = dev.windowscraft.measure.Measure.counter("view.decode_unmatched",
+            "decode timing lost track (a picture dropped inside FFmpeg) and started over");
+    /** Arrival times of pictures not yet decoded, oldest first (measuring only). */
+    private final ArrayDeque<Long> arrivals = new ArrayDeque<>();
+    private long lastArrival, lastDecoded, connectStarted;
+    private volatile boolean matchDecode;
+    private static final dev.windowscraft.measure.Measure.Metric FIRST_PICTURE = dev.windowscraft.measure.Measure.ms("view.first_picture",
+            "starting to watch (or reconnecting) → the first picture decoded (waits for the next keyframe)");
+
     public StreamSubscriber(UUID displayId, String streamId, int width, int height, int fps) {
         this.displayId = displayId;
         this.streamId = streamId;
@@ -87,7 +118,7 @@ public final class StreamSubscriber implements FrameSource {
             lastTroubleNanos = now;
             ClientNet.trouble(reportAs, dev.windowscraft.net.Payloads.TROUBLE_DECODE);
         }
-        if (!light && fps > 30) {
+        if (!light && fps > 30 && !Boolean.getBoolean("windowscraft.exp.noLight")) { // (Step 0 experiment: dev only)
             light = true;
             quickRestart = true;
             WindowsCraftClient.LOGGER.info("Viewer for {} can't keep up at {} fps; playing at 30 from now on", streamId.substring(0, 8), fps);
@@ -186,6 +217,7 @@ public final class StreamSubscriber implements FrameSource {
 
     private void runOnce() throws Exception {
         status = "Connecting…";
+        connectStarted = System.nanoTime();
         Socket relay;
         InputStream net;
         int udpPort = ClientNet.relayUdpPort();
@@ -241,7 +273,34 @@ public final class StreamSubscriber implements FrameSource {
         long[] queuedBytes = {0};
         double[] byteRate = {0}; // incoming bytes/s, smoothed
         TsSplitter splitter = new TsSplitter();
+        dev.windowscraft.relay.PtsWatch ptsWatch = new dev.windowscraft.relay.PtsWatch();
         dev.windowscraft.relay.UdpReceiver rxNow = udp;
+        synchronized (arrivals) { arrivals.clear(); }
+        // arrivals and decoded pictures are only matched if measuring was on from the start
+        // (started mid-way, pictures already in the decoder would shift every match)
+        matchDecode = dev.windowscraft.measure.Measure.ON;
+        if (dev.windowscraft.measure.Measure.ON) dev.windowscraft.measure.Measure.note("view " + streamId.substring(0, 8),
+                width + "×" + height + "@" + fps + " via " + (rxNow != null ? "UDP" : "TCP") + (light ? ", light playback" : "")
+                        + (windows ? ", hardware decode (auto)" : ""));
+        java.util.function.LongConsumer onPts = p -> {
+            long nowNs = System.nanoTime();
+            long nowMs = System.currentTimeMillis();
+            long age = dev.windowscraft.relay.PtsWatch.ageNanos(p, nowMs);
+            if (age != Long.MIN_VALUE) {
+                ARRIVAL_AGE.record(age);
+                long off = rxNow != null ? rxNow.clockOffsetMs() : Long.MIN_VALUE;
+                if (off != Long.MIN_VALUE) {
+                    long synced = dev.windowscraft.relay.PtsWatch.ageNanos(p, nowMs - off);
+                    if (synced != Long.MIN_VALUE) ARRIVAL_AGE_SYNCED.record(synced);
+                }
+            }
+            if (lastArrival != 0) ARRIVAL_GAP.record(nowNs - lastArrival);
+            lastArrival = nowNs;
+            synchronized (arrivals) {
+                if (arrivals.size() > 240) { arrivals.clear(); DECODE_RESYNC.inc(); }
+                arrivals.add(nowNs);
+            }
+        };
         WindowsCraftClient.LOGGER.info("Viewer for {}: pictures over {}", streamId.substring(0, 8), rxNow != null ? "UDP" : "TCP");
         daemon("viewer net", () -> {
             byte[] buf = new byte[64 * 1024];
@@ -250,6 +309,10 @@ public final class StreamSubscriber implements FrameSource {
                 int n;
                 while (running && (n = net.read(buf)) > 0) {
                     lastDataNanos = System.nanoTime();
+                    if (dev.windowscraft.measure.Measure.ON) {
+                        BYTES.add(n);
+                        ptsWatch.feed(buf, 0, n, onPts);
+                    }
                     List<RelayServer.Chunk> chunks = splitter.feed(buf, n);
                     synchronized (lock) {
                         for (RelayServer.Chunk c : chunks) { queue.add(c); queuedBytes[0] += c.data().length; }
@@ -318,6 +381,7 @@ public final class StreamSubscriber implements FrameSource {
                         queuedBytes[0] -= c.data().length;
                     }
                     if (c == END) break;
+                    QUEUE_WAIT.since(c.madeNanos());
                     if (waitForKey) {
                         if (!c.keyframe()) continue;
                         waitForKey = false;
@@ -392,6 +456,9 @@ public final class StreamSubscriber implements FrameSource {
         }
         queuedBytes[0] -= dropped;
         catchUps++;
+        CATCHUPS.inc();
+        synchronized (arrivals) { arrivals.clear(); } // (those pictures will never be decoded)
+        matchDecode = false; // (and the ones still in the decoder would shift every match from here on)
         fellBehind();
         WindowsCraftClient.LOGGER.info("Viewer for {} was behind; skipped {} KB to get back to live", streamId.substring(0, 8), dropped / 1024);
         return newestKey != null;
@@ -417,11 +484,17 @@ public final class StreamSubscriber implements FrameSource {
             Frame old = latest.getAndSet(f);
             if (old != null) pool.release(old);
             framesDecoded++;
+            if (connectStarted != 0) { // (the first picture since connecting: always cleared, recorded only while measuring)
+                FIRST_PICTURE.since(connectStarted);
+                connectStarted = 0;
+            }
+            if (dev.windowscraft.measure.Measure.ON) measured(f.captureNanos, old != null);
             windowFrames++;
             long gapNow = System.nanoTime();
             if (lastFrameNanos != 0) {
                 long gap = (gapNow - lastFrameNanos) / 1_000_000L;
                 if (gap > 250) {
+                    STALLS.inc();
                     stalls++;
                     stallMs += gap;
                     longestStallMs = Math.max(longestStallMs, gap);
@@ -431,7 +504,7 @@ public final class StreamSubscriber implements FrameSource {
                             (gapNow - lastDataNanos) / 1_000_000L);
                 }
             }
-            if (damaged) damagedFrames++;
+            if (damaged) { damagedFrames++; DAMAGED.inc(); }
             lastFrameNanos = gapNow;
             measureTestPattern(buf);
             long now = System.nanoTime();
@@ -443,11 +516,29 @@ public final class StreamSubscriber implements FrameSource {
         }
     }
 
+    /** Measuring: a picture just came out of the decoder. */
+    private void measured(long now, boolean replacedUnshown) {
+        DECODED.inc();
+        if (replacedUnshown) NOT_SHOWN.inc();
+        if (lastDecoded != 0) FRAME_GAP.record(now - lastDecoded);
+        lastDecoded = now;
+        Long arrived;
+        synchronized (arrivals) {
+            arrived = arrivals.poll();
+            // a handful are in flight inside the decoder; many more means some never came out
+            // (skipped while waiting for a keyframe): start matching over
+            if (arrivals.size() > 30) { arrivals.clear(); DECODE_RESYNC.inc(); arrived = null; }
+        }
+        // (light playback drops every other picture inside FFmpeg: arrivals can't be matched then)
+        if (arrived != null && !light && matchDecode) DECODE.record(now - arrived);
+    }
+
     /** The test pattern carries a timing strip and a once-a-second flash (with a beep). */
     private void measureTestPattern(byte[] bgra) {
         long ts = TestPatternProducer.readTimestamp(bgra, width, height);
         if (ts > 0) {
             long lat = System.currentTimeMillis() - ts;
+            E2E.record(lat * 1_000_000L);
             latencyMs = lat;
             latencyMin = Math.min(latencyMin, lat);
             latencyMax = Math.max(latencyMax, lat);

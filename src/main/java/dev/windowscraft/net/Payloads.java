@@ -75,7 +75,7 @@ public final class Payloads {
         public static final Id<Control> ID = id("control");
         public static final PacketCodec<PacketByteBuf, Control> CODEC = PacketCodec.of(
                 (v, b) -> { b.writeUuid(v.displayId); b.writeByte(v.op); b.writeFloat(v.x); b.writeFloat(v.y); b.writeVarInt(v.a); b.writeFloat(v.f); },
-                b -> new Control(b.readUuid(), b.readByte(), b.readFloat(), b.readFloat(), b.readVarInt(), b.readFloat()));
+                b -> dev.windowscraft.measure.Stamps.arrived(new Control(b.readUuid(), b.readByte(), b.readFloat(), b.readFloat(), b.readVarInt(), b.readFloat())));
         @Override public Id<? extends CustomPayload> getId() { return ID; }
     }
 
@@ -84,7 +84,7 @@ public final class Payloads {
         public static final Id<ControlFrom> ID = id("control_from");
         public static final PacketCodec<PacketByteBuf, ControlFrom> CODEC = PacketCodec.of(
                 (v, b) -> { b.writeUuid(v.from); b.writeString(v.fromName, 64); Control.CODEC.encode(b, v.c); },
-                b -> new ControlFrom(b.readUuid(), b.readString(64), Control.CODEC.decode(b)));
+                b -> dev.windowscraft.measure.Stamps.arrived(new ControlFrom(b.readUuid(), b.readString(64), Control.CODEC.decode(b))));
         @Override public Id<? extends CustomPayload> getId() { return ID; }
     }
 

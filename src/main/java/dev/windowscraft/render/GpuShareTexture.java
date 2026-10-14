@@ -29,6 +29,13 @@ public final class GpuShareTexture extends AbstractTexture {
     private long lastSeq, copied;
     private boolean hasContent;
     private final boolean mipmaps;
+    // measurements (off by default)
+    private static final dev.windowscraft.measure.Measure.Metric SHOW_AGE = dev.windowscraft.measure.Measure.ms("gpu_share.show_age",
+            "direct GPU sharing: captured by Windows → copied into the wall's texture (render thread)");
+    private static final dev.windowscraft.measure.Measure.Counter SKIPPED = dev.windowscraft.measure.Measure.counter("gpu_share.frames_not_shown",
+            "pictures the helper made that were replaced by a newer one before a frame copied them");
+    private static final GpuTimer GPU_COPY = new GpuTimer(dev.windowscraft.measure.Measure.ms("gpu.share_copy",
+            "graphics card time: one GPU-shared picture copied into the wall (+ mipmaps)"));
 
     public GpuShareTexture() { this(true); }
 
@@ -67,6 +74,8 @@ public final class GpuShareTexture extends AbstractTexture {
         java.util.List<Integer> fresh = share.takeAnnounced();
         int slot = fresh.isEmpty() ? -1 : fresh.get(fresh.size() - 1);
         for (int i = 0; i < fresh.size() - 1; i++) if (fresh.get(i) != slot) share.free(fresh.get(i));
+        if (fresh.size() > 1) SKIPPED.add(fresh.size() - 1);
+        if (slot >= 0 && slot < 3) SHOW_AGE.since(share.capturedAt(slot));
         long seq = share.frameSeq();
         if (mipmaps && mips.due() && hasContent) {
             GlStateManager._bindTexture(getGlId());
@@ -75,6 +84,7 @@ public final class GpuShareTexture extends AbstractTexture {
         }
         if (slot < 0 || slot >= 3) return;
         lastSeq = seq;
+        GPU_COPY.begin();
         while (GL11.glGetError() != 0) { /* not ours */ }
         if (!blit) {
             GL43.glCopyImageSubData(glSources[slot], GL11.GL_TEXTURE_2D, 0, 0, 0, 0,
@@ -91,6 +101,7 @@ public final class GpuShareTexture extends AbstractTexture {
             GlStateManager._bindTexture(getGlId());
             GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
         }
+        GPU_COPY.end();
         hasContent = true;
         copied++; // the crash guard stays armed while this runs: if the game ever dies meanwhile, it's off next time
         checkNotBlack();

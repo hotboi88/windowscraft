@@ -1,5 +1,6 @@
 package dev.windowscraft.relay;
 
+import dev.windowscraft.measure.Measure;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -41,8 +42,25 @@ public final class RelayServer implements AutoCloseable {
     private static final long SUBSCRIBER_BYTE_BUDGET = 12L << 20; // never hold more than 12 MB per viewer
     private static final byte[] POISON = new byte[0];
 
-    /** A run of whole 188-byte TS packets; {@code keyframe} if a viewer can start decoding here. */
-    public record Chunk(byte[] data, boolean keyframe) {}
+    /**
+     * A run of whole 188-byte TS packets; {@code keyframe} if a viewer can start decoding here;
+     * {@code madeNanos}: when it was cut (only while measuring, else 0).
+     */
+    public record Chunk(byte[] data, boolean keyframe, long madeNanos) {
+        public Chunk(byte[] data, boolean keyframe) { this(data, keyframe, Measure.ON ? System.nanoTime() : 0); }
+    }
+
+    // measurements (off by default)
+    private static final Measure.Metric IN_AGE = Measure.ms("relay.in_age",
+            "a picture reaching the relay: how long since it was captured (GPU-captured streams; exact when the server runs on the sharer's PC)");
+    private static final Measure.Metric QUEUE_WAIT = Measure.ms("relay.queue_wait",
+            "a piece of a stream waiting in the relay for one viewer (TCP or UDP) before it's sent");
+    private static final Measure.Metric QUEUE_KB = Measure.value("relay.queue_kb", "KB", 1,
+            "what was waiting for a viewer when a piece was sent");
+    private static final Measure.Counter SKIPS = Measure.counter("relay.viewer_skips", "a viewer skipped ahead to the next keyframe (fell a whole interval behind)");
+    private static final Measure.Counter DROPS = Measure.counter("relay.viewer_drops", "a viewer's backlog thrown away (over 12 MB)");
+    private static final Measure.Counter BYTES_IN = Measure.counter("relay.bytes_in", "bytes received from sharers");
+    private static final Measure.Counter BYTES_OUT = Measure.counter("relay.bytes_out", "bytes handed to viewers");
 
     private static final Chunk POISON_CHUNK = new Chunk(POISON, false);
 
@@ -294,11 +312,20 @@ public final class RelayServer implements AutoCloseable {
         s.setSoTimeout(PUBLISHER_SILENCE_MS);
         LOG.info("Stream {} publishing from {}", streamId.substring(0, 8), s.getRemoteSocketAddress());
         TsSplitter splitter = new TsSplitter();
+        PtsWatch pts = new PtsWatch();
+        java.util.function.LongConsumer onPts = p -> {
+            long age = PtsWatch.ageNanos(p, System.currentTimeMillis());
+            if (age != Long.MIN_VALUE) IN_AGE.record(age);
+        };
         byte[] buf = new byte[CHUNK];
         try {
             int n;
             while ((n = in.read(buf)) > 0) {
                 st.bytesIn += n;
+                if (Measure.ON) {
+                    BYTES_IN.add(n);
+                    pts.feed(buf, 0, n, onPts);
+                }
                 for (Chunk c : splitter.feed(buf, n)) deliver(st, c, streamId);
             }
         } catch (java.net.SocketTimeoutException e) {
@@ -339,6 +366,7 @@ public final class RelayServer implements AutoCloseable {
             if (c.keyframe() && sub.keyframesQueued.get() > (sub.udp ? 1 : 0)) {
                 long held = sub.queuedBytes.get();
                 sub.clear();
+                SKIPS.inc();
                 if (++sub.skips % 10 == 1) LOG.info("Viewer {} can't keep up with {}, skipping ahead (x{}; {} KB waiting, last sent {} ms ago)", sub.socket.getRemoteSocketAddress(),
                         streamId.substring(0, 8), sub.skips, held / 1024, (System.nanoTime() - sub.lastTakenNanos) / 1_000_000L);
                 if (sub.skippedForReal()) viewerBehind.accept(streamId);
@@ -346,6 +374,7 @@ public final class RelayServer implements AutoCloseable {
             if (sub.queuedBytes.get() + c.data().length > SUBSCRIBER_BYTE_BUDGET || !sub.queue.offer(c)) {
                 sub.clear(); // pathological backlog: drop everything, restart at the next keyframe
                 sub.started = false;
+                DROPS.inc();
                 if (sub.skippedForReal()) viewerBehind.accept(streamId);
                 continue;
             }
@@ -388,6 +417,7 @@ public final class RelayServer implements AutoCloseable {
                 sub.lastTakenNanos = idleSince;
                 sub.queuedBytes.addAndGet(-chunk.data().length);
                 if (chunk.keyframe()) sub.keyframesQueued.updateAndGet(k -> Math.max(0, k - 1));
+                if (Measure.ON) taken(chunk, sub);
                 out.write(chunk.data());
             }
         } catch (InterruptedException ignored) {
@@ -451,6 +481,7 @@ public final class RelayServer implements AutoCloseable {
                 sub.lastTakenNanos = idleSince;
                 sub.queuedBytes.addAndGet(-chunk.data().length);
                 if (chunk.keyframe()) sub.keyframesQueued.updateAndGet(k -> Math.max(0, k - 1));
+                if (Measure.ON) taken(chunk, sub);
                 ses.write(chunk.data());
                 if (sub.queue.isEmpty()) ses.flush();
                 ses.stats();
@@ -462,6 +493,12 @@ public final class RelayServer implements AutoCloseable {
             control.interrupt();
             LOG.info("UDP viewer {} of {} left: {} packets, {} sent again", s.getRemoteSocketAddress(), streamId.substring(0, 8), ses.totalSent, ses.totalRetx);
         }
+    }
+
+    private static void taken(Chunk chunk, Subscriber sub) {
+        QUEUE_WAIT.since(chunk.madeNanos());
+        QUEUE_KB.record(sub.queuedBytes.get() >> 10);
+        BYTES_OUT.add(chunk.data().length);
     }
 
     interface IoTask { void run() throws IOException; }

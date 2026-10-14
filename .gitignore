@@ -9,4 +9,9 @@ out/
 native/wc-audio/target/
 dist/*.zip
 run-iris/
+run-bench/
+run-alice/
+run-bob/
+run-mp-server/
+run-wintest/
 logs/

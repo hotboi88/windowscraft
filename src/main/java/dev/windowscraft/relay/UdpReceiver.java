@@ -76,6 +76,34 @@ public final class UdpReceiver implements AutoCloseable {
 
     public double rttMs() { return rttMs; }
 
+    // ---- measurements: how far this PC's clock is from the relay's (off by default) ----
+    private static final dev.windowscraft.measure.Measure.Metric NET_DELAY = dev.windowscraft.measure.Measure.ms("view.net_delay",
+            "relay → this viewer, one way, per UDP packet (clocks lined up from the round trip)");
+    private static final dev.windowscraft.measure.Measure.Metric RTT = dev.windowscraft.measure.Measure.ms("view.round_trip",
+            "round trip to the relay (UDP ping)");
+    private volatile long minDeltaMs = Long.MAX_VALUE;
+
+    /**
+     * This PC's clock minus the relay's, in ms (Long.MIN_VALUE until known): the smallest
+     * "received − sent" seen, less half the round trip.
+     */
+    public long clockOffsetMs() {
+        long m = minDeltaMs;
+        double r = rttMs;
+        return m == Long.MAX_VALUE || r < 0 ? Long.MIN_VALUE : m - Math.round(r / 2);
+    }
+
+    private void clock(int sentAt) {
+        long now = System.currentTimeMillis() & 0x7FFFFFFF;
+        long d = now - sentAt;
+        if (d > 0x3FFFFFFF) d -= 0x80000000L;
+        else if (d < -0x3FFFFFFF) d += 0x80000000L;
+        if (d < minDeltaMs) minDeltaMs = d;
+        long off = clockOffsetMs();
+        if (off != Long.MIN_VALUE) NET_DELAY.record(Math.max(0, d - off) * 1_000_000L);
+        if (rttMs >= 0 && (received & 63) == 0) RTT.record(Math.round(rttMs * 1e6));
+    }
+
     /** How long a gap may hold the stream up before it's skipped. */
     public long latencyMs() {
         // time for a lost piece to be asked for and sent again — twice — before giving up on it
@@ -191,8 +219,9 @@ public final class UdpReceiver implements AutoCloseable {
                 if (len < UdpLink.HEADER) return;
                 if (testLoss > 0 && lossDice.nextDouble() < testLoss) return;
                 int seq = b.getInt();
-                b.getInt(); // (sender time: unused)
+                int sentAt = b.getInt(); // the relay's clock (ms) when it sent this
                 received++;
+                if (dev.windowscraft.measure.Measure.ON) clock(sentAt);
                 if (firstDataNanos == 0) firstDataNanos = System.nanoTime();
                 if (next < 0) next = seq;
                 if (seq < next || pending.containsKey(seq)) return; // late or twice

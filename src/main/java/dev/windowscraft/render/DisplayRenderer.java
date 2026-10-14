@@ -94,12 +94,24 @@ public final class DisplayRenderer {
         }
     }
 
+    // measurements (off by default)
+    private static final dev.windowscraft.measure.Measure.Metric WALLS = dev.windowscraft.measure.Measure.ms("frame.wc_walls",
+            "drawing every screen in the world, per frame (render thread, incl. picking up new pictures)");
+    private static final dev.windowscraft.measure.Measure.Metric UPLOAD = dev.windowscraft.measure.Measure.ms("wall.poll",
+            "one wall picking up its newest picture (render thread)");
+    private static final GpuTimer GPU_WALLS = new GpuTimer(dev.windowscraft.measure.Measure.ms("gpu.walls_frame",
+            "graphics card time for all our screens in one frame (uploads + drawing)"));
+
     private static void draw(MatrixStack matrices, Vec3d cam) {
         long t0 = System.nanoTime();
+        GPU_WALLS.begin();
         try {
             drawWalls(matrices, cam);
         } finally {
-            stat(System.nanoTime() - t0);
+            GPU_WALLS.end();
+            long dt = System.nanoTime() - t0;
+            stat(dt);
+            WALLS.record(dt);
         }
     }
 
@@ -131,7 +143,7 @@ public final class DisplayRenderer {
             long tu = System.nanoTime();
             boolean upload = !limitFar || px >= FAR_PX || due(d.id, now);
             Identifier tex = d.pollTexture(frame, upload);
-            if (upload) { statUploads++; statUploadNanos += System.nanoTime() - tu; }
+            if (upload) { statUploads++; long du = System.nanoTime() - tu; statUploadNanos += du; UPLOAD.record(du); }
             if (tex != null && dev.windowscraft.client.DeskView.covers(d)) {
                 // (you sit at it: it's drawn flat and sharp on your view, right over this spot)
             } else if (tex != null) {

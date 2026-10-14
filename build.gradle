@@ -94,6 +94,8 @@ loom {
             runDir "run-mp-server"
             vmArg "-Dwindowscraft.autotest.server=true"
             vmArg "-Dwindowscraft.relay.debugToken=0123456789abcdef0123456789abcdef"
+            // extra JVM properties for a run (e.g. the Step 0 benchmark): -PwcArgs="-Da=1 -Db=2"
+            if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
             // the server offers a pretend newer WindowsCraft (any jar will do) to test updates
             vmArg "-Dwindowscraft.update.testJar=${projectDir}/build/libs/windowscraft-${project.mod_version}+mc1.21.1.jar"
             programArgs "nogui"
@@ -103,8 +105,10 @@ loom {
             name "MP test sharer"
             source sourceSets.testmod
             runDir "run-alice"
-            vmArg "-Dwindowscraft.autotest.role=sharer"
-            programArgs "--quickPlayMultiplayer", "127.0.0.1:25565", "--username", "Alice", "--width", "854", "--height", "480"
+            if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=sharer"
+            if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
+            // -PmpPort: a test server on another port (one is already running on 25565)
+            programArgs "--quickPlayMultiplayer", "127.0.0.1:" + (project.findProperty("mpPort") ?: "25565"), "--username", "Alice", "--width", "854", "--height", "480"
             if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
         }
         mpViewer {
@@ -112,12 +116,23 @@ loom {
             name "MP test viewer"
             source sourceSets.testmod
             runDir "run-bob"
-            vmArg "-Dwindowscraft.autotest.role=viewer"
+            if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=viewer"
+            if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
             vmArg "-Dwindowscraft.update.test=true"
             vmArg "-Dwindowscraft.update.testJar=${projectDir}/build/libs/windowscraft-${project.mod_version}+mc1.21.1.jar"
             if (project.hasProperty("forceCatchup")) vmArg "-Dwindowscraft.debug.forceCatchup=true"
-            programArgs "--quickPlayMultiplayer", "127.0.0.1:25565", "--username", "Bob", "--width", "1280", "--height", "720"
+            programArgs "--quickPlayMultiplayer", "127.0.0.1:" + (project.findProperty("mpPort") ?: "25565"), "--username", "Bob", "--width", "1280", "--height", "720"
             if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
+        }
+        // Step 0: your own in-game monitor, measured standing and seated (tools/bench/monitor.sh)
+        benchMonitor {
+            client()
+            name "Step 0 bench (in-game monitor)"
+            source sourceSets.testmod
+            runDir "run-bench"
+            vmArg "-Dwindowscraft.bench.monitor=true"
+            if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
+            programArgs "--quickPlaySingleplayer", "bench", "--width", "1600", "--height", "900"
         }
         worldgen {
             server()

@@ -399,6 +399,12 @@ Cobbleverse's Sodium 0.8.12 + Iris 1.8.14 and Complementary Reimagined.
 - **Something wrong?** Type **`/windowscraft report`** in chat. It saves one zip on your Desktop
   with the recent game logs, crash files, a system summary and — if the mod heard any clicks in
   screen sound — short sound samples of them. Send that file along with what happened.
+- **Measuring (off unless you start it):** **`/windowscraft measure start 60`** measures for a
+  minute what your screens cost and how long each step takes (capture, encoding, the relay, the
+  network, decoding, drawing; your frame rate and 1 % lows; memory, CPU and graphics card), then
+  saves a report in `windowscraft/measurements/` in the game folder (`stop` ends it early,
+  `status` says if it's on). On a dedicated server, `windowscraft-server measure start 60` in the
+  server console does the same for the relay. Reports hold numbers only — no window titles or names.
 - **Delay:** usually about **0.3 s** behind the real screen. If a PC is momentarily too busy,
   the viewer skips ahead rather than falling behind.
 - **Bandwidth:** each screen is encoded once on the sharer's PC, about 3 Mbit/s at 720p30 and up

@@ -22,7 +22,9 @@
 //!             frame <slot>
 //!   --box full|client: the whole window as you see it on the desktop (title bar too), or only
 //!   the app's content (default).
-//!   stdin lines: "fps <n>" changes the frame rate on the fly.
+//!   stdin lines: "fps <n>" changes the frame rate on the fly; "timing 1" (measurements only)
+//!   adds when each picture was captured to its "frame" line: "frame <slot> <time>", in 100 ns
+//!   units of the system's performance counter (Java's System.nanoTime() / 100 on Windows).
 //!
 //!   --ext: the pictures are shared as NT handles, copied straight into Minecraft's process
 //!   (OpenGL imports them as external memory, GL_EXT_memory_object_win32), and each "frame" line
@@ -69,11 +71,17 @@ struct Args {
     cpu: Option<String>,
     full_box: bool,
     ext: bool,
+    hires: bool,
+}
+
+#[link(name = "winmm")]
+extern "system" {
+    fn timeBeginPeriod(period: u32) -> u32;
 }
 
 fn parse() -> Result<Args, String> {
     let v: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = Args { hwnd: None, hmonitor: None, fps: 60, cursor: true, luid: None, parent: None, selftest: false, cpu: None, full_box: false, ext: false };
+    let mut a = Args { hwnd: None, hmonitor: None, fps: 60, cursor: true, luid: None, parent: None, selftest: false, cpu: None, full_box: false, ext: false, hires: false };
     let mut i = 0;
     while i < v.len() {
         if v[i] == "--selftest" {
@@ -83,6 +91,13 @@ fn parse() -> Result<Args, String> {
         }
         if v[i] == "--ext" {
             a.ext = true;
+            i += 1;
+            continue;
+        }
+        // Step 0 experiment (dev only): 1 ms timer resolution for this helper, so its short waits
+        // for the next picture really are short (Windows' default is 15.6 ms)
+        if v[i] == "--hires" {
+            a.hires = true;
             i += 1;
             continue;
         }
@@ -352,6 +367,7 @@ fn run(a: Args) -> windows::core::Result<()> {
 
     let stop = Arc::new(AtomicBool::new(false));
     let fps_now = Arc::new(std::sync::atomic::AtomicU32::new(a.fps.max(1)));
+    let timing = Arc::new(AtomicBool::new(false));
     // --ext: a picture the game may still be copying is never written over; the game says
     // "free <slot>" once it's done with one (until then the slot is skipped, or the frame dropped)
     let free: Arc<[AtomicBool; SLOTS]> = Arc::new([AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true)]);
@@ -359,6 +375,7 @@ fn run(a: Args) -> windows::core::Result<()> {
         let stop = stop.clone();
         let fps_now = fps_now.clone();
         let free = free.clone();
+        let timing = timing.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
             let stdin = io::stdin();
@@ -374,6 +391,8 @@ fn run(a: Args) -> windows::core::Result<()> {
                     if let Ok(n) = v.trim().parse::<u32>() {
                         fps_now.store(n.clamp(1, 240), Ordering::SeqCst);
                     }
+                } else if let Some(v) = line.trim().strip_prefix("timing ") {
+                    timing.store(v.trim() == "1", Ordering::SeqCst);
                 }
             }
             stop.store(true, Ordering::SeqCst);
@@ -521,11 +540,13 @@ fn run(a: Args) -> windows::core::Result<()> {
                 gpu_selftest::wait_idle(&device, &ctx, &mut query);
             }
         }
+        let captured = if timing.load(Ordering::SeqCst) { frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0) } else { 0 };
         drop(frame);
         if a.ext {
             free[next_slot].store(false, Ordering::SeqCst); // the game's until it says "free"
         }
-        if !say(&mut out, &format!("frame {next_slot}")) {
+        let line = if captured > 0 { format!("frame {next_slot} {captured}") } else { format!("frame {next_slot}") };
+        if !say(&mut out, &line) {
             break;
         }
         next_slot = (next_slot + 1) % SLOTS;
@@ -543,6 +564,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    if a.hires {
+        unsafe { timeBeginPeriod(1) };
+    }
     if a.selftest {
         println!("{}", gpu_selftest::run(a.luid));
         return std::process::ExitCode::SUCCESS;

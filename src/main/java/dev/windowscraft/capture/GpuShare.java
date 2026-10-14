@@ -52,6 +52,21 @@ public final class GpuShare {
 
     public GpuShare(SourceInfo source) { this.source = source; }
 
+    // measurements (off by default)
+    private static final java.util.Set<GpuShare> LIVE = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final dev.windowscraft.measure.Measure.Metric ANNOUNCE_AGE = dev.windowscraft.measure.Measure.ms("gpu_share.announce_age",
+            "direct GPU sharing: captured by Windows → the game hears a new picture is ready");
+    private static final dev.windowscraft.measure.Measure.Counter FRAMES = dev.windowscraft.measure.Measure.counter("gpu_share.frames", "pictures announced by the GPU sharing helper");
+    /** When each slot's picture was captured (helper stamp as a nanoTime; measuring only). */
+    private final long[] capturedAt = new long[3];
+    static {
+        dev.windowscraft.measure.Measure.onStart(() -> { for (GpuShare s : LIVE) s.send("timing 1"); });
+        dev.windowscraft.measure.Measure.onStop(() -> { for (GpuShare s : LIVE) s.send("timing 0"); });
+    }
+
+    /** Measuring: when that slot's picture was captured (a nanoTime), or 0. */
+    public long capturedAt(int slot) { return slot >= 0 && slot < 3 ? capturedAt[slot] : 0; }
+
     public static boolean supported(SourceInfo s) {
         return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
                 && (s.kind() == SourceInfo.Kind.WINDOW && s.handle() != 0 || s.kind() == SourceInfo.Kind.SCREEN);
@@ -68,7 +83,10 @@ public final class GpuShare {
             cmd.addAll(List.of("--ext", "--fps", Integer.toString(fps), "--cursor", cursor ? "1" : "0",
                     "--parent-pid", Long.toString(ProcessHandle.current().pid())));
             if (luid != null) cmd.addAll(List.of("--adapter-luid", Integer.toUnsignedString(luid[0]) + ":" + luid[1]));
+            if (Boolean.getBoolean("windowscraft.exp.hires")) cmd.add("--hires"); // (Step 0 experiment, dev only)
             process = new ProcessBuilder(cmd).start();
+            LIVE.add(this);
+            if (dev.windowscraft.measure.Measure.ON) send("timing 1");
             Thread out = new Thread(() -> readOut(process.getInputStream()), "WindowsCraft gpu share");
             out.setDaemon(true);
             out.start();
@@ -101,8 +119,13 @@ public final class GpuShare {
                     announced.clear(); // new pictures: the helper starts them all free
                     slots = new Slots(Integer.parseInt(p[1]), Integer.parseInt(p[2]), h, ++versions, new java.util.concurrent.atomic.AtomicBoolean());
                     if (old != null) old.closeIfUntaken();
-                } else if (p[0].equals("frame") && p.length == 2) {
-                    latestSlot = Integer.parseInt(p[1]);
+                } else if (p[0].equals("frame") && p.length >= 2) {
+                    int k = Integer.parseInt(p[1]);
+                    long cap = p.length >= 3 ? dev.windowscraft.measure.Measure.helperNanos(p[2]) : 0;
+                    if (k >= 0 && k < 3) capturedAt[k] = cap;
+                    if (cap != 0) ANNOUNCE_AGE.since(cap);
+                    FRAMES.inc();
+                    latestSlot = k;
                     announced.add(latestSlot);
                     lastFrameNanos = System.nanoTime();
                     frameSeq++;

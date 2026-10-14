@@ -386,7 +386,22 @@ public final class ScreenControl {
     }
 
     /** A player used one of your walls (the server only passes this on if you allowed them; checked again here). */
+    private static final dev.windowscraft.measure.Measure.Metric GUEST_WAIT = dev.windowscraft.measure.Measure.ms("input.host_wait",
+            "someone's input: arrived at your game → handled on your game thread");
+    private static final dev.windowscraft.measure.Measure.Metric GUEST_APPLY = dev.windowscraft.measure.Measure.ms("input.host_apply",
+            "someone's input: handled → handed to Windows (helper)");
+
     public static void fromGuest(MinecraftClient mc, Payloads.ControlFrom m) {
+        GUEST_WAIT.since(dev.windowscraft.measure.Stamps.take(m));
+        long t0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
+        try {
+            fromGuest0(mc, m);
+        } finally {
+            GUEST_APPLY.since(t0);
+        }
+    }
+
+    private static void fromGuest0(MinecraftClient mc, Payloads.ControlFrom m) {
         Payloads.Control c = m.c();
         Display d = DisplayManager.get().byId(c.displayId());
         if (d == null || !controllable(d) || !d.controllers.containsKey(m.from())) return;

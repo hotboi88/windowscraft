@@ -40,6 +40,22 @@ import java.util.concurrent.locks.LockSupport;
 public final class StreamPublisher {
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    // measurements (off by default)
+    private static final dev.windowscraft.measure.Measure.Metric OUT_AGE = dev.windowscraft.measure.Measure.ms("enc.out_age",
+            "a picture leaving the encoder: how long since it was captured (GPU capture path: capture + scale + encode)");
+    private static final dev.windowscraft.measure.Measure.Metric OUT_GAP = dev.windowscraft.measure.Measure.ms("enc.out_interval",
+            "one encoded picture to the next (the stream's pacing; a still screen sends nothing)");
+    private static final dev.windowscraft.measure.Measure.Metric RELAY_WRITE = dev.windowscraft.measure.Measure.ms("enc.relay_write",
+            "handing encoded data to the relay connection (long = the connection is backed up)");
+    private static final dev.windowscraft.measure.Measure.Metric FEED = dev.windowscraft.measure.Measure.ms("enc.cpu_feed_write",
+            "CPU path: writing one raw picture into FFmpeg");
+    private static final dev.windowscraft.measure.Measure.Counter BYTES = dev.windowscraft.measure.Measure.counter("enc.bytes", "encoded bytes sent to the relay");
+
+    private static final dev.windowscraft.measure.Measure.Counter PICTURES = dev.windowscraft.measure.Measure.counter("enc.pictures", "encoded pictures sent");
+    private static final dev.windowscraft.measure.Measure.Counter RESTARTS = dev.windowscraft.measure.Measure.counter("enc.restarts", "stream pipeline rebuilt (FFmpeg restarted)");
+    private static final dev.windowscraft.measure.Measure.Counter LOWERED = dev.windowscraft.measure.Measure.counter("enc.lowered", "stream turned down a step");
+    private static final dev.windowscraft.measure.Measure.Counter CPU_SKIPS = dev.windowscraft.measure.Measure.counter("enc.cpu_skips", "CPU path: FFmpeg fell half a second behind, pictures skipped");
+
     /** A wall showing this stream. One capture + one encode can feed several walls (mirroring). */
     public record Target(UUID displayId, String dimension, WallRect rect, int fit, List<UUID> controllers) {}
 
@@ -361,6 +377,7 @@ public final class StreamPublisher {
                             gpuFailed ? "using CPU capture" : "trying the GPU's own converter");
                 }
                 WindowsCraftClient.LOGGER.warn("Stream pipeline restarting: {}", e.toString());
+                RESTARTS.inc();
                 status = "Reconnecting… (" + e.getMessage() + ")";
             } finally {
                 teardown();
@@ -490,7 +507,7 @@ public final class StreamPublisher {
         cmd.addAll(List.of("-b:v", kb + "k", "-maxrate", kb + "k", "-bufsize", (kb / 2) + "k", "-g", Integer.toString(Math.max(1, (int) Math.round(fps * keyEvery()))), "-bf", "0",
                 "-c:a", "aac", "-b:a", "192k",
                 // never let the muxer hold one stream back waiting for the other (default: up to 10 s)
-                "-max_interleave_delta", "100000",
+                "-max_interleave_delta", System.getProperty("windowscraft.exp.interleave", "100000"), // (Step 0 experiment: other values, dev only)
                 "-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "pipe:1"));
         if (wantPreview) {
             cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
@@ -522,6 +539,20 @@ public final class StreamPublisher {
         status = "Live · " + how;
         WindowsCraftClient.LOGGER.info("Streaming '{}' {}x{}@{} via {}{} at {} kb/s to {}:{}", source.title(), ew, eh, fps, enc.name(),
                 gpu ? " (GPU capture)" : "", kb, ClientNet.relayHost(), ClientNet.relayPort());
+        String measureKey = "stream " + streamId.substring(0, 8);
+        String measureFact = ew + "×" + eh + "@" + fps + " " + enc.name() + (gpu ? ", GPU capture" + (wantPreview ? " + preview for your wall" : "") : ", CPU frames")
+                + ", " + kb + " kb/s, step " + level + (dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(source) ? ", in-game monitor" : "");
+        dev.windowscraft.measure.Measure.note(measureKey, measureFact);
+        dev.windowscraft.relay.PtsWatch ptsWatch = new dev.windowscraft.relay.PtsWatch();
+        long[] lastPic = {0};
+        java.util.function.LongConsumer onPts = p -> {
+            long age = dev.windowscraft.relay.PtsWatch.ageNanos(p, System.currentTimeMillis());
+            if (age != Long.MIN_VALUE) OUT_AGE.record(age);
+            long t = System.nanoTime();
+            if (lastPic[0] != 0) OUT_GAP.record(t - lastPic[0]);
+            lastPic[0] = t;
+            PICTURES.inc();
+        };
         long pipelineStart = System.nanoTime();
         videoSkips = 0;
         int slowSeconds = 0, skipSeconds = 0;
@@ -574,6 +605,12 @@ public final class StreamPublisher {
             }
             long stuck = System.nanoTime() - w0;
             blocked += stuck;
+            if (dev.windowscraft.measure.Measure.ON) {
+                RELAY_WRITE.record(stuck);
+                BYTES.add(n);
+                ptsWatch.feed(buf, 0, n, onPts);
+                dev.windowscraft.measure.Measure.note(measureKey, measureFact);
+            }
             // one write held up for over a second: the connection is far too slow for this stream
             if (stuck > 1_000_000_000L) lower("the connection to the server is too slow");
             windowBytes += n;
@@ -668,6 +705,7 @@ public final class StreamPublisher {
         levelWhy = why;
         levelSince = System.nanoTime();
         WindowsCraftClient.LOGGER.warn("Stream '{}': {}; lowering quality to step {}", source.title(), why, level);
+        LOWERED.inc();
         quickRestart = true;
         throw new IOException("lowering quality: " + why);
     }
@@ -764,6 +802,7 @@ public final class StreamPublisher {
                 if (due - written > fps / 2) { // fell half a second behind: skip, don't burst
                     written = due - 1;
                     videoSkips++;
+                    CPU_SKIPS.inc();
                 }
                 while (written < due) {
                     byte[] next = latest.getAndSet(null);
@@ -773,7 +812,9 @@ public final class StreamPublisher {
                     }
                     if (current == null) break;
                     if (current.length != w * h * 4) return; // size changed; the pipeline restarts
+                    long f0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
                     out.write(current);
+                    FEED.since(f0);
                     written++;
                 }
                 LockSupport.parkNanos(start + (written + 1) * interval - System.nanoTime());

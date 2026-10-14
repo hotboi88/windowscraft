@@ -43,6 +43,25 @@ public final class WgcProducer implements FrameProducer {
     private long taken;
     private volatile int fps;
     private final long startedNanos = System.nanoTime();
+    /** Measuring: when the newest picture was captured (helper's stamp, as a nanoTime), else 0. */
+    private volatile long latestCaptured;
+    private static final java.util.Set<WgcProducer> LIVE = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final dev.windowscraft.measure.Measure.Metric HELPER_AGE = dev.windowscraft.measure.Measure.ms("capture.helper_age",
+            "CPU-read capture (in-game monitors' own walls): captured by Windows → copied out by the game");
+    private static final dev.windowscraft.measure.Measure.Metric COPY_OUT = dev.windowscraft.measure.Measure.ms("capture.copy_out",
+            "copying one picture out of the helper's shared memory (capture thread)");
+    static {
+        dev.windowscraft.measure.Measure.onStart(() -> { for (WgcProducer p : LIVE) p.timing(true); });
+        dev.windowscraft.measure.Measure.onStop(() -> { for (WgcProducer p : LIVE) p.timing(false); });
+    }
+
+    private void timing(boolean on) {
+        try {
+            control.write(("timing " + (on ? 1 : 0) + "\n").getBytes(StandardCharsets.US_ASCII));
+            control.flush();
+        } catch (IOException ignored) {
+        }
+    }
 
     /**
      * @param fullWindow the whole window as on the desktop (title bar included), or only its content
@@ -58,6 +77,7 @@ public final class WgcProducer implements FrameProducer {
         String name = "Local\\windowscraft-" + ProcessHandle.current().pid() + "-" + IDS.incrementAndGet();
         cmd.addAll(List.of("--cpu", name, "--box", fullWindow ? "full" : "client", "--fps", Integer.toString(fps),
                 "--cursor", source.kind() == SourceInfo.Kind.SCREEN && !dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(source) ? "1" : "0", "--parent-pid", Long.toString(ProcessHandle.current().pid())));
+        if (Boolean.getBoolean("windowscraft.exp.hires")) cmd.add("--hires"); // (Step 0 experiment, dev only)
         process = new ProcessBuilder(cmd).start();
         control = process.getOutputStream();
         Thread out = new Thread(this::readOut, "WindowsCraft wgc " + source.title());
@@ -74,6 +94,8 @@ public final class WgcProducer implements FrameProducer {
         }, "WindowsCraft wgc log");
         err.setDaemon(true);
         err.start();
+        LIVE.add(this);
+        if (dev.windowscraft.measure.Measure.ON) timing(true);
     }
 
     public static boolean supported(SourceInfo s) {
@@ -87,7 +109,8 @@ public final class WgcProducer implements FrameProducer {
                 String[] p = line.trim().split(" ");
                 if (p[0].equals("cpuslots") && p.length == 4) {
                     remap(Integer.parseInt(p[1]), Integer.parseInt(p[2]), p[3]);
-                } else if (p[0].equals("frame") && p.length == 2) {
+                } else if (p[0].equals("frame") && p.length >= 2) {
+                    latestCaptured = p.length >= 3 ? dev.windowscraft.measure.Measure.helperNanos(p[2]) : 0;
                     latestSlot = Integer.parseInt(p[1]);
                     arrived++;
                 } else if (p[0].equals("gone")) {
@@ -154,6 +177,7 @@ public final class WgcProducer implements FrameProducer {
         if (a == taken || slot < 0 || view == null) return null; // nothing new: the window hasn't changed
         long seqBefore = view.getLong(slot * 8L);
         if (seqBefore == 0) return null; // being written right now; next time
+        long captured = latestCaptured, c0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
         Frame f = pool.acquire(w, h);
         ByteBuffer src = view.getByteBuffer(HEADER + (long) slot * w * h * 4, (long) w * h * 4);
         f.data.put(src);
@@ -164,6 +188,10 @@ public final class WgcProducer implements FrameProducer {
         }
         taken = a;
         f.alphaValid = false;
+        if (c0 != 0) {
+            COPY_OUT.since(c0);
+            HELPER_AGE.since(captured);
+        }
         return f;
     }
 
@@ -171,6 +199,7 @@ public final class WgcProducer implements FrameProducer {
 
     @Override
     public synchronized void close() {
+        LIVE.remove(this);
         try {
             control.close();
         } catch (IOException ignored) {

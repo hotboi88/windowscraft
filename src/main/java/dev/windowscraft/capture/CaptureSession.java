@@ -33,6 +33,15 @@ public final class CaptureSession implements FrameSource {
     private volatile double avgCaptureMs;
     private volatile int outW, outH;
 
+    // measurements (off by default)
+    private static final dev.windowscraft.measure.Measure.Metric GRAB = dev.windowscraft.measure.Measure.ms("capture.grab",
+            "taking one picture on the CPU path (capture thread; GDI, or reading the helper's shared memory)");
+    private static final dev.windowscraft.measure.Measure.Metric INTERVAL = dev.windowscraft.measure.Measure.ms("capture.interval",
+            "one captured picture to the next (CPU path)");
+    private static final dev.windowscraft.measure.Measure.Counter NOT_SHOWN = dev.windowscraft.measure.Measure.counter("capture.frames_not_shown",
+            "captured pictures replaced by a newer one before the wall took them");
+    private long lastGrabbed;
+
     public CaptureSession(SourceInfo source, CaptureSettings settings) {
         this.source = source;
         this.settings = settings;
@@ -88,12 +97,20 @@ public final class CaptureSession implements FrameSource {
                 long t1 = System.nanoTime();
                 if (f != null) {
                     f.captureNanos = t1;
+                    if (dev.windowscraft.measure.Measure.ON) {
+                        GRAB.record(t1 - t0);
+                        if (lastGrabbed != 0) INTERVAL.record(t1 - lastGrabbed);
+                        lastGrabbed = t1;
+                    } else lastGrabbed = 0;
                     java.util.function.Consumer<Frame> t = tap;
                     if (t != null) t.accept(f);
                     outW = f.width;
                     outH = f.height;
                     Frame old = latest.getAndSet(f);
-                    if (old != null) pool.release(old);
+                    if (old != null) {
+                        pool.release(old);
+                        NOT_SHOWN.inc();
+                    }
                     state = State.LIVE;
                     message = null;
                     framesInWindow++;

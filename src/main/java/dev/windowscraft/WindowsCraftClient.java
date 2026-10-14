@@ -46,6 +46,7 @@ public final class WindowsCraftClient implements ClientModInitializer {
         KeyBindingHelper.registerKeyBinding(THEATER_KEY);
         ClientNet.init();
         dev.windowscraft.client.Report.register();
+        dev.windowscraft.client.MeasureCommand.register(); // Step 0 measurements (off unless started)
         dev.windowscraft.client.Tablet.register();
         dev.windowscraft.client.Updater.register(); // updates from the server you play on (once you say yes)
         dev.windowscraft.render.GpuCrashGuard.checkAtStartup();
@@ -59,23 +60,41 @@ public final class WindowsCraftClient implements ClientModInitializer {
         dev.windowscraft.monitor.InGameMonitors.recoverAtStartup(); // and Windows' taskbar setting an in-game monitor changed
         ClientTickEvents.START_CLIENT_TICK.register(dev.windowscraft.client.TheaterMode::tick);
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
-            while (THEATER_KEY.wasPressed()) if (mc.currentScreen == null) dev.windowscraft.client.TheaterMode.toggle(mc);
-            while (SHARE_KEY.wasPressed()) onSharePressed(mc);
-            DisplayManager.get().tick(mc);
-            RemoteDisplays.tick(mc);
-            dev.windowscraft.client.ScreenControl.tick(mc);
-            dev.windowscraft.monitor.InGameMonitors.tick(mc);
-            dev.windowscraft.client.Tablet.tick(mc);
-            dev.windowscraft.client.BusyGuard.tick(mc);
-            if (dev.windowscraft.capture.win.WinGeom.gameWindow == 0 && dev.windowscraft.capture.win.WinGeom.available()) {
-                try {
-                    dev.windowscraft.capture.win.WinGeom.gameWindow = org.lwjgl.glfw.GLFWNativeWin32.glfwGetWin32Window(mc.getWindow().getHandle());
-                    dev.windowscraft.capture.win.WinOps.gameWindow = dev.windowscraft.capture.win.WinGeom.gameWindow;
-                } catch (Throwable t) {
-                    dev.windowscraft.capture.win.WinGeom.gameWindow = -1;
-                }
+            long tick0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
+            try {
+                endTick(mc);
+            } finally {
+                CLIENT_TICK.since(tick0);
             }
         });
+        registerRest();
+    }
+
+    private static final dev.windowscraft.measure.Measure.Metric CLIENT_TICK = dev.windowscraft.measure.Measure.ms("tick.wc_client",
+            "WindowsCraft's work in each game tick (20 a second, game thread)");
+    private static final dev.windowscraft.measure.Measure.Metric HUD = dev.windowscraft.measure.Measure.ms("frame.wc_hud",
+            "the sit-down view and hints drawn over the game, per frame");
+
+    private static void endTick(MinecraftClient mc) {
+        while (THEATER_KEY.wasPressed()) if (mc.currentScreen == null) dev.windowscraft.client.TheaterMode.toggle(mc);
+        while (SHARE_KEY.wasPressed()) onSharePressed(mc);
+        DisplayManager.get().tick(mc);
+        RemoteDisplays.tick(mc);
+        dev.windowscraft.client.ScreenControl.tick(mc);
+        dev.windowscraft.monitor.InGameMonitors.tick(mc);
+        dev.windowscraft.client.Tablet.tick(mc);
+        dev.windowscraft.client.BusyGuard.tick(mc);
+        if (dev.windowscraft.capture.win.WinGeom.gameWindow == 0 && dev.windowscraft.capture.win.WinGeom.available()) {
+            try {
+                dev.windowscraft.capture.win.WinGeom.gameWindow = org.lwjgl.glfw.GLFWNativeWin32.glfwGetWin32Window(mc.getWindow().getHandle());
+                dev.windowscraft.capture.win.WinOps.gameWindow = dev.windowscraft.capture.win.WinGeom.gameWindow;
+            } catch (Throwable t) {
+                dev.windowscraft.capture.win.WinGeom.gameWindow = -1;
+            }
+        }
+    }
+
+    private static void registerRest() {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, mc) -> mc.execute(() -> {
             DisplayManager.get().onJoin(mc);
             if (dev.windowscraft.render.GpuCrashGuard.consumeTripped() && mc.player != null) {
@@ -91,7 +110,11 @@ public final class WindowsCraftClient implements ClientModInitializer {
         WorldRenderEvents.AFTER_ENTITIES.register(DisplayRenderer::render);
         // no block outline on a screen: it should look like the picture is on the wall
         WorldRenderEvents.BEFORE_BLOCK_OUTLINE.register((ctx, hit) -> !dev.windowscraft.client.ScreenLook.isScreen(hit));
-        net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(dev.windowscraft.client.DeskView::render);
+        net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register((ctx, counter) -> {
+            long t0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
+            dev.windowscraft.client.DeskView.render(ctx, counter);
+            HUD.since(t0);
+        });
         net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(dev.windowscraft.client.TheaterHint::render);
         LOGGER.info("WindowsCraft ready — look at a black concrete wall and press the share key (default U)");
     }

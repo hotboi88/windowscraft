@@ -21,7 +21,9 @@ public abstract class GameRendererMixin {
     /** Before the world: which screen you're pointing at (and its pointer). */
     @org.spongepowered.asm.mixin.injection.Inject(method = "renderWorld", at = @At("HEAD"))
     private void windowscraft$pointing(RenderTickCounter tickCounter, org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        long t0 = dev.windowscraft.measure.Measure.frame();
         dev.windowscraft.client.ScreenControl.frame(net.minecraft.client.MinecraftClient.getInstance());
+        dev.windowscraft.measure.Measure.POINTING.since(t0);
     }
 
     @WrapOperation(method = "renderWorld", at = @At(value = "INVOKE",

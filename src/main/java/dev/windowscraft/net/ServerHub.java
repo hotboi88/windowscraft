@@ -45,6 +45,7 @@ public final class ServerHub {
 
     public static void init() {
         loadConfig();
+        MeasureServerCommand.register(); // Step 0 measurements of the relay (off unless started)
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> shutdown());
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.player));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onLeave(handler.player));
@@ -226,15 +227,30 @@ public final class ServerHub {
     }
 
     /** Someone uses a screen: only passed on to its owner if the owner allowed exactly this player. */
+    private static final dev.windowscraft.measure.Measure.Metric CONTROL_WAIT = dev.windowscraft.measure.Measure.ms("input.server_wait",
+            "someone's click/key/move: arrived at the server → handled on the server thread (waits for the next tick)");
+    private static final dev.windowscraft.measure.Measure.Counter CONTROL_DROPPED = dev.windowscraft.measure.Measure.counter("input.rate_dropped",
+            "input dropped by the server's 300-a-second limit");
+    private static final dev.windowscraft.measure.Measure.Counter CONTROL_DROPPED_RELEASE = dev.windowscraft.measure.Measure.counter("input.rate_dropped_release",
+            "of those: a button or key being let go (it then stays held on the screen)");
+    private static final dev.windowscraft.measure.Measure.Counter CONTROL_PASSED = dev.windowscraft.measure.Measure.counter("input.server_passed",
+            "input passed on to a screen's owner");
+
     private static void onControl(ServerPlayerEntity player, Payloads.Control c) {
+        CONTROL_WAIT.since(dev.windowscraft.measure.Stamps.take(c));
         MinecraftServer server = player.getServer();
         Live l = displays.get(c.displayId());
         if (server == null || l == null || c.op() < 0 || c.op() > Payloads.OP_LAST) return;
         if (!l.info.controllableBy(player.getUuid()) || l.owner.equals(player.getUuid())) return;
         if (!Float.isFinite(c.x()) || !Float.isFinite(c.y()) || !Float.isFinite(c.f())) return;
-        if (!underLimit(player.getUuid(), MAX_CONTROL_PER_SECOND)) return;
+        if (!underLimit(player.getUuid(), MAX_CONTROL_PER_SECOND)) {
+            CONTROL_DROPPED.inc();
+            if (c.op() == Payloads.OP_BUTTON_UP || c.op() == Payloads.OP_KEY_UP) CONTROL_DROPPED_RELEASE.inc();
+            return;
+        }
         ServerPlayerEntity owner = server.getPlayerManager().getPlayer(l.owner);
         if (owner == null || !ServerPlayNetworking.canSend(owner, Payloads.ControlFrom.ID)) return;
+        CONTROL_PASSED.inc();
         ServerPlayNetworking.send(owner, new Payloads.ControlFrom(player.getUuid(), player.getGameProfile().getName(), c));
     }
 
