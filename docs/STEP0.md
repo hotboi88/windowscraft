@@ -82,8 +82,9 @@ focus interference).
 
 Hidden screens are still decoded (measured): a viewer with its back to a 1080p60 screen decoded
 30 pictures a second and threw all of them away — 1.1–1.5 cores of FFmpeg plus 0.3 of
-WindowsCraft's threads for a screen nobody looks at. Its sound must go on (it comes from the
-wall), so the proposal is to stop only the picture side out of view.
+WindowsCraft's threads for a screen nobody looks at. Prototype on the branch: 2 s after none of
+its walls is drawn (off-screen pause on), only the sound is fed to the decoder; seen again, the
+picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidden, no stalls.
 
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
