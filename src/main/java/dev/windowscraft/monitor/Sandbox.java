@@ -36,6 +36,7 @@ public final class Sandbox {
     private static volatile String status = "unknown";
     private static volatile String progress;
     private static volatile List<String> autoFolders = List.of();
+    private static volatile List<Path> libraries = List.of();
     private static volatile boolean scanned;
 
     /** "ok", "missing", "stopped", "unknown" (not asked yet). */
@@ -57,7 +58,7 @@ public final class Sandbox {
         }).exceptionally(t -> null);
         if (!scanned) {
             scanned = true;
-            Thread t = new Thread(() -> { autoFolders = antiCheatFolders(); pushExceptions(); }, "WindowsCraft anti-cheat scan");
+            Thread t = new Thread(() -> { libraries = gameLibraries(); autoFolders = antiCheatFoldersIn(libraries); pushExceptions(); }, "WindowsCraft anti-cheat scan");
             t.setDaemon(true);
             t.start();
         }
@@ -88,7 +89,9 @@ public final class Sandbox {
         String jh = System.getProperty("java.home");
         if (jh != null) folders.add(Path.of(jh).toAbsolutePath().toString());
         folders.addAll(autoFolders);
-        b.isolationExceptions(ClientSettings.isoPrograms(), folders);
+        List<String> apps = new ArrayList<>();
+        for (Path p : libraries) apps.add(p.toAbsolutePath().toString());
+        b.isolationExceptions(ClientSettings.isoPrograms(), folders, apps);
     }
 
     /** Games with anti-cheat (they refuse to run in a box): their folders, found in your game libraries. */

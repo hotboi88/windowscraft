@@ -3011,6 +3011,8 @@ static ISOLATE: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
 /// What never goes in a box: program names, and folders (WindowsCraft's own, games with anti-cheat…).
 static ISO_EXES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_DIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// More folders apps live in (game libraries on other drives): forced along with the usual ones.
+static ISO_APPDIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The box the force rule is on right now (where new programs land), if any.
 static FORCED: Mutex<Option<String>> = Mutex::new(None);
 static BOXES_MADE: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -3028,11 +3030,12 @@ fn sbie_dir() -> Option<std::path::PathBuf> {
 
 /// "ok", "missing" (not installed) or "stopped" (installed, its service isn't running).
 fn sbie_status() -> &'static str {
-    let Some(d) = sbie_dir() else { return "missing" };
-    let out = std::process::Command::new(d.join("SbieIni.exe")).args(["query", "GlobalSettings", "FileRootPath"]).output();
-    match out {
-        Ok(o) if o.status.success() || !o.stdout.is_empty() || o.status.code() == Some(0) => "ok",
-        _ => if service_running("SbieSvc") { "ok" } else { "stopped" },
+    if sbie_dir().is_none() {
+        "missing"
+    } else if service_running("SbieSvc") {
+        "ok"
+    } else {
+        "stopped"
     }
 }
 
@@ -3047,15 +3050,6 @@ fn box_name(idx: i32) -> String {
 
 fn isolated(idx: i32) -> bool { ISOLATE.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(false) }
 
-fn sbie_ini(args: &[&str]) -> bool {
-    let Some(d) = sbie_dir() else { return false };
-    let mut c = std::process::Command::new(d.join("SbieIni.exe"));
-    c.args(args);
-    use std::os::windows::process::CommandExt;
-    c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    c.output().map_or(false, |o| o.status.success())
-}
-
 fn sbie_start(args: &[&str]) -> Option<std::process::Output> {
     let d = sbie_dir()?;
     let mut c = std::process::Command::new(d.join("Start.exe"));
@@ -3065,34 +3059,100 @@ fn sbie_start(args: &[&str]) -> Option<std::process::Output> {
     c.output().ok()
 }
 
-fn fixed_drives() -> Vec<String> {
-    let mut v = Vec::new();
-    unsafe {
-        let mask = GetLogicalDrives();
-        for i in 0..26u32 {
-            if mask & (1 << i) == 0 {
-                continue;
+// The rules live in Sandboxie.ini, in our own sections only ([WC…]); they're written straight into
+// the file and applied through Sandboxie's own interface (SbieApi_ReloadConf). Its tools are never
+// started for this: a program started while a force rule is on could itself land in the box.
+
+fn ini_path() -> std::path::PathBuf {
+    std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Sandboxie.ini")
+}
+
+fn read_ini() -> Vec<String> {
+    let Ok(b) = std::fs::read(ini_path()) else { return Vec::new() };
+    let text = if b.len() >= 2 && b[0] == 0xFF && b[1] == 0xFE {
+        String::from_utf16_lossy(&b[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>())
+    } else {
+        String::from_utf8_lossy(&b).into_owned()
+    };
+    text.lines().map(|l| l.trim_end_matches('\r').to_string()).collect()
+}
+
+fn write_ini(lines: &[String]) -> bool {
+    let mut out: Vec<u8> = vec![0xFF, 0xFE];
+    for l in lines {
+        for u in format!("{l}\r\n").encode_utf16() {
+            out.extend_from_slice(&u.to_le_bytes());
+        }
+    }
+    let tmp = ini_path().with_extension("ini.wc");
+    std::fs::write(&tmp, &out).is_ok() && std::fs::rename(&tmp, ini_path()).is_ok()
+}
+
+/// Sets that box's section to exactly these settings (made if it isn't there), keeping the rest of the file.
+fn set_section(name: &str, settings: &[(String, String)]) {
+    let lines = read_ini();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let header = format!("[{name}]");
+    let mut found = false;
+    while i < lines.len() {
+        if lines[i].trim().eq_ignore_ascii_case(&header) {
+            found = true;
+            i += 1;
+            while i < lines.len() && !lines[i].trim_start().starts_with('[') {
+                i += 1; // (our section: replaced as a whole)
             }
-            let root = format!("{}:\\", (b'A' + i as u8) as char);
-            let w = wide(&root);
-            if GetDriveTypeW(PCWSTR(w.as_ptr())) == 3 { // DRIVE_FIXED
-                v.push(root);
+            out.push(header.clone());
+            out.extend(settings.iter().map(|(k, v)| format!("{k}={v}")));
+            out.push(String::new());
+            continue;
+        }
+        out.push(lines[i].clone());
+        i += 1;
+    }
+    if !found {
+        out.push(String::new());
+        out.push(header);
+        out.extend(settings.iter().map(|(k, v)| format!("{k}={v}")));
+    }
+    write_ini(&out);
+}
+
+fn reload_conf() -> bool {
+    static RELOAD: OnceLock<Option<unsafe extern "system" fn(u32, u32) -> i32>> = OnceLock::new();
+    let f = RELOAD.get_or_init(|| unsafe {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
+        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_ReloadConf"))?;
+        Some(std::mem::transmute::<_, unsafe extern "system" fn(u32, u32) -> i32>(p))
+    });
+    match f {
+        Some(f) => unsafe { f(u32::MAX, 0) == 0 },
+        None => false,
+    }
+}
+
+/// Where your apps are installed: what's forced into the monitor's box while you sit there
+/// (never all of a drive — Windows, Sandboxie and WindowsCraft stay out).
+fn app_folders() -> Vec<String> {
+    let mut v = Vec::new();
+    for k in ["ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"] {
+        if let Ok(d) = std::env::var(k) {
+            if !v.contains(&d) && std::path::Path::new(&d).is_dir() {
+                v.push(d);
             }
         }
     }
+    v.extend(ISO_APPDIRS.lock().unwrap().iter().cloned()); // (game libraries elsewhere: D:\SteamLibrary…)
     v
 }
 
-/// A monitor's box: made once (no border, no [#] in titles, kept — never wiped on its own), and
-/// its exceptions kept up to date.
-fn ensure_box(name: &str) {
-    let fresh = !BOXES_MADE.lock().unwrap().iter().any(|b| b == name);
-    if fresh {
-        for (k, v) in [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "n"), ("AutoDelete", "n"), ("ConfigLevel", "10")] {
-            sbie_ini(&["set", name, k, v]);
-        }
-        BOXES_MADE.lock().unwrap().push(name.to_string());
-    }
+/// A monitor's box: no border, no [#] in titles, kept (never wiped on its own), its exceptions —
+/// and, while you sit at it, its force rule.
+fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
+    let mut s: Vec<(String, String)> = [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "n"), ("AutoDelete", "n"), ("ConfigLevel", "10")]
+        .iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let mut exes: Vec<String> = ALWAYS_NORMAL.iter().map(|s| s.to_string()).collect();
     exes.extend(ISO_EXES.lock().unwrap().iter().cloned());
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
@@ -3105,29 +3165,30 @@ fn ensure_box(name: &str) {
         dirs.push(d.display().to_string());
     }
     if let Ok(w) = std::env::var("WINDIR") {
-        dirs.push(w); // (Windows' own programs: never boxed)
+        dirs.push(w);
     }
-    // (written only when they changed: each write is a run of Sandboxie's config tool)
-    let sig = format!("{exes:?}{dirs:?}");
-    {
-        let mut done = BOX_SIG.lock().unwrap();
-        let m = done.get_or_insert_with(HashMap::new);
-        if m.get(name) == Some(&sig) {
-            return;
-        }
-        m.insert(name.to_string(), sig);
-    }
-    sbie_ini(&["delete", name, "BreakoutProcess"]);
-    sbie_ini(&["delete", name, "BreakoutFolder"]);
     for e in exes {
-        sbie_ini(&["append", name, "BreakoutProcess", &e]);
+        s.push(("BreakoutProcess".into(), e));
     }
     for d in dirs {
-        sbie_ini(&["append", name, "BreakoutFolder", &d]);
+        s.push(("BreakoutFolder".into(), d));
     }
+    if forced {
+        for d in app_folders() {
+            s.push(("ForceFolder".into(), d));
+        }
+    }
+    let _ = name;
+    s
 }
 
-static BOX_SIG: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+fn ensure_box(name: &str) {
+    if !BOXES_MADE.lock().unwrap().iter().any(|b| b == name) {
+        BOXES_MADE.lock().unwrap().push(name.to_string());
+    }
+    let forced = FORCED.lock().map(|f| f.as_deref() == Some(name)).unwrap_or(false);
+    set_section(name, &box_settings(name, forced));
+}
 
 /// The box new programs should land in now: the monitor you sit at (or point at), if it has
 /// "own copies" on.
@@ -3149,18 +3210,23 @@ fn set_force(to: Option<String>) {
         return;
     }
     let t0 = Instant::now();
-    if let Some(old) = cur.as_ref() {
-        sbie_ini(&["delete", old, "ForceFolder"]);
-    }
-    if let Some(b) = to.as_ref() {
-        ensure_box(b);
-        for d in fixed_drives() {
-            sbie_ini(&["append", b, "ForceFolder", &d]);
+    let old = cur.clone();
+    *cur = to.clone();
+    drop(cur);
+    if let Some(o) = old.as_ref() {
+        if Some(o) != to.as_ref() {
+            set_section(o, &box_settings(o, false));
         }
     }
-    sbie_start(&["/reload"]);
-    eprintln!("info=new programs now start {} ({} ms)", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()), t0.elapsed().as_millis());
-    *cur = to;
+    if let Some(b) = to.as_ref() {
+        if !BOXES_MADE.lock().unwrap().iter().any(|x| x == b) {
+            BOXES_MADE.lock().unwrap().push(b.clone());
+        }
+        set_section(b, &box_settings(b, true));
+    }
+    let ok = reload_conf();
+    eprintln!("info=new programs now start {} ({} ms{})", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()),
+        t0.elapsed().as_millis(), if ok { "" } else { ", Sandboxie didn't take it" });
 }
 
 /// Follows where you are (sitting, pointing, which monitor) and moves the force rule with you.
@@ -3177,28 +3243,28 @@ fn ensure_iso_thread() {
 
 /// No force rule left behind (after a crash, at the start, at the end): every WindowsCraft box.
 fn clear_all_force() {
-    let Some(d) = sbie_dir() else { return };
-    let Ok(ini) = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Sandboxie.ini")) else { return };
-    let text = if ini.len() >= 2 && ini[0] == 0xFF && ini[1] == 0xFE {
-        String::from_utf16_lossy(&ini[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>())
-    } else {
-        String::from_utf8_lossy(&ini).into_owned()
-    };
-    let mut any = false;
+    if sbie_dir().is_none() {
+        return;
+    }
+    let lines = read_ini();
     let mut section = String::new();
-    for line in text.lines() {
-        let l = line.trim();
-        if l.starts_with('[') && l.ends_with(']') {
-            section = l[1..l.len() - 1].to_string();
-        } else if section.starts_with("WC") && l.to_ascii_lowercase().starts_with("forcefolder=") {
-            sbie_ini(&["delete", &section, "ForceFolder"]);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut any = false;
+    for l in &lines {
+        let t = l.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            section = t[1..t.len() - 1].to_string();
+        } else if section.starts_with("WC") && t.to_ascii_lowercase().starts_with("forcefolder=") {
             any = true;
+            continue;
         }
+        out.push(l.clone());
     }
     if any {
-        sbie_start(&["/reload"]);
+        write_ini(&out);
+        reload_conf();
+        eprintln!("info=a leftover rule that boxed new programs was removed");
     }
-    let _ = d;
     *FORCED.lock().unwrap() = None;
 }
 
@@ -3238,7 +3304,7 @@ fn box_launch(idx: i32, file: &str, params: &str) -> bool {
     }
     let b = box_name(idx);
     ensure_box(&b);
-    sbie_start(&["/reload"]);
+    reload_conf();
     let exe = file.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
     LAUNCHES.lock().unwrap().push(Launch {
         idx,
@@ -4284,14 +4350,15 @@ fn main() {
             Some("isoexclude") => {
                 // tab-separated: program names, then "|", then folders
                 let f: Vec<&str> = line.splitn(2, '\t').nth(1).unwrap_or("").split('\t').collect();
-                let split = f.iter().position(|x| *x == "|").unwrap_or(f.len());
-                *ISO_EXES.lock().unwrap() = f[..split].iter().filter(|x| !x.is_empty()).map(|x| x.to_ascii_lowercase()).collect();
-                *ISO_DIRS.lock().unwrap() = f.get(split + 1..).unwrap_or(&[]).iter().filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+                let groups: Vec<Vec<String>> = f.split(|x| *x == "|").map(|g| g.iter().filter(|x| !x.is_empty()).map(|x| x.to_string()).collect()).collect();
+                *ISO_EXES.lock().unwrap() = groups.first().cloned().unwrap_or_default().into_iter().map(|x| x.to_ascii_lowercase()).collect();
+                *ISO_DIRS.lock().unwrap() = groups.get(1).cloned().unwrap_or_default();
+                *ISO_APPDIRS.lock().unwrap() = groups.get(2).cloned().unwrap_or_default();
                 ISO_DIRTY.store(true, Ordering::SeqCst);
                 for b in BOXES_MADE.lock().unwrap().clone() {
                     ensure_box(&b);
                 }
-                sbie_start(&["/reload"]);
+                reload_conf();
             }
             Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
             Some("installsbie") => {

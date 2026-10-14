@@ -258,11 +258,13 @@ public final class VDisplayHelper implements MonitorBackend {
     @Override public void profileKey(Mon m, String key) { send("profilekey " + m.index() + " " + key); }
     @Override public void isolate(Mon m, boolean on) { send("isolate " + m.index() + " " + (on ? 1 : 0)); }
     @Override
-    public void isolationExceptions(List<String> programs, List<String> folders) {
+    public void isolationExceptions(List<String> programs, List<String> folders, List<String> appFolders) {
         StringBuilder sb = new StringBuilder("isoexclude");
         for (String p : programs) sb.append('\t').append(p.replace('\t', ' '));
         sb.append("\t|");
         for (String f : folders) sb.append('\t').append(f.replace('\t', ' '));
+        sb.append("\t|");
+        for (String f : appFolders) sb.append('\t').append(f.replace('\t', ' '));
         send(sb.toString());
     }
     @Override

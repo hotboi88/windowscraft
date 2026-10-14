@@ -103,8 +103,8 @@ public interface MonitorBackend {
     // ---- own copies of apps (Sandboxie boxes, one per monitor) ----
     /** "Own copies" for that monitor on or off. */
     default void isolate(Mon m, boolean on) {}
-    /** Programs (file names) and folders that never go in a box. */
-    default void isolationExceptions(List<String> programs, List<String> folders) {}
+    /** Programs (file names) and folders that never go in a box, and extra folders apps are installed in (game libraries). */
+    default void isolationExceptions(List<String> programs, List<String> folders, List<String> appFolders) {}
     /** "ok", "missing" or "stopped". */
     default CompletableFuture<String> sandboxStatus() { return CompletableFuture.completedFuture("missing"); }
     /** Installs Sandboxie-Plus quietly (one permission prompt). Completes with the status after. */
