@@ -1310,9 +1310,13 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             }
             sleep(300);
             let moved = rect_of(tb);
-            let back = wait_for(6000, || { let t = rect_of(tb); t.bottom <= rb2.bottom && t.top >= rb2.top && t.left == rb2.left && t.right == rb2.right });
-            rep.check("a monitor's taskbar pushed half off its monitor goes back in place by itself", moved.bottom > rb2.bottom && back,
-                format!("pushed to {}, now {} (monitor {})", fmt(&moved), fmt(&rect_of(tb)), fmt(&rb2)));
+            if moved.bottom <= rb2.bottom {
+                rep.note(format!("(Windows didn't let the test push the taskbar off: it's at {} — nothing to put back)", fmt(&moved)));
+            } else {
+                let back = wait_for(6000, || { let t = rect_of(tb); t.bottom <= rb2.bottom && t.top >= rb2.top && t.left == rb2.left && t.right == rb2.right });
+                rep.check("a monitor's taskbar pushed half off its monitor goes back in place by itself", back,
+                    format!("pushed to {}, now {} (monitor {})", fmt(&moved), fmt(&rect_of(tb)), fmt(&rb2)));
+            }
         }
     }
 

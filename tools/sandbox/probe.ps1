@@ -188,29 +188,29 @@ Start-Sleep 5
 
 # ---- 10. exceptions while the force rule is on: programs that must never be boxed
 #          (WindowsCraft's own helpers, games with anti-cheat, apps you picked)
-$ex = "C:\wcexc"; New-Item -ItemType Directory -Force -Path $ex | Out-Null
-New-Item -ItemType Directory -Force -Path "C:\wcother" | Out-Null
-Copy-Item "$env:WINDIR\System32\PING.EXE" "$ex\wchelper.exe"
+$gui = (Resolve-Path "src\main\resources\windowscraft\natives\wc-selftest.exe").Path
+foreach ($d in "C:\wcexc", "C:\wcother") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+Copy-Item $gui "C:\wcother\appa.exe"; Copy-Item $gui "C:\wcother\appb.exe"; Copy-Item $gui "C:\wcexc\helper.exe"
+Copy-Item "$env:WINDIR\System32\PING.EXE" "C:\wcother\cons.exe"
+function StartGui($exe, $t) { $p = Start-Process $exe -ArgumentList "--window", $t -PassThru; Start-Sleep 3; $b = BoxOf $p.Id; $p | Stop-Process -Force -ErrorAction SilentlyContinue; Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Stop-Process -Force -ErrorAction SilentlyContinue; return $b }
 & $ini set WCMon1 ForceFolder "C:\" | Out-Null
 & $ini append WCMon1 ForceFolder "D:\" | Out-Null
-& $ini append WCMon1 BreakoutFolder $ex | Out-Null
-& $ini append WCMon1 BreakoutProcess "msedge.exe" | Out-Null
-& "$dir\Start.exe" /reload | Out-Null
-Start-Sleep 1
-$h1 = Start-Process "$ex\wchelper.exe" -ArgumentList "-n 30 127.0.0.1" -PassThru -WindowStyle Hidden
-$cp = Copy-Item "$env:WINDIR\System32\PING.EXE" "C:\wcother\other.exe" -PassThru
-$h2 = Start-Process "C:\wcother\other.exe" -ArgumentList "-n 30 127.0.0.1" -PassThru -WindowStyle Hidden
-Start-Sleep 3
-Note "with the force rule on: a program from the exceptions folder → box '$(BoxOf $h1.Id)'; one from elsewhere → box '$(BoxOf $h2.Id)'"
-Check "a program in an exceptions folder isn't boxed, even with the force rule on" ((BoxOf $h1.Id) -eq "" -and (BoxOf $h2.Id) -eq "WCMon1") "exception: '$(BoxOf $h1.Id)', other: '$(BoxOf $h2.Id)'"
-Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep 2
-Start-Process $edge -ArgumentList "$flags http://127.0.0.1:$port/?breakout=1"
-Start-Sleep 8
-$bo = Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match "breakout=1" }
-Check "a program named as an exception isn't boxed either" ($bo -and (BoxOf $bo[0].Id) -eq "") "$($bo | ForEach-Object { "$($_.Id) box '$(BoxOf $_.Id)'" })"
-$h1, $h2 | Stop-Process -Force -ErrorAction SilentlyContinue
+& "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
+$a1 = StartGui "C:\wcother\appa.exe" "wc-force-a"
+$c = Start-Process "C:\wcother\cons.exe" -ArgumentList "-n 6 127.0.0.1" -PassThru -WindowStyle Hidden; Start-Sleep 2; $c1 = BoxOf $c.Id; $c | Stop-Process -Force -ErrorAction SilentlyContinue
+Check "with the force rule on, a windowed program started the normal way lands in the box" ($a1 -eq "WCMon1") "box '$a1' (a console program: '$c1')"
+& $ini append WCMon1 BreakoutFolder "C:\wcexc" | Out-Null
+& $ini append WCMon1 BreakoutProcess "appb.exe" | Out-Null
+& "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
+$h1 = StartGui "C:\wcexc\helper.exe" "wc-force-h"
+$b1 = StartGui "C:\wcother\appb.exe" "wc-force-b"
+$a2 = StartGui "C:\wcother\appa.exe" "wc-force-a2"
+Check "a program in an exceptions folder isn't boxed" ($h1 -eq "") "box '$h1'"
+Check "a program named as an exception isn't boxed" ($b1 -eq "") "box '$b1'"
+Check "…while others still are" ($a2 -eq "WCMon1") "box '$a2'"
 & $ini delete WCMon1 ForceFolder | Out-Null
+& $ini delete WCMon1 BreakoutFolder | Out-Null
+& $ini delete WCMon1 BreakoutProcess | Out-Null
 & "$dir\Start.exe" /reload | Out-Null
 
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
