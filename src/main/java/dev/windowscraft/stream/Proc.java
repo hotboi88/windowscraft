@@ -66,8 +66,8 @@ final class Proc {
         return s;
     }
 
-    /** A UDP viewer's handshake: the control connection, its session and the UDP port to use. */
-    record UdpRelay(Socket control, long session, int udpPort) {}
+    /** A UDP viewer's handshake: the control connection, its session and the UDP port to use, and whether the relay takes input on it. */
+    record UdpRelay(Socket control, long session, int udpPort, boolean takesInput) {}
 
     static UdpRelay connectRelayUdp(String host, int port, String token, String streamId) throws IOException {
         Socket s = new Socket();
@@ -81,7 +81,7 @@ final class Proc {
             throw new IOException("relay said: " + String.join(" ", reply).replaceFirst("^ERR ", ""));
         }
         s.setSoTimeout(0);
-        return new UdpRelay(s, Long.parseUnsignedLong(reply[1], 16), Integer.parseInt(reply[2]));
+        return new UdpRelay(s, Long.parseUnsignedLong(reply[1], 16), Integer.parseInt(reply[2]), reply.length >= 4 && reply[3].equals("C"));
     }
 
     private Proc() {}

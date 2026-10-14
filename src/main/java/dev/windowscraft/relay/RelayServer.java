@@ -78,6 +78,29 @@ public final class RelayServer implements AutoCloseable {
     /** Called (on a relay thread) with the stream id whenever a viewer had to be skipped ahead. */
     public void onViewerBehind(java.util.function.Consumer<String> c) { viewerBehind = c; }
 
+    /**
+     * Someone's input for a screen, carried by the relay instead of the game server: the server
+     * handles it on its main thread, between ticks (a busy modded server: up to a whole tick
+     * later); the relay passes it on at once. The game server says who may use what.
+     */
+    public interface ControlRoute {
+        /** May this player use that screen, and is it the screen of this stream? (any thread) */
+        boolean allowed(UUID player, UUID displayId, String streamId);
+        /** The owner's game can't take input from the relay (older): the game server's way instead. */
+        void viaServer(UUID player, UUID displayId, int op, float x, float y, int a, float f);
+    }
+
+    private volatile ControlRoute control;
+
+    /** Turns input over the relay on (viewers are told when they connect). */
+    public void onControl(ControlRoute r) { control = r; }
+
+    private static final Measure.Counter CONTROL_RELAYED = Measure.counter("input.relay_passed",
+            "input carried by the relay straight to the screen's owner (not through the server's main thread)");
+    private static final Measure.Counter CONTROL_VIA_SERVER = Measure.counter("input.relay_via_server",
+            "input that came over the relay but went on through the server (the owner's game is older)");
+    private final Map<UUID, long[]> controlRate = new ConcurrentHashMap<>();
+
     private static final class Stream {
         final CopyOnWriteArrayList<Subscriber> subs = new CopyOnWriteArrayList<>();
         volatile Socket publisher;
@@ -88,6 +111,8 @@ public final class RelayServer implements AutoCloseable {
         volatile boolean ended;
         /** A publisher that wants to know how many are watching (PUB2): where to tell it. */
         volatile OutputStream tellViewers;
+        /** A publisher that takes its viewers' input from here (PUB3): where to send it. */
+        volatile OutputStream takesControl;
         volatile int toldViewers = -1;
         volatile long toldAt;
 
@@ -270,18 +295,21 @@ public final class RelayServer implements AutoCloseable {
             }
             byToken.computeIfAbsent(token, k -> ConcurrentHashMap.newKeySet()).add(s);
             switch (parts[1]) {
-                case "PUB", "PUB2" -> {
+                case "PUB", "PUB2", "PUB3" -> {
                     if (!mayPublish.test(player, streamId)) {
                         RelayProtocol.writeLine(out, "ERR not your screen");
                         return;
                     }
-                    boolean tell = parts[1].equals("PUB2");
-                    onOwnThread("relay in " + streamId.substring(0, 8), () -> publish(s, in, out, streamId, tell));
+                    boolean tell = !parts[1].equals("PUB"), input = parts[1].equals("PUB3");
+                    onOwnThread("relay in " + streamId.substring(0, 8), () -> publish(s, in, out, streamId, tell, input));
                 }
                 case "SUB" -> subscribe(s, out, streamId);
                 case "SUBU" -> {
                     if (udp == null) RelayProtocol.writeLine(out, "ERR no UDP here");
-                    else onOwnThread("relay out " + streamId.substring(0, 8), () -> subscribeUdp(s, in, out, streamId));
+                    else {
+                        UUID viewer = player;
+                        onOwnThread("relay out " + streamId.substring(0, 8), () -> subscribeUdp(s, in, out, streamId, viewer));
+                    }
                 }
                 default -> RelayProtocol.writeLine(out, "ERR bad role");
             }
@@ -295,7 +323,7 @@ public final class RelayServer implements AutoCloseable {
         }
     }
 
-    private void publish(Socket s, InputStream in, OutputStream out, String streamId, boolean tell) throws IOException {
+    private void publish(Socket s, InputStream in, OutputStream out, String streamId, boolean tell, boolean input) throws IOException {
         Stream st = streams.computeIfAbsent(streamId, k -> new Stream());
         Socket previous = st.publisher;
         st.publisher = s;
@@ -307,6 +335,7 @@ public final class RelayServer implements AutoCloseable {
         RelayProtocol.writeLine(out, "OK");
         st.toldViewers = -1;
         st.tellViewers = tell ? out : null;
+        st.takesControl = input ? out : null;
         // the owner's game keeps it alive (sound, pictures, or an empty packet every second); this
         // long without anything at all and it's gone
         s.setSoTimeout(PUBLISHER_SILENCE_MS);
@@ -336,6 +365,7 @@ public final class RelayServer implements AutoCloseable {
             if (st.publisher == s) {
                 st.publisher = null;
                 st.tellViewers = null;
+                st.takesControl = null;
                 if (st.ended) endNow(st, streamId);
                 else {
                     // it may be back in a moment (a restart): viewers wait a few seconds for it
@@ -430,7 +460,7 @@ public final class RelayServer implements AutoCloseable {
      * A viewer over UDP: the TCP connection stays open as the control line (it ends when either
      * side goes); the pictures go as numbered UDP packets, lost ones again on request.
      */
-    private void subscribeUdp(Socket s, InputStream in, OutputStream out, String streamId) throws IOException {
+    private void subscribeUdp(Socket s, InputStream in, OutputStream out, String streamId, UUID viewer) throws IOException {
         Stream st = null;
         for (int i = 0; i < 100 && open; i++) {
             st = streams.get(streamId);
@@ -448,12 +478,23 @@ public final class RelayServer implements AutoCloseable {
             viewerBehind.accept(streamId);
         });
         st.subs.add(sub);
-        RelayProtocol.writeLine(out, "OK " + Long.toHexString(ses.id) + " " + udp.port());
+        // "C": this relay takes the viewer's input on the control line (older viewers ignore it)
+        RelayProtocol.writeLine(out, "OK " + Long.toHexString(ses.id) + " " + udp.port() + (control != null ? " C" : ""));
         s.setSoTimeout(0);
-        // the control line: when the viewer closes it, it's gone
+        // the control line: the viewer's input comes up it; when the viewer closes it, it's gone
+        Stream stream = st;
         Thread control = Thread.ofVirtual().start(() -> {
             try {
-                while (in.read() >= 0) { }
+                StringBuilder line = new StringBuilder();
+                int c;
+                while ((c = in.read()) >= 0) {
+                    if (c != '\n') {
+                        if (line.length() < 256) line.append((char) c);
+                        continue;
+                    }
+                    controlLine(viewer, streamId, stream, line.toString());
+                    line.setLength(0);
+                }
             } catch (IOException ignored) {
             }
             ses.close();
@@ -492,6 +533,46 @@ public final class RelayServer implements AutoCloseable {
             ses.close();
             control.interrupt();
             LOG.info("UDP viewer {} of {} left: {} packets, {} sent again", s.getRemoteSocketAddress(), streamId.substring(0, 8), ses.totalSent, ses.totalRetx);
+        }
+    }
+
+    /**
+     * One line of a viewer's input: {@code C <displayId> <op> <x> <y> <a> <f>}. Passed to the
+     * screen's owner straight away if their game takes it here, else through the game server.
+     * At most 300 a second per viewer, except letting go of a button or key (never dropped: it
+     * would stay held on the screen).
+     */
+    private void controlLine(UUID viewer, String streamId, Stream st, String line) {
+        ControlRoute route = control;
+        String[] p = line.trim().split(" ");
+        if (route == null || p.length != 7 || !p[0].equals("C")) return;
+        try {
+            UUID display = UUID.fromString(p[1]);
+            int op = Integer.parseInt(p[2]), a = Integer.parseInt(p[5]);
+            float x = Float.parseFloat(p[3]), y = Float.parseFloat(p[4]), f = Float.parseFloat(p[6]);
+            if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(f)) return;
+            boolean release = op == dev.windowscraft.net.Payloads.OP_BUTTON_UP || op == dev.windowscraft.net.Payloads.OP_KEY_UP;
+            long[] r = controlRate.computeIfAbsent(viewer, k -> new long[2]);
+            synchronized (r) {
+                long sec = System.nanoTime() / 1_000_000_000L;
+                if (r[0] != sec) { r[0] = sec; r[1] = 0; }
+                if (++r[1] > 300 && !release) return;
+            }
+            if (!route.allowed(viewer, display, streamId)) return;
+            OutputStream o = st.takesControl;
+            if (o != null) {
+                try {
+                    synchronized (o) { RelayProtocol.writeLine(o, "C " + viewer + " " + display + " " + op + " " + x + " " + y + " " + a + " " + f); }
+                    CONTROL_RELAYED.inc();
+                    return;
+                } catch (IOException e) {
+                    st.takesControl = null; // (its connection is going: the game server's way)
+                }
+            }
+            CONTROL_VIA_SERVER.inc();
+            route.viaServer(viewer, display, op, x, y, a, f);
+        } catch (RuntimeException ignored) {
+            // (a malformed line: dropped)
         }
     }
 

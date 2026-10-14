@@ -128,6 +128,12 @@ public final class RemoteDisplays {
 
     public static Collection<Remote> all() { return remotes.values(); }
 
+    /** The viewer of that screen's stream, if you're watching it (render thread). */
+    public static dev.windowscraft.stream.StreamSubscriber subscriberOf(UUID displayId) {
+        Remote r = remotes.get(displayId);
+        return r == null || r.info == null ? null : r.subscriber();
+    }
+
     static void upsert(Payloads.DisplayState p) {
         DisplayInfo info = p.info();
         WallRect rect = WallRect.parse(info.face(), info.min(), info.max());

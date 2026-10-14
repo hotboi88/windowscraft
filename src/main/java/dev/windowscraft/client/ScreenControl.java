@@ -405,6 +405,38 @@ public final class ScreenControl {
     private static final dev.windowscraft.measure.Measure.Metric GUEST_APPLY = dev.windowscraft.measure.Measure.ms("input.host_apply",
             "someone's input: handled → handed to Windows (helper)");
 
+    private static final dev.windowscraft.measure.Measure.Metric RELAY_WAIT = dev.windowscraft.measure.Measure.ms("input.host_wait_relay",
+            "someone's input over the relay: arrived at your game → handled on your game thread");
+
+    /**
+     * Someone's input that came over the relay ({@code C <from> <displayId> <op> <x> <y> <a> <f>};
+     * the relay checked it with the server's rules). Any thread: handled like the server's.
+     */
+    private static final java.util.concurrent.atomic.AtomicLong RELAYED = new java.util.concurrent.atomic.AtomicLong();
+
+    /** How many inputs came over the relay (tests). */
+    public static long relayedInputs() { return RELAYED.get(); }
+
+    public static void fromRelay(String line) {
+        RELAYED.incrementAndGet();
+        String[] p = line.split(" ");
+        if (p.length != 8) return;
+        try {
+            UUID from = UUID.fromString(p[1]), display = UUID.fromString(p[2]);
+            Payloads.Control c = new Payloads.Control(display, Integer.parseInt(p[3]), Float.parseFloat(p[4]), Float.parseFloat(p[5]),
+                    Integer.parseInt(p[6]), Float.parseFloat(p[7]));
+            long arrived = System.nanoTime();
+            MinecraftClient mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                RELAY_WAIT.since(arrived);
+                var entry = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getPlayerListEntry(from);
+                fromGuest(mc, new Payloads.ControlFrom(from, entry == null ? "someone" : entry.getProfile().getName(), c));
+            });
+        } catch (RuntimeException ignored) {
+            // (a malformed line: dropped)
+        }
+    }
+
     public static void fromGuest(MinecraftClient mc, Payloads.ControlFrom m) {
         GUEST_WAIT.since(dev.windowscraft.measure.Stamps.take(m));
         long t0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;

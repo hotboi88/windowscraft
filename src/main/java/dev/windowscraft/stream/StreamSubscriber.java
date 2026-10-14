@@ -207,6 +207,7 @@ public final class StreamSubscriber implements FrameSource {
     }
 
     private void teardown() {
+        inputQueue = null;
         Process p = ffmpeg;
         if (p != null) p.destroyForcibly();
         for (AutoCloseable c : live) Proc.closeQuietly(c);
@@ -254,6 +255,7 @@ public final class StreamSubscriber implements FrameSource {
             // live-video style over UDP: copes with a long, slightly lossy path (TCP backs up there)
             Proc.UdpRelay u = Proc.connectRelayUdp(ClientNet.relayHost(), ClientNet.relayPort(), ClientNet.token(), streamId);
             relay = track(u.control());
+            if (u.takesInput() && !"false".equals(System.getProperty("windowscraft.relayInput"))) startInput(relay);
             dev.windowscraft.relay.UdpReceiver rx = track(new dev.windowscraft.relay.UdpReceiver(
                     new java.net.InetSocketAddress(ClientNet.relayHost(), u.udpPort()), u.session()));
             udp = rx;
@@ -556,6 +558,40 @@ public final class StreamSubscriber implements FrameSource {
         video.setReceiveBufferSize(4 << 20);
         readFrames(video.getInputStream());
         if (running) throw new IOException("no picture");
+    }
+
+    // ---- your input for this screen, over the relay (see RelayServer.ControlRoute) ----
+    private volatile java.util.concurrent.BlockingQueue<String> inputQueue;
+
+    private void startInput(Socket control) throws IOException {
+        java.util.concurrent.BlockingQueue<String> q = new java.util.concurrent.ArrayBlockingQueue<>(1024);
+        OutputStream out = control.getOutputStream();
+        inputQueue = q;
+        daemon("viewer input", () -> {
+            try {
+                while (running && !control.isClosed()) {
+                    String first = q.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+                    if (first == null) continue;
+                    StringBuilder b = new StringBuilder(first).append('\n');
+                    for (String more; (more = q.poll()) != null; ) b.append(more).append('\n');
+                    out.write(b.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                    out.flush();
+                }
+            } catch (IOException | InterruptedException ignored) {
+            } finally {
+                if (inputQueue == q) inputQueue = null; // (the game server's way again)
+            }
+        });
+    }
+
+    /**
+     * Your click, key or move for one of this stream's screens, over the relay (it passes it to
+     * the owner at once, not between the server's ticks). False if this relay doesn't take input
+     * (or the connection is being made again): then it goes through the game server.
+     */
+    public boolean sendControl(java.util.UUID displayId, int op, float x, float y, int a, float f) {
+        java.util.concurrent.BlockingQueue<String> q = inputQueue;
+        return q != null && q.offer("C " + displayId + " " + op + " " + x + " " + y + " " + a + " " + f);
     }
 
     /** Pictures held back for lip sync: their packets, and when they arrived. */

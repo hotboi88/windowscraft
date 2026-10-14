@@ -131,6 +131,8 @@ public final class MultiplayerTest implements ClientModInitializer {
             check(mc, got.stream().anyMatch(l -> l.startsWith("move ")), "Bob's pointer moves");
             check(mc, got.stream().noneMatch(l -> l.startsWith("button m")), "the wall Bob isn't allowed on ignores him");
             check(mc, got.contains("blur"), "Bob getting up lets the app go");
+            check(mc, dev.windowscraft.client.ScreenControl.relayedInputs() > 0,
+                    "Bob's input came over the relay, not between the server's ticks (" + dev.windowscraft.client.ScreenControl.relayedInputs() + ")");
         }
         if (tick > 60 && tick % 100 == 0) {
             Display d = DisplayManager.get().all().get(0);

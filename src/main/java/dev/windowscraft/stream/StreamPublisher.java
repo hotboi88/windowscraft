@@ -88,6 +88,8 @@ public final class StreamPublisher {
      * a multiple of 16 (some drivers refuse other sizes). After that: the CPU path.
      */
     private volatile int gpuAttempt;
+    /** Ask the relay to pass viewers' input straight here (until it turns out not to know how). */
+    private volatile boolean relayInput = !"false".equals(System.getProperty("windowscraft.relayInput"));
     private volatile boolean gpuActive;                 // the current pipeline captures on the GPU
     private volatile boolean pipelineGpu;
     private volatile long pipelineBytes;
@@ -140,9 +142,14 @@ public final class StreamPublisher {
     private Socket connectRelay() throws IOException {
         Socket s;
         try {
-            s = Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), "PUB2", ClientNet.token(), streamId);
+            // PUB3: tell me who's watching, and pass me their input (PUB2: only who's watching)
+            s = Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), relayInput ? "PUB3" : "PUB2", ClientNet.token(), streamId);
         } catch (IOException e) {
             if (e.getMessage() == null || !e.getMessage().contains("bad role")) throw e;
+            if (relayInput) { // (a server from before input over the relay)
+                relayInput = false;
+                return connectRelay();
+            }
             watchers = -1; // (an older server: it can't say who's watching)
             return Proc.connectRelay(ClientNet.relayHost(), ClientNet.relayPort(), "PUB", ClientNet.token(), streamId);
         }
@@ -151,7 +158,11 @@ public final class StreamPublisher {
             try {
                 java.io.InputStream in = sock.getInputStream();
                 while (running && !sock.isClosed()) {
-                    String line = dev.windowscraft.relay.RelayProtocol.readLine(in, 64).trim();
+                    String line = dev.windowscraft.relay.RelayProtocol.readLine(in, 256).trim();
+                    if (line.startsWith("C ")) { // someone's input, over the relay
+                        dev.windowscraft.client.ScreenControl.fromRelay(line);
+                        continue;
+                    }
                     if (!line.startsWith("VIEWERS ")) continue;
                     int n = Integer.parseInt(line.substring(8).trim());
                     if (n == 0 && zeroSince == 0) zeroSince = System.nanoTime();

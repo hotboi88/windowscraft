@@ -162,6 +162,22 @@ public final class ServerHub {
             relay = new RelayServer(InetAddress.getByName("0.0.0.0"), relayPort,
                     t -> debug != null && !debug.isBlank() && debug.equals(t) ? debugViewer : tokens.get(t),
                     (player, streamId) -> displays.values().stream().anyMatch(l -> l.owner.equals(player) && l.info.streamId().equals(streamId)));
+            // someone's input over the relay: the same checks as onControl, then straight to the owner
+            relay.onControl(new RelayServer.ControlRoute() {
+                @Override
+                public boolean allowed(UUID player, UUID displayId, String streamId) {
+                    Live l = displays.get(displayId);
+                    return l != null && l.info.streamId().equals(streamId) && l.info.controllableBy(player) && !l.owner.equals(player);
+                }
+
+                @Override
+                public void viaServer(UUID player, UUID displayId, int op, float x, float y, int a, float f) {
+                    server.execute(() -> {
+                        ServerPlayerEntity p = server.getPlayerManager().getPlayer(player);
+                        if (p != null) onControl(p, new Payloads.Control(displayId, op, x, y, a, f));
+                    });
+                }
+            });
             // the relay had to skip a viewer ahead (the stream doesn't reach them in time): tell the owner
             relay.onViewerBehind(streamId -> server.execute(() -> displays.values().stream()
                     .filter(l -> l.info.streamId().equals(streamId)).findFirst()

@@ -99,6 +99,9 @@ public final class ClientNet {
 
     /** Using someone else's screen (client thread). */
     public static void control(UUID displayId, int op, double x, double y, int a, double f) {
+        // over the relay when it takes input: straight to the owner, not between the server's ticks
+        dev.windowscraft.stream.StreamSubscriber sub = RemoteDisplays.subscriberOf(displayId);
+        if (sub != null && sub.sendControl(displayId, op, (float) x, (float) y, a, (float) f)) return;
         if (serverSupported() && ClientPlayNetworking.canSend(Payloads.Control.ID))
             ClientPlayNetworking.send(new Payloads.Control(displayId, op, (float) x, (float) y, a, (float) f));
     }
