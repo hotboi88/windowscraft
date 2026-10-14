@@ -144,6 +144,25 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## 0.15.2 on the RTX 4060 (14 Oct, the owner's game open in the background)
+
+One-PC bench, a shared window at 1080p, viewer lip sync off (latency only). Captured → decoded
+(timing strip), median / P95 / P99:
+
+| | 0.15.1 | 0.15.2, colour by FFmpeg (BGRA) | 0.15.2 (NV12, GPU colour) |
+|---|---|---|---|
+| 60/s | 97.5 / 122.7 / 136.3 ms | 63.4 / 101.7 / 203.4 ms | **43.5 / 64.5 / 70.3 ms** |
+| 30/s | — | 62.4 / 84.9 / 97.5 ms | **48.8 / 82.8 / 93.3 ms** |
+| viewer game, CPU (60/s) | — | 1.50 cores | **0.79** |
+| viewer FFmpeg, CPU (60/s) | — | 1.42 cores | **0.47** |
+| GPU per picture (upload + colour + mipmaps) | — | 2.20 ms | **1.39 ms** |
+
+Lip sync (multiplayer test with sound, beeps vs flashes): without, sound 370–410 ms after the
+picture; with, the last 30 beeps median **36 ms** (10th–90th pct 0..70), pictures held 390–450 ms
+(the viewer's sound reserve had grown to ~220 ms: the PC ran three test games and the owner's).
+Not tested: Iris/Sodium with a viewer — the owner's jars can't load in the dev environment
+(Sodium's mixins need a production client; tools/prodclient isn't in this tree).
+
 ## 1080p60 GPU path, friend's screen (one PC)
 
 | Step | 0.15.0 | with the branch's fixes |

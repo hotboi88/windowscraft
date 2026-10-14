@@ -95,9 +95,9 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
-## Next: branch `next-0.15.2` (14 Oct, after 0.15.1)
+## 0.15.2 (14 Oct; on main, on the owner's server since 13:04, his PC when his game closes)
 
-Measured and CI-tested, not yet released: FFmpeg pinned to 9.0.2; viewer pictures as NV12,
+Measured on his RTX 4060 (docs/STEP0.md, "0.15.2 on the RTX 4060") and CI-tested: FFmpeg pinned to 9.0.2; viewer pictures as NV12,
 coloured on the GPU (`render.Nv12Converter`, off for good if it fails; `windowscraft.gpuConvert`);
 no picture held in the viewer's FFmpeg at all (`-threads:v 1` on the raw output +
 `relay.PictureEnds` for pictures over 64 KB; `windowscraft.pictureEnds`); the GPU-sharing black
