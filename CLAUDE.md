@@ -4,3 +4,6 @@ Read docs/VISION.md before making architectural or performance decisions: it is 
 long-term goal (WaylandCraft-level local responsiveness on Windows, an equally good experience for
 remote peers, minimal Minecraft overhead, all existing in-world features preserved). Prefer small,
 measurable, reversible improvements to existing systems over rewrites; benchmark before optimizing.
+
+Starting a new session? Read docs/HANDOFF.md first: current state, the owner's rules, how to build
+and test, and what's next.
