@@ -144,12 +144,15 @@ public final class RemoteDisplays {
         r.ownerName = p.ownerName();
         r.rect = rect;
         // the stream was rebuilt in another shape (a window resized): its decoder must restart.
-        // A step up or down in quality (same shape, other size or rate) doesn't: the decoder
-        // keeps scaling to the size it started with, and the picture just carries on.
-        if (old != null && old.streamId().equals(info.streamId()) && old.height() > 0 && info.height() > 0
-                && Math.abs(old.width() / (double) old.height() - info.width() / (double) info.height()) > 0.01) {
-            stopWatch(info.streamId());
-        }
+        // A step down in quality (same shape, smaller) doesn't: the decoder keeps scaling to the
+        // size it started with, and the picture just carries on. A step back up past that size
+        // does restart it: it would otherwise stay at the smaller size (blurry) until you
+        // reconnect.
+        boolean reshaped = old != null && old.streamId().equals(info.streamId()) && old.height() > 0 && info.height() > 0
+                && Math.abs(old.width() / (double) old.height() - info.width() / (double) info.height()) > 0.01;
+        Watch w = watches.get(info.streamId());
+        boolean sharper = w != null && info.height() > w.subscriber.decodeHeight() + 8;
+        if (reshaped || sharper) stopWatch(info.streamId());
         dropUnusedWatches();
     }
 

@@ -154,6 +154,9 @@ public final class StreamSubscriber implements FrameSource {
     public void testFallBehind() { fellBehind(); }
 
     public String status() { return status + (light ? " (light playback)" : ""); }
+    /** The size this viewer decodes to (fixed when it starts). */
+    public int decodeWidth() { return width; }
+    public int decodeHeight() { return height; }
     public long framesDecoded() { return framesDecoded; }
 
     /** What a lost piece costs: false — a short glitch that heals by itself; true — the picture holds until the next keyframe. */

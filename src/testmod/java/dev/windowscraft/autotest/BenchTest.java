@@ -29,7 +29,7 @@ public final class BenchTest implements ClientModInitializer {
     private String role, name, source;
     private int height, fps, seconds, warmup, tick = -1;
     private long measureFrom = -1, measureUntil = -1;
-    private boolean started;
+    private boolean started, switched;
 
     @Override
     public void onInitializeClient() {
@@ -70,6 +70,20 @@ public final class BenchTest implements ClientModInitializer {
             measureFrom = now + warmup * 1_000_000_000L;
             measureUntil = measureFrom + seconds * 1_000_000_000L;
             log("measuring '" + name + "' from " + warmup + " s for " + seconds + " s");
+        }
+        // windowscraft.bench.switchHeight=H@S: the sharer changes the stream to height H, S seconds in
+        String sw = System.getProperty("windowscraft.bench.switchHeight");
+        if (sw != null && role.equals("sharer") && !switched && measureFrom > 0
+                && now >= measureFrom + Long.parseLong(sw.split("@")[1]) * 1_000_000_000L && !DisplayManager.get().all().isEmpty()) {
+            switched = true;
+            Display d = DisplayManager.get().all().get(0);
+            DisplayManager.get().updateSettings(d, new CaptureSettings(Integer.parseInt(sw.split("@")[0]), fps, true, source.equals("pattern")));
+            log("switched the stream to height " + sw.split("@")[0]);
+        }
+        if (role.equals("viewer") && tick % 200 == 0) {
+            RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
+            if (r != null && r.subscriber() != null) log("decoding at " + r.subscriber().decodeWidth() + "x" + r.subscriber().decodeHeight()
+                    + " (stream " + r.info.width() + "x" + r.info.height() + ")");
         }
         if (measureFrom > 0 && now >= measureFrom && !started && measureUntil > 0) {
             started = true;
