@@ -188,18 +188,18 @@ Start-Sleep 5
 
 # ---- 10. exceptions while the force rule is on: programs that must never be boxed
 #          (WindowsCraft's own helpers, games with anti-cheat, apps you picked)
-$ex = "$env:RUNNER_TEMP\wcexc"; New-Item -ItemType Directory -Force -Path $ex | Out-Null
+$ex = "C:\wcexc"; New-Item -ItemType Directory -Force -Path $ex | Out-Null
+New-Item -ItemType Directory -Force -Path "C:\wcother" | Out-Null
 Copy-Item "$env:WINDIR\System32\PING.EXE" "$ex\wchelper.exe"
-Copy-Item "$env:WINDIR\System32\PING.EXE" "$ex\wcgame.exe"
 & $ini set WCMon1 ForceFolder "C:\" | Out-Null
-& $ini set WCMon1 ForceFolder "D:\" | Out-Null
+& $ini append WCMon1 ForceFolder "D:\" | Out-Null
 & $ini append WCMon1 BreakoutFolder $ex | Out-Null
 & $ini append WCMon1 BreakoutProcess "msedge.exe" | Out-Null
 & "$dir\Start.exe" /reload | Out-Null
 Start-Sleep 1
 $h1 = Start-Process "$ex\wchelper.exe" -ArgumentList "-n 30 127.0.0.1" -PassThru -WindowStyle Hidden
-$cp = Copy-Item "$env:WINDIR\System32\PING.EXE" "$env:RUNNER_TEMP\other.exe" -PassThru
-$h2 = Start-Process "$env:RUNNER_TEMP\other.exe" -ArgumentList "-n 30 127.0.0.1" -PassThru -WindowStyle Hidden
+$cp = Copy-Item "$env:WINDIR\System32\PING.EXE" "C:\wcother\other.exe" -PassThru
+$h2 = Start-Process "C:\wcother\other.exe" -ArgumentList "-n 30 127.0.0.1" -PassThru -WindowStyle Hidden
 Start-Sleep 3
 Note "with the force rule on: a program from the exceptions folder → box '$(BoxOf $h1.Id)'; one from elsewhere → box '$(BoxOf $h2.Id)'"
 Check "a program in an exceptions folder isn't boxed, even with the force rule on" ((BoxOf $h1.Id) -eq "" -and (BoxOf $h2.Id) -eq "WCMon1") "exception: '$(BoxOf $h1.Id)', other: '$(BoxOf $h2.Id)'"

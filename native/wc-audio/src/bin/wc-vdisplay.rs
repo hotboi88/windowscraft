@@ -2921,6 +2921,12 @@ fn on_window_shown(h: HWND, fresh: bool) {
     let p = pid(h);
     let mut target: Option<i32> = None;
     let at = cursor_monitor();
+    // a program in a monitor's own box: its windows belong on that monitor
+    if fresh && sbie_dir().is_some() {
+        if let Some(i) = monitor_of_box(&box_of(p)) {
+            target = Some(i);
+        }
+    }
     let on_desk = at.is_none() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) && !game_in_front();
     // 1. started for a monitor by WindowsCraft (its Start menu, "Own Brave"…): its first window
     // goes there — once (what you open yourself afterwards follows the rules below)
@@ -2991,6 +2997,290 @@ fn on_window_shown(h: HWND, fresh: bool) {
             }
         }
     }
+}
+
+// ---- own copies of apps: each in-game monitor's own Sandboxie box ----------------------------------
+//
+// Windows gives sound per program, and many apps refuse a second copy of themselves. Each
+// in-game monitor (with "own copies" on) has its own Sandboxie box: while you sit at it (or point
+// at it), whatever you start lands in that box — its own copy of the app, its own sound, its own
+// logins and data, kept. Your desk is never touched. Sandboxie's own window never shows, nor does
+// any border or marker; WindowsCraft drives it from here.
+
+static ISOLATE: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
+/// What never goes in a box: program names, and folders (WindowsCraft's own, games with anti-cheat…).
+static ISO_EXES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static ISO_DIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The box the force rule is on right now (where new programs land), if any.
+static FORCED: Mutex<Option<String>> = Mutex::new(None);
+static BOXES_MADE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static ISO_THREAD: AtomicBool = AtomicBool::new(false);
+static ISO_DIRTY: AtomicBool = AtomicBool::new(false);
+const ALWAYS_NORMAL: [&str; 22] = ["explorer.exe", "javaw.exe", "java.exe", "steam.exe", "steamwebhelper.exe", "steamservice.exe",
+    "epicgameslauncher.exe", "epicwebhelper.exe", "battle.net.exe", "agent.exe", "riotclientservices.exe", "riotclientux.exe",
+    "easyanticheat.exe", "easyanticheat_eos.exe", "beservice.exe", "beservice_x64.exe", "start_protected_game.exe", "vgc.exe",
+    "taskmgr.exe", "msiexec.exe", "systemsettings.exe", "minecraftlauncher.exe"];
+
+fn sbie_dir() -> Option<std::path::PathBuf> {
+    let d = std::path::PathBuf::from(std::env::var("ProgramW6432").or_else(|_| std::env::var("ProgramFiles")).unwrap_or_else(|_| "C:\\Program Files".into())).join("Sandboxie-Plus");
+    d.join("Start.exe").exists().then_some(d)
+}
+
+/// "ok", "missing" (not installed) or "stopped" (installed, its service isn't running).
+fn sbie_status() -> &'static str {
+    let Some(d) = sbie_dir() else { return "missing" };
+    let out = std::process::Command::new(d.join("SbieIni.exe")).args(["query", "GlobalSettings", "FileRootPath"]).output();
+    match out {
+        Ok(o) if o.status.success() || !o.stdout.is_empty() || o.status.code() == Some(0) => "ok",
+        _ => if service_running("SbieSvc") { "ok" } else { "stopped" },
+    }
+}
+
+fn service_running(name: &str) -> bool {
+    std::process::Command::new("sc").args(["query", name]).output().map_or(false, |o| String::from_utf8_lossy(&o.stdout).contains("RUNNING"))
+}
+
+fn box_name(idx: i32) -> String {
+    let k: String = profile_key(idx).chars().filter(|c| c.is_ascii_alphanumeric()).take(28).collect();
+    format!("WC{k}")
+}
+
+fn isolated(idx: i32) -> bool { ISOLATE.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(false) }
+
+fn sbie_ini(args: &[&str]) -> bool {
+    let Some(d) = sbie_dir() else { return false };
+    let mut c = std::process::Command::new(d.join("SbieIni.exe"));
+    c.args(args);
+    use std::os::windows::process::CommandExt;
+    c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    c.output().map_or(false, |o| o.status.success())
+}
+
+fn sbie_start(args: &[&str]) -> Option<std::process::Output> {
+    let d = sbie_dir()?;
+    let mut c = std::process::Command::new(d.join("Start.exe"));
+    c.args(args);
+    use std::os::windows::process::CommandExt;
+    c.creation_flags(0x0800_0000);
+    c.output().ok()
+}
+
+fn fixed_drives() -> Vec<String> {
+    let mut v = Vec::new();
+    unsafe {
+        let mask = GetLogicalDrives();
+        for i in 0..26u32 {
+            if mask & (1 << i) == 0 {
+                continue;
+            }
+            let root = format!("{}:\\", (b'A' + i as u8) as char);
+            let w = wide(&root);
+            if GetDriveTypeW(PCWSTR(w.as_ptr())) == 3 { // DRIVE_FIXED
+                v.push(root);
+            }
+        }
+    }
+    v
+}
+
+/// A monitor's box: made once (no border, no [#] in titles, kept — never wiped on its own), and
+/// its exceptions kept up to date.
+fn ensure_box(name: &str) {
+    let fresh = !BOXES_MADE.lock().unwrap().iter().any(|b| b == name);
+    if fresh {
+        for (k, v) in [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "n"), ("AutoDelete", "n"), ("ConfigLevel", "10")] {
+            sbie_ini(&["set", name, k, v]);
+        }
+        BOXES_MADE.lock().unwrap().push(name.to_string());
+    }
+    sbie_ini(&["delete", name, "BreakoutProcess"]);
+    sbie_ini(&["delete", name, "BreakoutFolder"]);
+    let mut exes: Vec<String> = ALWAYS_NORMAL.iter().map(|s| s.to_string()).collect();
+    exes.extend(ISO_EXES.lock().unwrap().iter().cloned());
+    for e in exes {
+        sbie_ini(&["append", name, "BreakoutProcess", &e]);
+    }
+    let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
+    if let Ok(me) = std::env::current_exe() {
+        if let Some(d) = me.parent() {
+            dirs.push(d.display().to_string());
+        }
+    }
+    if let Some(d) = sbie_dir() {
+        dirs.push(d.display().to_string());
+    }
+    if let Ok(w) = std::env::var("WINDIR") {
+        dirs.push(w); // (Windows' own programs: never boxed)
+    }
+    for d in dirs {
+        sbie_ini(&["append", name, "BreakoutFolder", &d]);
+    }
+}
+
+/// The box new programs should land in now: the monitor you sit at (or point at), if it has
+/// "own copies" on.
+fn wanted_force() -> Option<String> {
+    if sbie_dir().is_none() {
+        return None;
+    }
+    let idx = if SEATED.load(Ordering::SeqCst) || (POINTING.load(Ordering::SeqCst) && POINT_ME.load(Ordering::SeqCst)) {
+        SEAT_IDX.load(Ordering::SeqCst)
+    } else {
+        return None;
+    };
+    isolated(idx).then(|| box_name(idx))
+}
+
+fn set_force(to: Option<String>) {
+    let mut cur = FORCED.lock().unwrap();
+    if *cur == to && !ISO_DIRTY.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(old) = cur.as_ref() {
+        sbie_ini(&["delete", old, "ForceFolder"]);
+    }
+    if let Some(b) = to.as_ref() {
+        ensure_box(b);
+        for d in fixed_drives() {
+            sbie_ini(&["append", b, "ForceFolder", &d]);
+        }
+    }
+    sbie_start(&["/reload"]);
+    eprintln!("info=new programs now start {}", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()));
+    *cur = to;
+}
+
+/// Follows where you are (sitting, pointing, which monitor) and moves the force rule with you.
+fn ensure_iso_thread() {
+    if ISO_THREAD.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_millis(60));
+        let want = wanted_force();
+        set_force(want);
+    });
+}
+
+/// No force rule left behind (after a crash, at the start, at the end): every WindowsCraft box.
+fn clear_all_force() {
+    let Some(d) = sbie_dir() else { return };
+    let Ok(ini) = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Sandboxie.ini")) else { return };
+    let text = if ini.len() >= 2 && ini[0] == 0xFF && ini[1] == 0xFE {
+        String::from_utf16_lossy(&ini[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>())
+    } else {
+        String::from_utf8_lossy(&ini).into_owned()
+    };
+    let mut any = false;
+    let mut section = String::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') && l.ends_with(']') {
+            section = l[1..l.len() - 1].to_string();
+        } else if section.starts_with("WC") && l.to_ascii_lowercase().starts_with("forcefolder=") {
+            sbie_ini(&["delete", &section, "ForceFolder"]);
+            any = true;
+        }
+    }
+    if any {
+        sbie_start(&["/reload"]);
+    }
+    let _ = d;
+    *FORCED.lock().unwrap() = None;
+}
+
+/// The box a process runs in ("" if none), from Sandboxie itself.
+fn box_of(pid: u32) -> String {
+    static QUERY: OnceLock<Option<unsafe extern "system" fn(HANDLE, *mut u16, *mut u16, *mut u16, *mut u32) -> i32>> = OnceLock::new();
+    let f = QUERY.get_or_init(|| unsafe {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
+        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_QueryProcess"))?;
+        Some(std::mem::transmute::<_, unsafe extern "system" fn(HANDLE, *mut u16, *mut u16, *mut u16, *mut u32) -> i32>(p))
+    });
+    let Some(f) = f else { return String::new() };
+    let (mut b, mut i, mut s) = ([0u16; 64], [0u16; 128], [0u16; 128]);
+    let mut ses = 0u32;
+    let r = unsafe { f(HANDLE(pid as usize as *mut _), b.as_mut_ptr(), i.as_mut_ptr(), s.as_mut_ptr(), &mut ses) };
+    if r != 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&b[..b.iter().position(|c| *c == 0).unwrap_or(0)])
+}
+
+/// The monitor a box belongs to.
+fn monitor_of_box(name: &str) -> Option<i32> {
+    if name.is_empty() {
+        return None;
+    }
+    let ids: Vec<i32> = AREAS.get()?.lock().unwrap().keys().copied().collect();
+    ids.into_iter().find(|i| box_name(*i).eq_ignore_ascii_case(name))
+}
+
+/// Starts a program in that monitor's box ("Open another copy here").
+fn box_launch(idx: i32, file: &str, params: &str) -> bool {
+    if sbie_dir().is_none() || monitor_area(idx).is_none() {
+        return false;
+    }
+    let b = box_name(idx);
+    ensure_box(&b);
+    sbie_start(&["/reload"]);
+    let exe = file.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
+    LAUNCHES.lock().unwrap().push(Launch {
+        idx,
+        since: now_filetime().saturating_sub(10_000_000),
+        exe: exe.clone(),
+        before: app_windows().into_iter().map(|h| h.0 as isize).collect(),
+        until: Instant::now() + Duration::from_secs(30),
+    });
+    ensure_placer();
+    let mut args: Vec<String> = vec![format!("/box:{b}"), "/silent".into(), file.to_string()];
+    if !params.trim().is_empty() {
+        args.extend(split_args(params));
+    }
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    sbie_start(&refs).is_some()
+}
+
+fn split_args(s: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    let mut cur = String::new();
+    let mut q = false;
+    for c in s.chars() {
+        match c {
+            '"' => q = !q,
+            ' ' if !q => {
+                if !cur.is_empty() {
+                    v.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        v.push(cur);
+    }
+    v
+}
+
+/// Every program in that monitor's box asked to close (as you'd close them), the rest ended after a while.
+fn close_box(idx: i32, wait: Duration) {
+    if sbie_dir().is_none() {
+        return;
+    }
+    let b = box_name(idx);
+    let wins: Vec<HWND> = app_windows().into_iter().filter(|w| box_of(pid(*w)).eq_ignore_ascii_case(&b)).collect();
+    for w in &wins {
+        unsafe {
+            let _ = PostMessageW(Some(*w), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+    let t0 = Instant::now();
+    while t0.elapsed() < wait && app_windows().into_iter().any(|w| box_of(pid(w)).eq_ignore_ascii_case(&b)) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    sbie_start(&[&format!("/box:{b}"), "/terminate"]);
 }
 
 // ---- a monitor's own browser ("Own Brave" in its menu) -----------------------------------------
@@ -3090,6 +3380,9 @@ fn on_window_activated(h: HWND) {
     }
     if !app_windows().contains(&h) {
         return;
+    }
+    if sbie_dir().is_some() && !box_of(pid(h)).is_empty() {
+        return; // (a copy in another monitor's box: that one stays where it is)
     }
     // an app that only runs once (Discord, WhatsApp, Calculator… any of them), already open on
     // your desk or another monitor, came forward there instead of opening here: it comes over to
@@ -3672,6 +3965,7 @@ fn main() {
     let _ = AREAS.set(added.clone());
     taskbars_separate(false); // a crash may have left the taskbar setting on: yours comes back
     restore_mouse(); // …or your pointer speed neutral
+    clear_all_force(); // …or new programs going into a box
     let homes: Homes = Arc::new(Mutex::new(HashMap::new()));
     let _ = HOMES.set(homes.clone());
 
@@ -3966,6 +4260,52 @@ fn main() {
                 taskbars_separate(p.get(1) == Some(&"on"));
                 say("taskbar done");
             }
+            Some("isolate") => {
+                // "own copies" for a monitor on or off
+                ISOLATE.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, p.get(2) == Some(&"1"));
+                ISO_DIRTY.store(true, Ordering::SeqCst);
+                if sbie_dir().is_some() {
+                    ensure_iso_thread();
+                }
+            }
+            Some("isoexclude") => {
+                // tab-separated: program names, then "|", then folders
+                let f: Vec<&str> = line.splitn(2, '\t').nth(1).unwrap_or("").split('\t').collect();
+                let split = f.iter().position(|x| *x == "|").unwrap_or(f.len());
+                *ISO_EXES.lock().unwrap() = f[..split].iter().filter(|x| !x.is_empty()).map(|x| x.to_ascii_lowercase()).collect();
+                *ISO_DIRS.lock().unwrap() = f.get(split + 1..).unwrap_or(&[]).iter().filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+                ISO_DIRTY.store(true, Ordering::SeqCst);
+                for b in BOXES_MADE.lock().unwrap().clone() {
+                    ensure_box(&b);
+                }
+                sbie_start(&["/reload"]);
+            }
+            Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
+            Some("boxlaunch") => {
+                let f: Vec<&str> = line.split('\t').collect();
+                let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
+                let (file, params) = (f.get(2).copied().unwrap_or("").to_string(), f.get(3).copied().unwrap_or("").to_string());
+                std::thread::spawn(move || say(if box_launch(idx, &file, &params) { "boxlaunched ok" } else { "boxlaunched failed" }));
+            }
+            Some("boxreset") => {
+                let idx = n(1) as i32;
+                std::thread::spawn(move || {
+                    close_box(idx, Duration::from_secs(8));
+                    let b = box_name(idx);
+                    sbie_start(&[&format!("/box:{b}"), "delete_sandbox_silent"]);
+                    say("boxreset ok");
+                });
+            }
+            Some("boxapps") => {
+                // the programs running in that monitor's box (for the menu)
+                let b = box_name(n(1) as i32);
+                for w in app_windows() {
+                    if box_of(pid(w)).eq_ignore_ascii_case(&b) {
+                        say(&format!("win {} {} 0 {}", w.0 as usize, pid(w), title(w)));
+                    }
+                }
+                say("windows-end");
+            }
             Some("profilekey") => {
                 // which wall a monitor is: its own browser copies are kept per wall
                 let key: String = p.get(2).unwrap_or(&"").chars().filter(|c| c.is_ascii_alphanumeric()).collect();
@@ -4201,6 +4541,9 @@ fn remove_one(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32) {
         unpoint();
     }
     let since = added.lock().unwrap().get(&idx).map(|a| a.since);
+    if isolated(idx) {
+        close_box(idx, Duration::from_secs(8)); // (its own copies close, as you'd close them: they keep what they saved)
+    }
     if let Some((_, a)) = our_area(added, idx) {
         let left = evacuate(idx, &a, homes);
         if let Some(since) = since {
@@ -4343,6 +4686,7 @@ fn shutdown_monitors(vdd: &Driver, added: &AddedMap, homes: &Homes) {
 }
 
 fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
+    clear_all_force();
     shutdown_monitors(vdd, added, homes);
     taskbars_separate(false);
     unsafe {
