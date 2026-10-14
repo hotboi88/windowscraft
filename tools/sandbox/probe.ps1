@@ -272,7 +272,7 @@ function StartGui($exe, $t) {
     while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Procs | Where-Object { $_.ProcessName -like 'wcapp_*' -and ($_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*") } | Select-Object -First 1 }
     if (-not $w) { return "no window" }
     $b = BoxOf $w.Id
-    Note "($stem: process $($w.ProcessName) $($w.Id) in box '$b', window title '$($w.MainWindowTitle)')"
+    Note "(${stem}: process $($w.ProcessName) $($w.Id) in box '$b', window title '$($w.MainWindowTitle)')"
     # (only the test apps themselves: never anything else with a matching title)
     Get-Process -Name 'wcapp_*' -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
     return $b
