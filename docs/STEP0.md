@@ -72,7 +72,8 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    at 62/s (the limiter would drop releases too, by code).
 9. Smaller: viewer drops ~1.5 pictures/s at 60 fps (rawvideo timestamp collisions; branch:
    `-enc_time_base:v demux`); PUB2 never got the 512 KB send buffer (branch: `startsWith("PUB")`);
-   viewer keeps its first decode size across quality steps (code); sitting down once froze the
+   viewer kept its first decode size across quality steps (branch: a step up past it restarts the
+   decoder — 720p → 1080p is now decoded at 1920×1080, was stuck at 1280×720); sitting down once froze the
    GPU-shared picture (helper sent nothing after a 2 → 60 fps change; not reproduced); a second
    capture of the same source keeps running at 1/s while GPU sharing feeds the wall; a guest's
    button press on a shared window can block the host's render thread up to 150 ms (code; 0.15 ms
