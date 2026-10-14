@@ -1062,6 +1062,9 @@ public final class InGameMonitors {
                 for (Share s : DisplayManager.get().liveShares()) if (isInGameMonitor(s.source())) DisplayManager.get().stopShare(s);
                 MinecraftClient mc = MinecraftClient.getInstance();
                 if (mc.player != null) say(mc, "The in-game monitors stopped (their helper closed).", Formatting.YELLOW);
+                // own copies: a helper that stopped suddenly may have left the rule that boxes new
+                // programs — a fresh helper clears it as it starts, so start one now
+                if (Sandbox.ready() && backend != null) backend.sandboxStatus().exceptionally(t -> "unknown");
             });
         }
     }

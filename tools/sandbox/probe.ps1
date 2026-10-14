@@ -214,36 +214,39 @@ function SetBoxRules($lines) {
 }
 $gui = (Resolve-Path "src\main\resources\windowscraft\natives\wc-selftest.exe").Path
 foreach ($d in "C:\wcforce", "C:\wcforce\exc") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
-Copy-Item $gui "C:\wcforce\appa.exe"; Copy-Item $gui "C:\wcforce\appb.exe"; Copy-Item $gui "C:\wcforce\exc\helper.exe"
-# (a forced program is restarted inside the box under a new process id: find it by its window)
+Copy-Item $gui "C:\wcforce\wcapp_a.exe"; Copy-Item $gui "C:\wcforce\wcapp_b.exe"; Copy-Item $gui "C:\wcforce\exc\wcapp_h.exe"
+# (a forced program is restarted inside the box under a new process id: find it by its window —
+#  titled by the arguments if they came along, by its name if not)
 function StartGui($exe, $t) {
+    $stem = [IO.Path]::GetFileNameWithoutExtension($exe)
     $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
-    $w = $null; $end = (Get-Date).AddSeconds(10)
-    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Select-Object -First 1 }
+    $w = $null; $end = (Get-Date).AddSeconds(12)
+    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -eq $t -or $_.MainWindowTitle -eq $stem } | Select-Object -First 1 }
     if (-not $w) { return "no window" }
     $b = BoxOf $w.Id
-    Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($w.MainWindowTitle -eq $stem) { Note "($stem in box '$b' came without its arguments)" }
+    Get-Process | Where-Object { $_.MainWindowTitle -eq $t -or $_.MainWindowTitle -eq $stem } | Stop-Process -Force -ErrorAction SilentlyContinue
     return $b
 }
-$n0 = StartGui "C:\wcforce\appa.exe" "wc-plain"
+$n0 = StartGui "C:\wcforce\wcapp_a.exe" "wc-plain"
 Check "a test app starts and shows its window (no rules yet)" ($n0 -eq "") "box '$n0'"
 $t0 = Get-Date
 $r = SetBoxRules @("ForceFolder=C:\wcforce")
 Note "force rule written + reloaded through Sandboxie's interface: result $r in $([int]((Get-Date)-$t0).TotalMilliseconds) ms · $(IniNow)"
-$a1 = StartGui "C:\wcforce\appa.exe" "wc-force-a"
+$a1 = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-a"
 Check "with the force rule on, a program from that folder started the normal way lands in the box" ($a1 -eq "WCMon1") "box '$a1'"
-$r = SetBoxRules @("ForceFolder=C:\wcforce", "BreakoutFolder=C:\wcforce\exc", "BreakoutProcess=appb.exe")
+$r = SetBoxRules @("ForceFolder=C:\wcforce", "BreakoutFolder=C:\wcforce\exc", "BreakoutProcess=wcapp_b.exe")
 Note "with exceptions: result $r · $(IniNow)"
-$h1 = StartGui "C:\wcforce\exc\helper.exe" "wc-force-h"
-$b1 = StartGui "C:\wcforce\appb.exe" "wc-force-b"
-$a2 = StartGui "C:\wcforce\appa.exe" "wc-force-a2"
+$h1 = StartGui "C:\wcforce\exc\wcapp_h.exe" "wc-force-h"
+$b1 = StartGui "C:\wcforce\wcapp_b.exe" "wc-force-b"
+$a2 = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-a2"
 Check "a program in an exceptions folder isn't boxed, even inside a forced folder" ($h1 -eq "") "box '$h1'"
 Check "a program named as an exception isn't boxed" ($b1 -eq "") "box '$b1'"
 Check "…while others still are" ($a2 -eq "WCMon1") "box '$a2'"
 $t0 = Get-Date
 $r = SetBoxRules @()
 Note "rules removed through the interface: result $r in $([int]((Get-Date)-$t0).TotalMilliseconds) ms · $(IniNow)"
-$z = StartGui "C:\wcforce\appa.exe" "wc-force-after"
+$z = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-after"
 Check "with the rules removed, nothing is boxed any more" ($z -eq "") "box '$z'"
 
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
