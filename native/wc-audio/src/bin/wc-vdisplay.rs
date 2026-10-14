@@ -1962,9 +1962,11 @@ fn foreground_now(h: HWND) -> bool {
             return true;
         }
         let fg = GetForegroundWindow();
-        let fg_thread = GetWindowThreadProcessId(fg, None);
+        let mut fg_pid = 0u32;
+        let fg_thread = GetWindowThreadProcessId(fg, Some(&mut fg_pid));
         let me = GetCurrentThreadId();
-        let attached = fg_thread != 0 && fg_thread != me && AttachThreadInput(me, fg_thread, true).as_bool();
+        // (not to a boxed app's thread: Windows can hold that up for good)
+        let attached = fg_thread != 0 && fg_thread != me && box_of(fg_pid).is_empty() && AttachThreadInput(me, fg_thread, true).as_bool();
         let _ = SetForegroundWindow(h);
         let _ = BringWindowToTop(h);
         if attached {
@@ -3216,19 +3218,15 @@ fn breakout_exes() -> Vec<String> {
 }
 
 /// Folders whose programs always run normally: the game's, Java's, anti-cheat games', yours,
-/// WindowsCraft's, Sandboxie's, Windows'.
+/// WindowsCraft's. (Not Sandboxie's own: its launcher has to run inside a box to start a program
+/// there — let out, it never gets there. Nor Windows': a boxed app's own little helpers from there
+/// belong in its box with it. Neither folder is ever forced into a box anyway.)
 fn breakout_dirs() -> Vec<String> {
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
     if let Ok(me) = std::env::current_exe() {
         if let Some(d) = me.parent() {
             dirs.push(d.display().to_string());
         }
-    }
-    if let Some(d) = sbie_dir() {
-        dirs.push(d.display().to_string());
-    }
-    if let Ok(w) = std::env::var("WINDIR") {
-        dirs.push(w);
     }
     dirs
 }
