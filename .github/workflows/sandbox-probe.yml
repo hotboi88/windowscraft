@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'tools/sandbox/**'
+      - 'native/**'
       - '.github/workflows/sandbox-probe.yml'
   workflow_dispatch:
 
@@ -26,6 +27,20 @@ jobs:
       - name: Probe
         shell: pwsh
         run: tools/sandbox/probe.ps1
+      - name: Install the Parsec virtual display driver
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://builds.parsec.app/vdd/parsec-vdd-0.41.0.0.exe -OutFile "$env:RUNNER_TEMP\vdd.exe"
+          Start-Process "$env:RUNNER_TEMP\vdd.exe" -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 5
+      - name: WindowsCraft's own copies of apps, end to end
+        shell: pwsh
+        run: |
+          $n = "src\main\resources\windowscraft\natives"
+          & "$n\wc-selftest.exe" --helpers $n --sandbox --report out\sandbox-selftest.txt
+          $code = $LASTEXITCODE
+          Get-Content out\sandbox-selftest.txt | Select-String -Pattern "^(PASS|FAIL|     )" | ForEach-Object { $_.Line }
+          exit $code
       - uses: actions/upload-artifact@v4
         if: always()
         with:

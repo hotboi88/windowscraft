@@ -633,6 +633,18 @@ fn main() {
         stress(&dir, n, args.iter().any(|a| a == "--with-b"), arg("--pause").and_then(|v| v.parse().ok()).unwrap_or(300));
         return;
     }
+    if args.iter().any(|a| a == "--sandbox") {
+        // own copies of apps: WindowsCraft's helper driving Sandboxie-Plus (installed beforehand)
+        sandbox(&mut rep, &dir);
+        rep.line(format!("{} failed", rep.fails));
+        if let Some(path) = arg("--report") {
+            let mut text = rep.lines.join("\r\n");
+            text.push_str("\r\n\r\n---- helper log ----\r\n");
+            text.push_str(&HELPER_LOG.lock().unwrap().join("\r\n"));
+            let _ = std::fs::write(&path, text);
+        }
+        std::process::exit(rep.fails as i32);
+    }
     rep.line(format!("WindowsCraft self-test · {} · helpers in {}", windows_version(), dir.display()));
     let real: Vec<(String, RECT)> = monitors();
     rep.note(format!("your screens: {}", real.iter().map(|(d, r)| format!("{d} {}", fmt(r))).collect::<Vec<_>>().join(", ")));
@@ -1642,6 +1654,132 @@ fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND,
     let p = pid(w);
     let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
     sleep(500);
+}
+
+/// Own copies of apps, end to end through the helper: sitting at a monitor with "own copies" on,
+/// what you start lands in that monitor's box, on that monitor; your desk's copy is untouched;
+/// getting up (or "own copies" off) starts things normally again; nothing is left behind.
+fn sandbox(rep: &mut Report, dir: &std::path::Path) {
+    let Ok(h) = Helper::start(&dir.join("wc-vdisplay.exe")).map_err(|e| rep.check("helper starts", false, e)) else { return };
+    let st = h.call("sbiestatus", "sbie", 15000).ok().and_then(|l| l.last().cloned()).unwrap_or_default();
+    rep.check("the helper finds Sandboxie running", st == "sbie ok", &st);
+    if st != "sbie ok" {
+        h.stop();
+        return;
+    }
+    let _ = h.call("status", "status", 15000);
+    let Ok(m) = add(&h, 1920, 1080) else {
+        rep.check("a monitor for the test", false, "couldn't add one");
+        h.stop();
+        return;
+    };
+    let r = now_rect(&h, m.idx).unwrap_or(m.r);
+    let prim = primary();
+    let g = RECT { left: prim.left + 40, top: prim.top + 40, right: prim.left + 840, bottom: prim.top + 540 };
+    let game = spawn_window("GLFW30", "Minecraft* 1.21.1 (self-test stand-in)", g, false);
+    GAME_HOLDS.store(true, Ordering::SeqCst);
+    let edge = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
+        .into_iter().find(|p| std::path::Path::new(p).exists()).unwrap_or("");
+    let edge_wins = |h: &Helper, idx: i32| -> Vec<String> {
+        h.call(&format!("boxapps {idx}"), "windows-end", 10000).unwrap_or_default().into_iter().filter(|l| l.starts_with("win ")).collect()
+    };
+    // your desk Edge first (not sitting anywhere)
+    unsafe {
+        let _ = SetCursorPos(prim.left + 300, prim.top + 300);
+    }
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(edge).args(["--no-first-run", "--no-default-browser-check", "--new-window", "about:blank"]).spawn();
+    let desk = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty());
+    sleep(2000);
+    h.send(&format!("profilekey {} selftest{}", m.idx, std::process::id()));
+    h.send(&format!("isolate {} 1", m.idx));
+    h.send(&format!("isoexclude\t|\t{}", dir.display()));
+    sleep(500);
+    bring_forward(game);
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+    let seat = h.call(&format!("seat {} 0.5 0.5 {}", m.idx, game.0 as isize), "seated", 8000);
+    sleep(1200); // (the force rule follows within ~100 ms)
+    // Edge again, started the normal way — as from the monitor's own Start menu
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(edge).args(["--no-first-run", "--no-default-browser-check", "--new-window", "about:blank"]).spawn();
+    let own = find_new(&before, 25000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty() && desk.map_or(true, |d| pid(*w) != pid(d)));
+    sleep(1500);
+    let in_box = edge_wins(&h, m.idx);
+    let placed = own.map_or(false, |w| { let (x, y) = center(&rect_of(w)); inside(&r, x, y) });
+    rep.check("sitting at a monitor with own copies on, an app you start runs as that monitor's own copy",
+        own.is_some() && in_box.iter().any(|l| own.map_or(false, |w| l.split(' ').nth(2) == Some(&pid(w).to_string()))),
+        format!("{seat:?} · new Edge {:?} · in its box: {in_box:?}", own.map(|w| (pid(w), title(w)))));
+    rep.check("…on that monitor", placed, format!("at {} (monitor {})", own.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&r)));
+    rep.check("…and your desk's copy is untouched (still yours, on your desk)",
+        desk.map_or(false, |d| unsafe { IsWindow(Some(d)).as_bool() } && { let (x, y) = center(&rect_of(d)); inside(&prim, x, y) } && !in_box.iter().any(|l| l.split(' ').nth(2) == Some(&pid(d).to_string()))),
+        format!("desk Edge {:?}", desk.map(|d| (pid(d), fmt(&rect_of(d))))));
+    // WindowsCraft's own programs never go in a box, even while you sit there
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(dir.join("wc-selftest.exe")).args(["--window", "WindowsCraft own helper (self-test)"]).spawn();
+    let mine = find_new(&before, 8000, |w| title(*w) == "WindowsCraft own helper (self-test)");
+    sleep(800);
+    let mine_boxed = mine.map_or(false, |w| edge_wins(&h, m.idx).iter().any(|l| l.split(' ').nth(2) == Some(&pid(w).to_string())));
+    rep.check("WindowsCraft's own programs never go in a box", mine.is_some() && !mine_boxed, format!("{:?} boxed {mine_boxed}", mine.map(pid)));
+    if let Some(w) = mine {
+        close(w);
+    }
+    // up again: things start normally
+    let _ = h.call("unseat", "unseated", 8000);
+    sleep(1200);
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(dir.join("wc-selftest.exe")).args(["--window", "Started after getting up (self-test)"]).spawn();
+    let after = find_new(&before, 8000, |w| title(*w) == "Started after getting up (self-test)");
+    sleep(800);
+    let boxed = after.map_or(false, |w| edge_wins(&h, m.idx).iter().any(|l| l.split(' ').nth(2) == Some(&pid(w).to_string())));
+    rep.check("after getting up, apps start normally again (not in a box)", after.is_some() && !boxed, format!("{:?} boxed {boxed}", after.map(pid)));
+    if let Some(w) = after {
+        close(w);
+    }
+    // own copies off: sitting there starts things normally too
+    h.send(&format!("isolate {} 0", m.idx));
+    bring_forward(game);
+    let _ = h.call(&format!("seat {} 0.5 0.5 {}", m.idx, game.0 as isize), "seated", 8000);
+    sleep(1200);
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = Command::new(dir.join("wc-selftest.exe")).args(["--window", "Own copies off (self-test)"]).spawn();
+    let off = find_new(&before, 8000, |w| title(*w) == "Own copies off (self-test)");
+    sleep(800);
+    let boxed = off.map_or(false, |w| edge_wins(&h, m.idx).iter().any(|l| l.split(' ').nth(2) == Some(&pid(w).to_string())));
+    rep.check("with own copies off, apps you start at the monitor run normally", off.is_some() && !boxed, format!("{:?} boxed {boxed}", off.map(pid)));
+    if let Some(w) = off {
+        close(w);
+    }
+    let _ = h.call("unseat", "unseated", 8000);
+    h.send(&format!("isolate {} 1", m.idx));
+    // "open another copy here"
+    let t = Instant::now();
+    let r2 = h.call(&format!("boxlaunch\t{}\t{}\t--window \"Another copy (self-test)\"", m.idx, dir.join("wc-selftest.exe").display()), "boxlaunched", 20000);
+    let copy = (0..40).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w) == "Another copy (self-test)") });
+    sleep(800);
+    let copy_boxed = copy.map_or(false, |w| edge_wins(&h, m.idx).iter().any(|l| l.split(' ').nth(2) == Some(&pid(w).to_string())));
+    let copy_on = copy.map_or(false, |w| { let (x, y) = center(&rect_of(w)); inside(&r, x, y) });
+    rep.check("\"Open another copy here\" starts it in the monitor's box, on that monitor", copy_boxed && copy_on,
+        format!("{r2:?} after {} ms · window {:?}", t.elapsed().as_millis(), copy.map(|w| fmt(&rect_of(w)))));
+    // turning the monitor off closes its own copies
+    let _ = h.call(&format!("remove {}", m.idx), "removed", 30000);
+    sleep(1500);
+    let left: Vec<String> = top_windows().into_iter().filter(|w| own.map_or(false, |o| pid(*w) == pid(o)) || copy.map_or(false, |c| *w == c)).map(title).collect();
+    rep.check("turning the monitor off closes its own copies", left.is_empty(), format!("{left:?}"));
+    // nothing left behind
+    h.stop();
+    sleep(1000);
+    let ini = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Sandboxie.ini")).unwrap_or_default();
+    let text = if ini.len() > 2 && ini[0] == 0xFF { String::from_utf16_lossy(&ini[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()) } else { String::from_utf8_lossy(&ini).into_owned() };
+    let forced: Vec<&str> = text.lines().filter(|l| l.to_lowercase().starts_with("forcefolder")).collect();
+    rep.check("when the game goes away, no rule is left that would box your desk's apps", forced.is_empty(), format!("{forced:?}"));
+    rep.note(format!("Sandboxie.ini: {}", text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).collect::<Vec<_>>().join(" | ")));
+    if let Some(d) = desk {
+        let p = pid(d);
+        let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
+    }
+    close(game);
 }
 
 fn union(a: &RECT, b: &RECT) -> RECT {

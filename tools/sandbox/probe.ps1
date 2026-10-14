@@ -192,7 +192,16 @@ $gui = (Resolve-Path "src\main\resources\windowscraft\natives\wc-selftest.exe").
 foreach ($d in "C:\wcexc", "C:\wcother") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 Copy-Item $gui "C:\wcother\appa.exe"; Copy-Item $gui "C:\wcother\appb.exe"; Copy-Item $gui "C:\wcexc\helper.exe"
 Copy-Item "$env:WINDIR\System32\PING.EXE" "C:\wcother\cons.exe"
-function StartGui($exe, $t) { $p = Start-Process $exe -ArgumentList "--window", $t -PassThru; Start-Sleep 3; $b = BoxOf $p.Id; $p | Stop-Process -Force -ErrorAction SilentlyContinue; Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Stop-Process -Force -ErrorAction SilentlyContinue; return $b }
+# (a forced program is restarted inside the box under a new process id: find it by its window)
+function StartGui($exe, $t) {
+    $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
+    $w = $null; $end = (Get-Date).AddSeconds(10)
+    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Select-Object -First 1 }
+    if (-not $w) { return "no window" }
+    $b = BoxOf $w.Id
+    Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Stop-Process -Force -ErrorAction SilentlyContinue
+    return $b
+}
 & $ini set WCMon1 ForceFolder "C:\" | Out-Null
 & $ini append WCMon1 ForceFolder "D:\" | Out-Null
 & "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
