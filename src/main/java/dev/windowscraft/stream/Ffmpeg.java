@@ -1,13 +1,16 @@
 package dev.windowscraft.stream;
 
 import dev.windowscraft.WindowsCraftClient;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -29,7 +32,15 @@ import net.fabricmc.loader.api.FabricLoader;
  * so it never touches Minecraft's memory or threads.
  */
 public final class Ffmpeg {
-    private static final String WIN_ZIP = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
+    // One tested FFmpeg for everyone: the newest daily build changes under us (one changed how
+    // sound timestamps are taken and nearly all stream sound was lost). FFmpeg 9.0.2 from BtbN's
+    // month-end build (those are kept about two years), checked against its own SHA-256.
+    private static final String PIN = "n9.0.2-17-g2a571b6068";
+    private static final String PIN_ZIP = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip";
+    private static final String PIN_SHA256 = "a0e45723c72141975f51d8666302e614711745f3102b704ca3f82c897a58d278";
+    // if that build is gone one day: the newest of the same release line (fixes only), checked
+    // against its published checksum list
+    private static final String WIN_ZIP = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip";
     private static final String WIN_SUMS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
 
@@ -63,7 +74,7 @@ public final class Ffmpeg {
         pending = CompletableFuture.supplyAsync(() -> {
             try {
                 Path p = locate();
-                if (p == null && WINDOWS) p = download();
+                if (p == null && WINDOWS) p = download(dir().resolve("ffmpeg.exe"));
                 if (p == null) throw new IOException("FFmpeg not found. Install it (e.g. 'winget install Gyan.FFmpeg') or put ffmpeg in " + dir());
                 executable = p;
                 encoder = pickEncoder(p);
@@ -85,7 +96,25 @@ public final class Ffmpeg {
         String override = System.getProperty("windowscraft.ffmpeg");
         if (override != null && works(Path.of(override))) return Path.of(override);
         Path own = dir().resolve(WINDOWS ? "ffmpeg.exe" : "ffmpeg");
-        if (Files.isRegularFile(own) && works(own)) return own;
+        if (WINDOWS) {
+            // the tested build fetched last time (below) takes over from an older download now,
+            // before any stream runs
+            Path next = dir().resolve("ffmpeg-next.exe");
+            if (Files.isRegularFile(next)) {
+                try {
+                    if (works(next)) Files.move(next, own, StandardCopyOption.REPLACE_EXISTING);
+                    else Files.delete(next);
+                } catch (IOException e) {
+                    WindowsCraftClient.LOGGER.warn("Couldn't switch to the new FFmpeg yet ({}); next start", e.getMessage());
+                }
+            }
+        }
+        if (Files.isRegularFile(own) && works(own)) {
+            // a download from before the pin keeps working this time; the tested build comes in the
+            // background and takes over at the next start
+            if (WINDOWS && !PIN.equals(version(own))) upgradeLater();
+            return own;
+        }
         String path = System.getenv("PATH");
         if (path != null) {
             for (String d : path.split(java.io.File.pathSeparator)) {
@@ -102,6 +131,46 @@ public final class Ffmpeg {
         return null;
     }
 
+    /** "n9.0.2-17-g2a571b6068" for "ffmpeg version n9.0.2-17-g2a571b6068-20260930 Copyright…" (null if unreadable). */
+    static String version(Path exe) {
+        try {
+            Process p = new ProcessBuilder(exe.toString(), "-hide_banner", "-version").redirectErrorStream(true).start();
+            String first;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                first = r.readLine();
+                while (r.readLine() != null) {
+                    // read to the end so FFmpeg can exit
+                }
+            }
+            if (!p.waitFor(10, TimeUnit.SECONDS)) { p.destroyForcibly(); return null; }
+            return buildOf(first);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The build name in FFmpeg's first -version line, without the date BtbN appends (-20260930). */
+    static String buildOf(String versionLine) {
+        if (versionLine == null || !versionLine.startsWith("ffmpeg version ")) return null;
+        String v = versionLine.substring("ffmpeg version ".length()).split("\\s+", 2)[0];
+        int date = v.lastIndexOf('-');
+        return date > 0 && v.substring(date + 1).matches("\\d{8}") ? v.substring(0, date) : v;
+    }
+
+    private static void upgradeLater() {
+        Thread t = new Thread(() -> {
+            try {
+                download(dir().resolve("ffmpeg-next.exe"));
+                WindowsCraftClient.LOGGER.info("Tested FFmpeg {} downloaded; it takes over at the next start", PIN);
+            } catch (Exception e) {
+                WindowsCraftClient.LOGGER.info("Tested FFmpeg not downloaded this time ({}); the current one keeps working", e.toString());
+            }
+        }, "WindowsCraft FFmpeg update");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
     private static boolean works(Path exe) {
         try {
             Process p = new ProcessBuilder(exe.toString(), "-hide_banner", "-version").redirectErrorStream(true)
@@ -113,20 +182,38 @@ public final class Ffmpeg {
         }
     }
 
-    /** One-time download of the official BtbN Windows build (checksum-verified); only ffmpeg.exe is kept. */
-    private static Path download() throws Exception {
-        state = State.DOWNLOADING;
-        status = "Downloading FFmpeg (one time)…";
-        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).connectTimeout(Duration.ofSeconds(20)).build();
-        String sums = http.send(HttpRequest.newBuilder(URI.create(WIN_SUMS)).build(), HttpResponse.BodyHandlers.ofString()).body();
-        String expected = null;
-        for (String line : sums.split("\n")) {
-            if (line.trim().endsWith("ffmpeg-master-latest-win64-gpl.zip")) expected = line.trim().split("\\s+")[0].toLowerCase(Locale.ROOT);
+    /**
+     * Downloads the tested BtbN Windows build (or, if it's gone, the newest of its release line),
+     * checksum-verified, to {@code exe}; only ffmpeg.exe is kept. A first install shows its
+     * progress; the background upgrade (to ffmpeg-next.exe) doesn't.
+     */
+    private static synchronized Path download(Path exe) throws Exception {
+        boolean firstInstall = exe.equals(dir().resolve("ffmpeg.exe"));
+        if (firstInstall) {
+            state = State.DOWNLOADING;
+            status = "Downloading FFmpeg (one time)…";
         }
-        if (expected == null) throw new IOException("FFmpeg checksum list didn't include the Windows build");
+        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).connectTimeout(Duration.ofSeconds(20)).build();
+        String expected = PIN_SHA256;
+        HttpResponse<InputStream> resp = http.send(HttpRequest.newBuilder(URI.create(PIN_ZIP)).build(), HttpResponse.BodyHandlers.ofInputStream());
+        if (resp.statusCode() != 200) {
+            resp.body().close();
+            WindowsCraftClient.LOGGER.warn("Tested FFmpeg {} isn't available any more (HTTP {}); taking the newest of its release line", PIN, resp.statusCode());
+            String sums = http.send(HttpRequest.newBuilder(URI.create(WIN_SUMS)).build(), HttpResponse.BodyHandlers.ofString()).body();
+            String name = WIN_ZIP.substring(WIN_ZIP.lastIndexOf('/') + 1);
+            expected = null;
+            for (String line : sums.split("\n")) {
+                if (line.trim().endsWith(name)) expected = line.trim().split("\\s+")[0].toLowerCase(Locale.ROOT);
+            }
+            if (expected == null) throw new IOException("FFmpeg checksum list didn't include the Windows build");
+            resp = http.send(HttpRequest.newBuilder(URI.create(WIN_ZIP)).build(), HttpResponse.BodyHandlers.ofInputStream());
+            if (resp.statusCode() != 200) {
+                resp.body().close();
+                throw new IOException("FFmpeg download failed (HTTP " + resp.statusCode() + ")");
+            }
+        }
         Files.createDirectories(dir());
-        Path zip = dir().resolve("ffmpeg-download.zip");
-        HttpResponse<InputStream> resp = http.send(HttpRequest.newBuilder(URI.create(WIN_ZIP)).build(), HttpResponse.BodyHandlers.ofInputStream());
+        Path zip = exe.resolveSibling(exe.getFileName() + ".zip");
         long total = resp.headers().firstValueAsLong("content-length").orElse(-1);
         MessageDigest sha = MessageDigest.getInstance("SHA-256");
         try (InputStream in = resp.body(); OutputStream out = Files.newOutputStream(zip)) {
@@ -137,7 +224,7 @@ public final class Ffmpeg {
                 out.write(buf, 0, n);
                 sha.update(buf, 0, n);
                 done += n;
-                if (total > 0) {
+                if (total > 0 && firstInstall) {
                     progress = done / (double) total;
                     status = String.format(Locale.ROOT, "Downloading FFmpeg (one time) %d%% of %d MB", (int) (progress * 100), total >> 20);
                 }
@@ -148,13 +235,12 @@ public final class Ffmpeg {
             Files.deleteIfExists(zip);
             throw new IOException("FFmpeg download was corrupted (checksum mismatch)");
         }
-        status = "Unpacking FFmpeg…";
-        Path exe = dir().resolve("ffmpeg.exe");
+        if (firstInstall) status = "Unpacking FFmpeg…";
         try (ZipInputStream zin = new ZipInputStream(Files.newInputStream(zip))) {
             ZipEntry e;
             while ((e = zin.getNextEntry()) != null) {
                 if (e.getName().endsWith("/bin/ffmpeg.exe")) {
-                    Path tmp = dir().resolve("ffmpeg.exe.tmp");
+                    Path tmp = exe.resolveSibling(exe.getFileName() + ".tmp");
                     Files.copy(zin, tmp, StandardCopyOption.REPLACE_EXISTING);
                     Files.move(tmp, exe, StandardCopyOption.REPLACE_EXISTING);
                 }
