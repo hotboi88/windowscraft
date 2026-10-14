@@ -163,7 +163,8 @@ Check "an app that only runs once runs again inside a box (a second copy)" ($b2.
 & "$dir\Start.exe" /terminate_all | Out-Null
 Start-Sleep 2
 $t0 = Get-Date
-& $ini set WCMon1 ForceFolder "C:\" | Out-Null
+$edgeDir = Split-Path (Split-Path $edge)   # (…\Microsoft\Edge)
+& $ini set WCMon1 ForceFolder $edgeDir | Out-Null
 & "$dir\Start.exe" /reload | Out-Null
 $ms = [int]((Get-Date) - $t0).TotalMilliseconds
 Note "turning the force rule on took $ms ms"
@@ -188,11 +189,32 @@ foreach ($w in BoxWins WCMon1) { $null = $w.CloseMainWindow() }
 Start-Sleep 5
 
 # ---- 10. exceptions while the force rule is on: programs that must never be boxed
-#          (WindowsCraft's own helpers, games with anti-cheat, apps you picked)
+#          (Sandboxie's own tools, WindowsCraft's helpers, games with anti-cheat, apps you picked)
+#          The rules are written straight into Sandboxie.ini and reloaded through Sandboxie's own
+#          programming interface (as WindowsCraft's helper does), never by starting its tools.
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+public static class SbieConf {
+    [DllImport(@"C:\Program Files\Sandboxie-Plus\SbieDll.dll")] public static extern int SbieApi_ReloadConf(uint session, uint flags);
+}
+"@
+$iniPath = "C:\Windows\Sandboxie.ini"
+function SetBoxRules($lines) {
+    $text = Get-Content $iniPath -Encoding Unicode
+    $out = @(); $in = $false
+    foreach ($l in $text) {
+        if ($l -match '^\[') { $in = ($l -eq '[WCMon1]') }
+        if ($in -and $l -match '^(ForceFolder|ForceProcess|BreakoutFolder|BreakoutProcess)=') { continue }
+        $out += $l
+        if ($l -eq '[WCMon1]') { $out += $lines }
+    }
+    Set-Content $iniPath $out -Encoding Unicode
+    $r = [SbieConf]::SbieApi_ReloadConf([uint32]::MaxValue, 0)
+    return $r
+}
 $gui = (Resolve-Path "src\main\resources\windowscraft\natives\wc-selftest.exe").Path
-foreach ($d in "C:\wcexc", "C:\wcother") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
-Copy-Item $gui "C:\wcother\appa.exe"; Copy-Item $gui "C:\wcother\appb.exe"; Copy-Item $gui "C:\wcexc\helper.exe"
-Copy-Item "$env:WINDIR\System32\PING.EXE" "C:\wcother\cons.exe"
+foreach ($d in "C:\wcforce", "C:\wcforce\exc") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+Copy-Item $gui "C:\wcforce\appa.exe"; Copy-Item $gui "C:\wcforce\appb.exe"; Copy-Item $gui "C:\wcforce\exc\helper.exe"
 # (a forced program is restarted inside the box under a new process id: find it by its window)
 function StartGui($exe, $t) {
     $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
@@ -203,29 +225,26 @@ function StartGui($exe, $t) {
     Get-Process | Where-Object { $_.MainWindowTitle -eq $t } | Stop-Process -Force -ErrorAction SilentlyContinue
     return $b
 }
-& $ini set WCMon1 ForceFolder "C:\" | Out-Null
-& "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
-Note "force rule set: $(IniNow) · SbieIni sees: $(& $ini query WCMon1 ForceFolder)"
-$a1 = StartGui "C:\wcother\appa.exe" "wc-force-a"
-$c = Start-Process "C:\wcother\cons.exe" -ArgumentList "-n 6 127.0.0.1" -PassThru -WindowStyle Hidden; Start-Sleep 2; $c1 = BoxOf $c.Id; $c | Stop-Process -Force -ErrorAction SilentlyContinue
-Check "with the force rule on, a windowed program started the normal way lands in the box" ($a1 -eq "WCMon1") "box '$a1' (a console program: '$c1')"
-& $ini append WCMon1 BreakoutFolder "C:\wcexc" | Out-Null
-& $ini append WCMon1 BreakoutProcess "appb.exe" | Out-Null
-& "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
-$h1 = StartGui "C:\wcexc\helper.exe" "wc-force-h"
-$b1 = StartGui "C:\wcother\appb.exe" "wc-force-b"
-$a2 = StartGui "C:\wcother\appa.exe" "wc-force-a2"
-Check "a program in an exceptions folder isn't boxed" ($h1 -eq "") "box '$h1'"
+$n0 = StartGui "C:\wcforce\appa.exe" "wc-plain"
+Check "a test app starts and shows its window (no rules yet)" ($n0 -eq "") "box '$n0'"
+$t0 = Get-Date
+$r = SetBoxRules @("ForceFolder=C:\wcforce")
+Note "force rule written + reloaded through Sandboxie's interface: result $r in $([int]((Get-Date)-$t0).TotalMilliseconds) ms · $(IniNow)"
+$a1 = StartGui "C:\wcforce\appa.exe" "wc-force-a"
+Check "with the force rule on, a program from that folder started the normal way lands in the box" ($a1 -eq "WCMon1") "box '$a1'"
+$r = SetBoxRules @("ForceFolder=C:\wcforce", "BreakoutFolder=C:\wcforce\exc", "BreakoutProcess=appb.exe")
+Note "with exceptions: result $r · $(IniNow)"
+$h1 = StartGui "C:\wcforce\exc\helper.exe" "wc-force-h"
+$b1 = StartGui "C:\wcforce\appb.exe" "wc-force-b"
+$a2 = StartGui "C:\wcforce\appa.exe" "wc-force-a2"
+Check "a program in an exceptions folder isn't boxed, even inside a forced folder" ($h1 -eq "") "box '$h1'"
 Check "a program named as an exception isn't boxed" ($b1 -eq "") "box '$b1'"
 Check "…while others still are" ($a2 -eq "WCMon1") "box '$a2'"
-& $ini delete WCMon1 ForceFolder | Out-Null
-& $ini delete WCMon1 BreakoutFolder | Out-Null
-& $ini delete WCMon1 BreakoutProcess | Out-Null
-& "$dir\Start.exe" /reload | Out-Null
-Start-Sleep 1
-Note "after removing the rules: $(IniNow)"
-$z = StartGui "C:\wcother\appa.exe" "wc-force-after"
-Check "with the rule removed, nothing is boxed any more" ($z -eq "") "box '$z'"
+$t0 = Get-Date
+$r = SetBoxRules @()
+Note "rules removed through the interface: result $r in $([int]((Get-Date)-$t0).TotalMilliseconds) ms · $(IniNow)"
+$z = StartGui "C:\wcforce\appa.exe" "wc-force-after"
+Check "with the rules removed, nothing is boxed any more" ($z -eq "") "box '$z'"
 
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
 $sig = Get-AuthenticodeSignature $inst.FullName
