@@ -62,7 +62,8 @@ public final class SpatialAudioPlayer {
     // through untouched; only if the queue drifts far off (two sound cards' clocks never match
     // exactly) is 10 ms removed or repeated — blended over a few ms, so it can't click.
     private static final int FRAME = 4;
-    private static final int START_TARGET = ms(120), MAX_TARGET = ms(320), STEP = ms(50), LOW = ms(25), DRIFT = ms(70);
+    private static final int START_TARGET = ms(Integer.getInteger("windowscraft.exp.audioReserve", 120)), // (Step 0 experiment, dev only)
+            MAX_TARGET = ms(320), STEP = ms(50), LOW = ms(25), DRIFT = ms(70);
     /** Grows (up to 320 ms) each time sound still arrives too late — e.g. a heavy modpack's long pauses. */
     private int target = START_TARGET;
     private static final int ADJUST_FRAMES = 480, FADE_FRAMES = 192; // 10 ms, 4 ms crossfade

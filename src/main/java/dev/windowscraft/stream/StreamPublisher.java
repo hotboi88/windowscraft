@@ -856,8 +856,9 @@ public final class StreamPublisher {
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
         final int chunkFrames = 480; // 10 ms
         final int chunkBytes = chunkFrames * 4;
-        final int target = AudioCapture.BYTES_PER_SECOND * 80 / 1000;
-        final int high = AudioCapture.BYTES_PER_SECOND * 160 / 1000;
+        final int cushionMs = Integer.getInteger("windowscraft.exp.audioCushion", 80); // (Step 0 experiment, dev only)
+        final int target = AudioCapture.BYTES_PER_SECOND * cushionMs / 1000;
+        final int high = AudioCapture.BYTES_PER_SECOND * cushionMs * 2 / 1000;
         final int max = AudioCapture.BYTES_PER_SECOND / 4;
         // One chunk is held back before sending, so that whenever sound has to stop (it arrived
         // late, or we jump ahead after a stall) the chunk before the gap can fade out and the one
