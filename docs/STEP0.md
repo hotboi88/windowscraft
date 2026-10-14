@@ -31,7 +31,9 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    Fix (branch `step0-fix-prototypes`): sound clock = sample count from the wall clock at start
    (`asetpts=N/SR/TB+RTCSTART/(TB*1000000)`), CPU path `-copyts`. Viewer sound 0 → 21.8 MB; and
    capture → encoded 21/61/67 → 4/22/26 ms (the muxer had held pictures in ~80 ms clumps).
-   Also: pin a tested FFmpeg build. With real sound packets the muxer's 100 ms interleave wait
+   Also: pin a tested FFmpeg build (done on `next-0.15.2`: BtbN's FFmpeg 9.0.2 release build,
+   SHA-256 in `Ffmpeg.java`; same viewer latency and bit-identical decoding as the owner's
+   nightly N-127259; an older download is replaced in the background). With real sound packets the muxer's 100 ms interleave wait
    now holds the CPU path's pictures (capture → encoded 17.6/55/61 ms); `-max_interleave_delta`
    of 1 µs brings it to 3.3/6.6/12.5 ms (GPU path: 4/22/26 already) and lip sync doesn't change
    (256 vs 265 ms) — on the branch as the default.
@@ -46,6 +48,12 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    left bound. Proposal: re-test in the real game with logging (copy vs blit path, scissor/pack
    state at the read-back); call it black only if the CPU capture of the same source isn't.
    In-game monitor on the fast route: captured → wall 0/7/10 ms (CPU route at 720p30: 13/17/18 ms).
+   A likely way the check misreads (found 14 Oct, by code): it read 25 spots back with whatever
+   pack state the last mod left — a pixel-pack buffer left bound (Xaero's maps use them) catches
+   the read and the untouched memory reads as black. On `next-0.15.2`: pack state set plainly
+   for the read, a read that didn't land is no verdict, and the normal capture of the same screen
+   (it keeps running at 1/s) is asked first — black too, or nothing yet, means look again later.
+   Test key v4: a "black" verdict is tested again once.
    The owner's actual case — a 4K in-game monitor on the CPU route, his settings: ~21 pictures/s
    on the wall from a 60 fps window (24 ms to copy each 33 MB picture out of the helper, 16 ms
    into the GPU buffer), captured → wall well over 100 ms, ~2.3 cores in the game + 1 in the
@@ -74,8 +82,25 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    `-avioflags direct`, threads and hwaccel make no difference. In the game, captured → decoded on
    the viewer: 60/s 136/166/174 → 98/125/136 ms, ~17/s 306/398/407 → 195/245/266 ms. Left: one
    picture inside FFmpeg (60/s 29 ms, 30/s 46 ms standalone), and CPU NV12→BGRA conversion
-   (1–1.5 cores at 1080p60; half-size or NV12 output ~6 ms less). Removing the last picture means
-   decoding in our own helper rather than the FFmpeg CLI. Measuring note: `view.decode` (arrivals
+   (1–1.5 cores at 1080p60; half-size or NV12 output ~6 ms less).
+   **Both gone on `next-0.15.2`.** The last picture was the CLI's raw-picture *writer*, not the
+   decoder: rawvideo encodes on frame threads and hands picture k out when k+1 comes in (FFmpeg's
+   `-debug_ts` latency report: 150 of 155 ms in "encode" with pictures fed 150 ms apart; FFmpeg's
+   libraries driven directly, via PyAV, hold nothing). `-threads:v 1` on the output: 0 held.
+   Pictures over 64 KB (no PES length: every keyframe, big changes, all pictures from older
+   senders) still waited for the next picture's start — with change-driven capture, the last
+   change before the screen goes still appeared only with the next change. The viewer now puts a
+   tiny sized PES ("Q264" + filler NAL, which FFmpeg's H.264 decoder drops silently) right after
+   such a picture where its last TS packet is padded out, renumbering the video CCs
+   (`relay.PictureEnds`). Measured by counting, not timing (one picture at a time, 150 ms apart):
+   60/s and 30/s 1 → 0 held, 10/s and old-style streams 2 → 0; decoded pictures bit-identical.
+   Colour: the viewer's FFmpeg now outputs NV12 and `render.Nv12Converter` colours it into the
+   wall's RGBA texture on the GPU (BT.601 limited, colour per 2×2 block as FFmpeg did: within
+   3/255 of its BGRA; 1.5 bytes a pixel instead of 4 through socket, Java and upload). CI: movie
+   test (Linux, llvmpipe) identical colour bars and results. Still to measure on the RTX 4060:
+   viewer CPU and captured → decoded in the game.
+   Counting beats timing here: with the owner's game running, the same timed run read 29 ms
+   once and 58 ms the next (`avtest/hold.py`-style counting is in the commit message). Measuring note: `view.decode` (arrivals
    and decoded pictures matched in order) is unreliable — FFmpeg drops the pictures it reads while
    sizing up the stream (`-fflags nobuffer`), which shifts the match (it read ~1.2 s at 17/s); use
    `view.e2e_testpattern` (timing strip) minus `view.arrival_age`. Standalone tools:

@@ -15,7 +15,8 @@ WindowsCraft is licensed under the GNU Lesser General Public License v3.0 or lat
 ## Tools used at runtime (not bundled)
 
 - **FFmpeg** (https://ffmpeg.org) runs as a separate program. On Windows the mod downloads
-  the official BtbN build (GPL) on first use and checks it against the published SHA-256.
+  the official BtbN build (GPL) of FFmpeg 9.0.2 on first use and checks it against its
+  SHA-256 (if that build is ever gone: the newest 9.0 build, checked against BtbN's list).
 - **JNA** ships with Minecraft itself.
 
 ## Bundled helper

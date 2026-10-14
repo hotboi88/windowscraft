@@ -95,6 +95,17 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## Next: branch `next-0.15.2` (14 Oct, after 0.15.1)
+
+Measured and CI-tested, not yet released: FFmpeg pinned to 9.0.2; viewer pictures as NV12,
+coloured on the GPU (`render.Nv12Converter`, off for good if it fails; `windowscraft.gpuConvert`);
+no picture held in the viewer's FFmpeg at all (`-threads:v 1` on the raw output +
+`relay.PictureEnds` for pictures over 64 KB; `windowscraft.pictureEnds`); the GPU-sharing black
+check made hard to fool (key v4). Needs the owner's PC (with nothing else running): viewer CPU
+and in-game latency with the bench, Iris + his shader pack with a viewer (the colour pass puts
+GL state back — check), the 40/60 sound reserves (CI runners have no sound device), the
+Task Manager / self-test items (his UAC is the Windows default: Task Manager auto-elevates).
+
 ## 0.15.1 checks with the owner (installed on his server 14 Oct; PC and friends via the in-game update)
 
 1. Same jar on server and PC (exactly one windowscraft jar per mods
