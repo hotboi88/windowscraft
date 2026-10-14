@@ -3197,6 +3197,27 @@ fn reload_conf() -> bool {
     }
 }
 
+/// A setting as Sandboxie itself has it now (what its driver goes by, not the file).
+fn sbie_query(section: &str, setting: &str, index: u32) -> Option<String> {
+    static QUERY: OnceLock<Option<unsafe extern "system" fn(*const u16, *const u16, u32, *mut u16, u32) -> i32>> = OnceLock::new();
+    let f = QUERY.get_or_init(|| unsafe {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
+        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_QueryConf"))?;
+        Some(std::mem::transmute::<_, unsafe extern "system" fn(*const u16, *const u16, u32, *mut u16, u32) -> i32>(p))
+    });
+    let f = (*f)?;
+    let (sec, set) = (wide(section), wide(setting));
+    let mut buf = [0u16; 1024];
+    let r = unsafe { f(sec.as_ptr(), set.as_ptr(), index, buf.as_mut_ptr(), (buf.len() * 2) as u32) };
+    let v = String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(0)]);
+    (r == 0 && !v.is_empty()).then_some(v)
+}
+
+/// The box Sandboxie is really forcing new programs into now (confirmed with it, not assumed).
+static FORCE_LIVE: Mutex<Option<String>> = Mutex::new(None);
+
 /// Where your apps are installed: what's forced into the monitor's box while you sit there
 /// (never all of a drive — Windows, Sandboxie and WindowsCraft stay out).
 fn app_folders() -> Vec<String> {
@@ -3450,8 +3471,23 @@ fn set_force(to: Option<String>) {
         set_section(b, &box_settings(b, true));
     }
     let ok = reload_conf();
+    // (only once Sandboxie itself goes by it does it count: a program started a moment too early
+    //  would otherwise slip past)
+    let t1 = Instant::now();
+    let live = |b: &str| sbie_query(b, "ForceFolder", 0).is_some();
+    let took = loop {
+        let done = to.as_ref().map_or(true, |b| live(b)) && old.as_ref().filter(|o| Some(*o) != to.as_ref()).map_or(true, |o| !live(o));
+        if done {
+            break true;
+        }
+        if t1.elapsed() > Duration::from_millis(1500) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    *FORCE_LIVE.lock().unwrap() = if took { to.clone() } else { None };
     eprintln!("info=new programs now start {} ({} ms{})", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()),
-        t0.elapsed().as_millis(), if ok { "" } else { ", Sandboxie didn't take it" });
+        t0.elapsed().as_millis(), if ok && took { "" } else { ", Sandboxie didn't take it" });
 }
 
 /// Follows where you are (sitting, pointing, which monitor) and moves the force rule with you.
@@ -4580,6 +4616,10 @@ fn main() {
                 taskbars_separate(p.get(1) == Some(&"on"));
                 say("taskbar done");
             }
+            Some("forcestate") => {
+                // (tests) the box new programs really start in now
+                say(&format!("forcestate {}", FORCE_LIVE.lock().unwrap().clone().unwrap_or_else(|| "-".into())));
+            }
             Some("isolate") => {
                 // "own copies" for a monitor on or off
                 ISOLATE.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, p.get(2) == Some(&"1"));
@@ -4597,6 +4637,7 @@ fn main() {
                 *ISO_APPDIRS.lock().unwrap() = groups.get(2).cloned().unwrap_or_default();
                 ISO_DIRTY.store(true, Ordering::SeqCst);
                 refresh_carve(); // (worked out now, before anyone sits down)
+                std::thread::spawn(|| { let _ = sbie_query("GlobalSettings", "FileRootPath", 0); }); // (and Sandboxie's interface loaded)
                 for b in BOXES_MADE.lock().unwrap().clone() {
                     ensure_box(&b);
                 }

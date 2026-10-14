@@ -1750,7 +1750,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         // (the rule follows within ~100 ms — the very first time, once the app folders are worked out)
         let t = Instant::now();
         sleep(200);
-        let _ = wait_for(5000, || !ini_forced().is_empty());
+        // (as soon as Sandboxie itself goes by it — the helper checks with it)
+        let _ = wait_for(5000, || h.call("forcestate", "forcestate", 3000).ok().and_then(|l| l.last().cloned()).map_or(false, |l| l != "forcestate -"));
         rep_times.lock().unwrap().push(t.elapsed().as_millis());
         r
     };
