@@ -99,6 +99,7 @@ public final class BenchTest implements ClientModInitializer {
 
     private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input");
     private boolean allowed, seated;
+    private RemoteDisplays.Remote ctrl;
 
     /** Input benchmark: the viewer asks to use the screen, the sharer allows it, the viewer sits and uses it. */
     private void input(MinecraftClient mc) {
@@ -121,16 +122,20 @@ public final class BenchTest implements ClientModInitializer {
         if (!seated && tick > 60) {
             RemoteDisplays.Remote r = RemoteDisplays.all().stream().filter(RemoteDisplays.Remote::controllableByMe).findFirst().orElse(null);
             if (r != null) {
-                dev.windowscraft.client.TheaterMode.watch(mc, r);
+                ctrl = r;
+                dev.windowscraft.client.ClientNet.control(r.id, dev.windowscraft.net.Payloads.OP_SIT, 0.5, 0.5, 0, 0);
                 seated = true;
                 log("sitting at the shared screen, using it");
             }
         }
-        if (seated && dev.windowscraft.client.TheaterMode.active()) {
+        if (seated && ctrl != null) {
+            // the messages sitting at it sends (the network, server and host parts are what's timed):
+            // the pointer three times a tick (~60 a second, like the real ≤66/s), a click each second
             double a = tick * 0.15;
-            dev.windowscraft.client.ScreenControl.onLook(mc, Math.cos(a) * 12, Math.sin(a) * 8);
-            if (tick % 20 == 0) dev.windowscraft.client.ScreenControl.onMouseButton(mc, 0, org.lwjgl.glfw.GLFW.GLFW_PRESS);
-            if (tick % 20 == 2) dev.windowscraft.client.ScreenControl.onMouseButton(mc, 0, org.lwjgl.glfw.GLFW.GLFW_RELEASE);
+            for (int k = 0; k < 3; k++)
+                dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_MOVE, 0.5 + 0.3 * Math.cos(a + k * 0.05), 0.5 + 0.3 * Math.sin(a + k * 0.05), 0, 0);
+            if (tick % 20 == 0) dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_BUTTON_DOWN, 0.5, 0.5, 0, 0);
+            if (tick % 20 == 2) dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_BUTTON_UP, 0.5, 0.5, 0, 0);
         }
     }
 
