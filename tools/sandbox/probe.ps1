@@ -83,6 +83,7 @@ public static class Sbie {
     }
 }
 "@
+function IniNow() { (Get-Content C:\Windows\Sandboxie.ini -ErrorAction SilentlyContinue | Where-Object { $_ -match '^(\[|Force|Breakout)' }) -join ' | ' }
 function BoxOf($id) { try { [Sbie]::BoxOf($id) } catch { "?" } }
 function BoxPids($b) { Get-Process msedge, powershell -ErrorAction SilentlyContinue | Where-Object { (BoxOf $_.Id) -eq $b } | ForEach-Object Id }
 function BoxWins($b) { Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and (BoxOf $_.Id) -eq $b } }
@@ -179,7 +180,7 @@ Check "…and the Windows shell itself stays out of it" (-not ($shellBox -match 
 $t0 = Get-Date
 & $ini delete WCMon1 ForceFolder | Out-Null
 & "$dir\Start.exe" /reload | Out-Null
-Note "turning it off took $([int]((Get-Date) - $t0).TotalMilliseconds) ms"
+Note "turning it off took $([int]((Get-Date) - $t0).TotalMilliseconds) ms; config now: $(IniNow)"
 $np = Start-Process notepad -PassThru; Start-Sleep 3
 Check "with it off again, apps start normally (on your desk)" ((BoxOf $np.Id) -eq "") "notepad box '$(BoxOf $np.Id)'"
 $np | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -203,8 +204,8 @@ function StartGui($exe, $t) {
     return $b
 }
 & $ini set WCMon1 ForceFolder "C:\" | Out-Null
-& $ini append WCMon1 ForceFolder "D:\" | Out-Null
 & "$dir\Start.exe" /reload | Out-Null; Start-Sleep 1
+Note "force rule set: $(IniNow) · SbieIni sees: $(& $ini query WCMon1 ForceFolder)"
 $a1 = StartGui "C:\wcother\appa.exe" "wc-force-a"
 $c = Start-Process "C:\wcother\cons.exe" -ArgumentList "-n 6 127.0.0.1" -PassThru -WindowStyle Hidden; Start-Sleep 2; $c1 = BoxOf $c.Id; $c | Stop-Process -Force -ErrorAction SilentlyContinue
 Check "with the force rule on, a windowed program started the normal way lands in the box" ($a1 -eq "WCMon1") "box '$a1' (a console program: '$c1')"
@@ -221,6 +222,10 @@ Check "…while others still are" ($a2 -eq "WCMon1") "box '$a2'"
 & $ini delete WCMon1 BreakoutFolder | Out-Null
 & $ini delete WCMon1 BreakoutProcess | Out-Null
 & "$dir\Start.exe" /reload | Out-Null
+Start-Sleep 1
+Note "after removing the rules: $(IniNow)"
+$z = StartGui "C:\wcother\appa.exe" "wc-force-after"
+Check "with the rule removed, nothing is boxed any more" ($z -eq "") "box '$z'"
 
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
 $sig = Get-AuthenticodeSignature $inst.FullName

@@ -3093,13 +3093,8 @@ fn ensure_box(name: &str) {
         }
         BOXES_MADE.lock().unwrap().push(name.to_string());
     }
-    sbie_ini(&["delete", name, "BreakoutProcess"]);
-    sbie_ini(&["delete", name, "BreakoutFolder"]);
     let mut exes: Vec<String> = ALWAYS_NORMAL.iter().map(|s| s.to_string()).collect();
     exes.extend(ISO_EXES.lock().unwrap().iter().cloned());
-    for e in exes {
-        sbie_ini(&["append", name, "BreakoutProcess", &e]);
-    }
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
     if let Ok(me) = std::env::current_exe() {
         if let Some(d) = me.parent() {
@@ -3112,10 +3107,27 @@ fn ensure_box(name: &str) {
     if let Ok(w) = std::env::var("WINDIR") {
         dirs.push(w); // (Windows' own programs: never boxed)
     }
+    // (written only when they changed: each write is a run of Sandboxie's config tool)
+    let sig = format!("{exes:?}{dirs:?}");
+    {
+        let mut done = BOX_SIG.lock().unwrap();
+        let m = done.get_or_insert_with(HashMap::new);
+        if m.get(name) == Some(&sig) {
+            return;
+        }
+        m.insert(name.to_string(), sig);
+    }
+    sbie_ini(&["delete", name, "BreakoutProcess"]);
+    sbie_ini(&["delete", name, "BreakoutFolder"]);
+    for e in exes {
+        sbie_ini(&["append", name, "BreakoutProcess", &e]);
+    }
     for d in dirs {
         sbie_ini(&["append", name, "BreakoutFolder", &d]);
     }
 }
+
+static BOX_SIG: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 /// The box new programs should land in now: the monitor you sit at (or point at), if it has
 /// "own copies" on.
@@ -3136,6 +3148,7 @@ fn set_force(to: Option<String>) {
     if *cur == to && !ISO_DIRTY.swap(false, Ordering::SeqCst) {
         return;
     }
+    let t0 = Instant::now();
     if let Some(old) = cur.as_ref() {
         sbie_ini(&["delete", old, "ForceFolder"]);
     }
@@ -3146,7 +3159,7 @@ fn set_force(to: Option<String>) {
         }
     }
     sbie_start(&["/reload"]);
-    eprintln!("info=new programs now start {}", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()));
+    eprintln!("info=new programs now start {} ({} ms)", to.as_ref().map(|b| format!("in box {b}")).unwrap_or_else(|| "normally".into()), t0.elapsed().as_millis());
     *cur = to;
 }
 
