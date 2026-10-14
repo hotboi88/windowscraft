@@ -80,6 +80,11 @@ bring-over both ways; full-screen browser lost full screen after Esc; main-taskb
 held key mixing into the owner's typing. A Windows Firewall prompt was open during the run (possible
 focus interference).
 
+Hidden screens are still decoded (measured): a viewer with its back to a 1080p60 screen decoded
+30 pictures a second and threw all of them away — 1.1–1.5 cores of FFmpeg plus 0.3 of
+WindowsCraft's threads for a screen nobody looks at. Its sound must go on (it comes from the
+wall), so the proposal is to stop only the picture side out of view.
+
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 

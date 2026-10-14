@@ -161,7 +161,8 @@ public final class BenchTest implements ClientModInitializer {
         double dx = 0.5 - eye.x, dy = g + 3.0 - eye.y, dz = -7.5 - eye.z;
         float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-        mc.player.setYaw(yaw);
+        // windowscraft.bench.lookAway: turn your back on it (is a screen nobody looks at still decoded?)
+        mc.player.setYaw(Boolean.getBoolean("windowscraft.bench.lookAway") ? yaw + 180 : yaw);
         mc.player.setPitch(pitch);
     }
 
