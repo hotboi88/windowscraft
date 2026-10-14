@@ -64,13 +64,14 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
 
 ## Step 0 — measurement: instrumentation done, first findings in docs/STEP0.md (14 Oct 2026)
 
-Measured on the owner's RTX 4060 PC (one-PC benchmark, tools/bench). Branches (not yet on GitHub —
-that PC has no GitHub sign-in): `step0-measurement` (the measuring + benchmark, off by default) and
-`step0-fix-prototypes` (measured fixes, waiting for the owner's OK). Top findings: stream sound
+Measured on the owner's RTX 4060 PC (one-PC benchmark, tools/bench). The measuring + benchmark
+(off by default) and the measured fixes (0.15.1, approved by the owner and merged on 14 Oct;
+on his server since 14 Oct 10:07, his PC and friends through the in-game update) are on main. Top findings: stream sound
 almost entirely dropped on Windows (sound input stamped per packet with the wall clock; fix on the
 branch); every new viewer falsely drops to 30 fps and turns the sharer down (fix on the branch);
 direct GPU sharing switched off on the owner's PC by a likely false "black" verdict; lip sync
-256 ms (sound late); the viewer's decoder holds ~130 ms. The Windows self-test ran on the real PC:
+256 ms (sound late); the viewer's FFmpeg held each picture ~3 pictures (fix on the branch:
+captured → decoded 136 → 98 ms at 60/s, 306 → 195 ms at ~17/s; sound then ~290 ms late). The Windows self-test ran on the real PC:
 64/70 passed (see STEP0.md). Still to measure: a real Tailscale peer, Cobbleverse frame rate,
 a 4K monitor, sound by ear.
 
@@ -94,7 +95,18 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
-## Waiting on the owner (Windows test list for 0.15.0)
+## 0.15.1 checks with the owner (installed on his server 14 Oct; PC and friends via the in-game update)
+
+1. Same jar on server and PC (exactly one windowscraft jar per mods
+folder). 2. Share a monitor playing a video: the friend hears it from the wall. 3. The friend starts
+watching: stays smooth, no immediate "a viewer's PC can't play it fast enough". 4. A minute in front
+of an in-game monitor with his usual shader pack: Direct GPU sharing on in ⚙ Settings, or send the
+"Direct GPU sharing looked black" log line. 5. Friend looks away and back: picture back within a
+second, sound never stopped. 6. Lip sync feel (≈0.3 s late expected; next fix: the 40/60 ms
+reserve switches, ≈0.19 s, need listening). 7. Both run
+`/windowscraft measure start 60` in a session and send the reports.
+
+## Also waiting on the owner (Windows test list for 0.15.0)
 
 1. Install on PC and server. 2. U on a monitor → Own copies of apps → Set up (no Sandboxie window
 ever). 3. Brave + video on monitor 1 and on monitor 2: each only from its own wall; desk Brave
