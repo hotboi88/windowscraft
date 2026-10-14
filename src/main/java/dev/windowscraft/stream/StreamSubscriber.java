@@ -279,14 +279,14 @@ public final class StreamSubscriber implements FrameSource {
         ServerSocket audioListen = track(Proc.loopbackListener());
         audioListen.setReceiveBufferSize(32 * 1024); // no room for a hidden audio backlog
         boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-        // Each picture to the decoder as soon as it's in, and out as soon as it's decoded. FFmpeg's
-        // H.264 splitter would hold every picture until the next one starts (the stream already
-        // comes one whole picture per packet), and with the sender's packet lengths
-        // (StreamPublisher) the TS reader doesn't wait for the next one either. Those waits were
-        // counted in pictures, about three of them: 64 ms at 60 pictures/s but 114 ms at 30 and
-        // 315 ms at 10 — and pictures only come when the screen changes. Measured outside the game:
-        // 114 → 48 ms at 30/s, decoded pictures bit-identical. windowscraft.promptDecode=false: the
-        // old way (on this PC as a viewer and as a sharer).
+        // Each picture to the decoder as soon as it's in. FFmpeg's H.264 splitter would hold every
+        // picture until the next one starts (the stream already comes one whole picture per
+        // packet), and with the sender's packet lengths (StreamPublisher) the TS reader doesn't
+        // wait for the next one either. Those waits are counted in pictures — about three in all:
+        // 64 ms at 60 pictures/s, 114 ms at 30, 315 ms at 10 — and pictures only come when the
+        // screen changes. Each wait removed is one picture less: 113 → 80 → 46 ms at 30/s outside
+        // the game, decoded pictures bit-identical. (One picture's wait is left inside FFmpeg.)
+        // windowscraft.promptDecode=false: the old way (on this PC as a viewer and as a sharer).
         boolean prompt = promptDecode();
         List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
                 "-fflags", prompt ? "nobuffer+noparse+nofillin" : "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "500000"));
@@ -296,7 +296,6 @@ public final class StreamSubscriber implements FrameSource {
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
                 "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
-                "-flush_packets", prompt ? "1" : "-1",
                 "-f", "rawvideo", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
                 "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "tcp://127.0.0.1:" + audioListen.getLocalPort()));
         Process ff = Proc.start(cmd, "ffmpeg-dec");
