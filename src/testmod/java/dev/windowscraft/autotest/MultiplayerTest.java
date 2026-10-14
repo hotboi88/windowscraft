@@ -34,6 +34,9 @@ public final class MultiplayerTest implements ClientModInitializer {
     private final List<Double> syncOffsets = new ArrayList<>();
     private final List<Double> latencySamples = new ArrayList<>();
     private long lastFlashSeen, lastOnsetSeen;
+    // every flash and beep onset seen, paired by nearest at the end (with pictures held for lip
+    // sync, a beep can be due before its flash is decoded: pairing them as they come mixes them up)
+    private final List<Long> flashTimes = new ArrayList<>(), onsetTimes = new ArrayList<>();
     private boolean failed;
 
     @Override
@@ -274,12 +277,8 @@ public final class MultiplayerTest implements ClientModInitializer {
         StreamSubscriber sub = r == null ? null : r.subscriber();
         if (sub != null) {
             long flash = sub.lastFlashNanos(), onset = sub.audio().lastOnsetNanos();
-            if (flash != lastFlashSeen && onset != lastOnsetSeen && flash != 0 && onset != 0) {
-                double off = (onset - flash) / 1e6; // + means sound is heard after the picture shows
-                if (Math.abs(off) < 500) syncOffsets.add(off);
-                lastFlashSeen = flash;
-                lastOnsetSeen = onset;
-            }
+            if (flash != 0 && flash != lastFlashSeen) { flashTimes.add(flash); lastFlashSeen = flash; }
+            if (onset != 0 && onset != lastOnsetSeen) { onsetTimes.add(onset); lastOnsetSeen = onset; }
         }
         if (sub != null && sub.latencyMs() >= 0 && tick % 20 == 0) latencySamples.add(sub.latencyMs());
         if (tick > 0 && tick % 100 == 0) {
@@ -382,12 +381,24 @@ public final class MultiplayerTest implements ClientModInitializer {
             check(mc, RemoteDisplays.watchedStreams() == 1, "viewer downloads the mirrored stream once (" + RemoteDisplays.watchedStreams() + ")");
             check(mc, sub != null && sub.framesDecoded() > 200, "viewer decoded > 200 frames (" + (sub == null ? 0 : sub.framesDecoded()) + ")");
             check(mc, sub != null && sub.audio().bytesPlayed() > 48000 * 4 * 5, "viewer received > 5 s of audio");
+            for (long on : onsetTimes) { // each beep with the flash nearest to it (+ = sound heard after the picture shows)
+                long best = Long.MAX_VALUE;
+                for (long fl : flashTimes) if (Math.abs(on - fl) < Math.abs(best)) best = on - fl;
+                if (best != Long.MAX_VALUE && Math.abs(best) < 500_000_000L) syncOffsets.add(best / 1e6);
+            }
+            log("lip sync was holding pictures " + Math.round(sub == null ? 0 : sub.lipHoldMs()) + " ms at the end");
             double avg = syncOffsets.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
             // (the median too: a beep matched to the wrong flash, ±0.5–1 s, drags the average)
             double median = syncOffsets.stream().mapToDouble(Double::doubleValue).sorted()
                     .skip(Math.max(0, (syncOffsets.size() - 1) / 2)).findFirst().orElse(Double.NaN);
             log(String.format("A/V offset over %d beeps: avg %.0f ms, median %.0f ms (positive = sound after picture), samples %s", syncOffsets.size(), avg,
                     median, syncOffsets.subList(0, Math.min(12, syncOffsets.size()))));
+            if (syncOffsets.size() >= 30) {
+                List<Double> last = new ArrayList<>(syncOffsets.subList(syncOffsets.size() - 30, syncOffsets.size()));
+                java.util.Collections.sort(last);
+                log(String.format(java.util.Locale.ROOT, "A/V offset over the last 30 beeps: median %.0f ms (10th-90th pct %.0f..%.0f)",
+                        last.get(15), last.get(3), last.get(26)));
+            }
             check(mc, syncOffsets.size() >= 5 && Math.abs(avg) < 250, "audio and video within 250 ms of each other");
             check(mc, ctrlTick > 0, "Bob was allowed to use Alice's wall");
             shot(mc, "mp_viewer_end");

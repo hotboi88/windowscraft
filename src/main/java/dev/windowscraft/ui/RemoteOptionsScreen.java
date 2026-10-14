@@ -21,7 +21,7 @@ import org.lwjgl.glfw.GLFW;
  */
 public final class RemoteOptionsScreen extends Screen {
     private final RemoteDisplays.Remote remote;
-    private int px, py, pw = 320, ph = 262, pad = 14;
+    private int px, py, pw = 320, ph = 270, pad = 14;
     private final VolumeSlider slider = new VolumeSlider();
     private final List<Hit> hits = new ArrayList<>();
 
@@ -146,7 +146,7 @@ public final class RemoteOptionsScreen extends Screen {
         for (int i = 0; i < Math.min(2, ll.size()); i++) g.drawText(textRenderer, ll.get(i), px + pad, y + 33 + i * 10, UiKit.TEXT_MUTED, false);
 
         // footer: theater + done
-        int by = py + ph - 30, bh = 20;
+        int by = py + ph - 26, bh = 20;
         String done = "Done";
         int dw = Math.max(56, textRenderer.getWidth(done) + 22), dx = px + pw - pad - dw;
         boolean dhov = UiKit.inside(mx, my, dx, by, dw, bh);

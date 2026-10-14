@@ -422,6 +422,8 @@ public final class StreamSubscriber implements FrameSource {
                 ? new dev.windowscraft.relay.PictureEnds() : null;
         // lip sync: while pictures are held back, they wait here (sound goes on at once)
         ArrayDeque<Held> held = new ArrayDeque<>();
+        lipLoggedAt = 0;
+        lipLogged = -1000; // (the first decision is logged)
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
             long nextSyncStep = 0;
@@ -442,6 +444,17 @@ public final class StreamSubscriber implements FrameSource {
                                 && (mode == LIP_WITH_SOUND || !streamId.equals(dev.windowscraft.client.ScreenControl.workingStream()));
                         double hold = sync.step(wanted, audio.soundQueuedMs(), now);
                         holdNanos = (long) (hold * 1e6);
+                        // (in the log when it changes, at most every 10 s: why it holds what it holds)
+                        if (now - lipLoggedAt > 10_000_000_000L && (Math.abs(hold - lipLogged) > 20 || wanted != lipLoggedWanted)) {
+                            lipLoggedAt = now;
+                            lipLogged = hold;
+                            lipLoggedWanted = wanted;
+                            WindowsCraftClient.LOGGER.info(String.format(java.util.Locale.ROOT,
+                                    "Lip sync for %s: sound arrives %.0f ms after the picture, %.0f ms queued at the sound card -> pictures held %.0f ms (%s)",
+                                    streamId.substring(0, 8), sync.arrivalGapMs(), audio.soundQueuedMs(), hold,
+                                    mode == LIP_QUICKEST ? "quickest picture chosen" : !audio.audibleLately() ? "no sound lately"
+                                            : !wanted ? "you're using it" : "watching"));
+                        }
                         lipHoldMs = hold;
                         if (dev.windowscraft.measure.Measure.ON) LIP_HOLD.record(holdNanos);
                     }
@@ -607,6 +620,10 @@ public final class StreamSubscriber implements FrameSource {
     private volatile int lipSync = LIP_AUTO;
 
     public void setLipSync(int mode) { lipSync = mode; }
+
+    private long lipLoggedAt;
+    private double lipLogged = -1;
+    private boolean lipLoggedWanted;
 
     public double lipHoldMs() { return lipHoldMs; }
 

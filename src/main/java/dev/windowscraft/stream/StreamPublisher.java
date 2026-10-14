@@ -471,7 +471,12 @@ public final class StreamPublisher {
         // second; viewers heard nothing) and FFmpeg logged thousands of warnings a second. Instead
         // its clock is its own sample count, started at the wall clock when its first sound comes
         // in (it's fed at exactly 48 kHz in real time, so the two clocks stay together).
-        List<String> audioTime = List.of("-af", "asetpts=N/SR/TB+RTCSTART/(TB*1000000)");
+        // ...and back by the cushion it waited in before FFmpeg got it (feedAudio: ~80 ms + the one
+        // chunk held back), so its time is when it was heard on this PC, like the pictures' — viewers
+        // line picture and sound up by these times (lip sync); stamped at the cushion's end, the
+        // sound looked ~90 ms earlier than it was and stayed that much behind the picture
+        double lead = (Integer.getInteger("windowscraft.exp.audioCushion", 80) + 10) / 1000.0;
+        List<String> audioTime = List.of("-af", String.format(java.util.Locale.ROOT, "asetpts=N/SR/TB+RTCSTART/(TB*1000000)-%.3f/TB", lead));
         ServerSocket previewListen = null;
         int[] pv = {ew, eh};
         if (gpu) { // give direct GPU sharing a moment to start, so we know if a preview is needed
