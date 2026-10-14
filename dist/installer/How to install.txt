@@ -2,7 +2,8 @@ WindowsCraft 0.15.1 (screens, in-game monitors, gaming monitors and tablets for 
 
 New in 0.15.1: the sound of a screen you share now reaches the people watching (on Windows most
 of it was lost on the way); someone who starts watching gets the full frame rate (they were
-dropped to 30 a second by mistake); your own walls get each picture sooner. And
+dropped to 30 a second by mistake); your own walls get each picture sooner; a screen you aren't
+looking at no longer costs your PC the work of its picture (its sound keeps playing). And
 "/windowscraft measure start 60" measures for a minute what your screens cost and how long each
 step takes (off unless you start it; the report lands in windowscraft/measurements).
 
