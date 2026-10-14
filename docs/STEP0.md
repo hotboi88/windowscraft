@@ -66,14 +66,20 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    scales with the picture interval — 64 ms at 60/s, 114 at 30/s, 315 at 10/s, ≈3 pictures — and
    the GPU path only sends a picture when the screen changes. The SPS is fine (POC type 2,
    max_num_reorder_frames 0). The holds: the TS reader waits for the next PES start (video PES
-   length 0 by default), FFmpeg's H.264 parser waits for the next access unit, and one more until
-   the rawvideo output is flushed. Branch: sender `-omit_video_pes_length 0` (pictures ≤ 64 KB),
-   viewer `-fflags nobuffer+noparse+nofillin` and `-flush_packets 1` on the picture output
-   (decoded pictures bit-identical; switch `windowscraft.promptDecode=false`). Standalone 30/s
-   114 → 48 ms. In the game, captured → decoded on the viewer: 60/s 136/166/174 → 98/125/136 ms,
-   ~17/s 306/398/407 → 195/245/266 ms. Left: about one picture, and CPU NV12→BGRA conversion
+   length 0 by default) and FFmpeg's H.264 parser waits for the next access unit; each is one
+   picture (30/s: 113 → 80 → 46 ms). Branch: sender `-omit_video_pes_length 0` (pictures ≤ 64 KB;
+   bigger ones — keyframes, or 10/s at 10 Mb/s — still wait), viewer
+   `-fflags nobuffer+noparse+nofillin` (decoded pictures bit-identical; switch
+   `windowscraft.promptDecode=false`). `-flush_packets 1` on the picture output, the sound path,
+   `-avioflags direct`, threads and hwaccel make no difference. In the game, captured → decoded on
+   the viewer: 60/s 136/166/174 → 98/125/136 ms, ~17/s 306/398/407 → 195/245/266 ms. Left: one
+   picture inside FFmpeg (60/s 29 ms, 30/s 46 ms standalone), and CPU NV12→BGRA conversion
    (1–1.5 cores at 1080p60; half-size or NV12 output ~6 ms less). Removing the last picture means
-   decoding in our own helper rather than the FFmpeg CLI.
+   decoding in our own helper rather than the FFmpeg CLI. Measuring note: `view.decode` (arrivals
+   and decoded pictures matched in order) is unreliable — FFmpeg drops the pictures it reads while
+   sizing up the stream (`-fflags nobuffer`), which shifts the match (it read ~1.2 s at 17/s); use
+   `view.e2e_testpattern` (timing strip) minus `view.arrival_age`. Standalone tools:
+   `declat.py`-style real-time feeding, matched from the end.
 6. **Extra render frame** (copy in frame N, show in N+1): same-frame test switch 13.0 → 5.6 ms
    (own wall), 12.2 → 4.0 ms (viewer). Prototype on the branch: copy on arrival into a slot the
    render thread sets aside (pump thread) — own wall 13.0/16.7/17.6 → 6.2/10.6/11.7 ms, viewer
