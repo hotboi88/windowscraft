@@ -1,4 +1,4 @@
-WindowsCraft 0.15.0 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.1 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
 1. Close Minecraft.
 2. Right-click this zip and choose "Extract All...", then open the extracted folder.
