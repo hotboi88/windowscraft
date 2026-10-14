@@ -517,8 +517,11 @@ public final class StreamPublisher {
         cmd.addAll(enc.args());
         cmd.addAll(List.of("-b:v", kb + "k", "-maxrate", kb + "k", "-bufsize", (kb / 2) + "k", "-g", Integer.toString(Math.max(1, (int) Math.round(fps * keyEvery()))), "-bf", "0",
                 "-c:a", "aac", "-b:a", "192k",
-                // never let the muxer hold one stream back waiting for the other (default: up to 10 s)
-                "-max_interleave_delta", System.getProperty("windowscraft.exp.interleave", "100000"), // (Step 0 experiment: other values, dev only)
+                // never let the muxer hold pictures back waiting for sound (FFmpeg's default: up to
+                // 10 s; 100 ms here before). With the sound's timing fixed, that wait was most of the
+                // delay to the encoder's output: 17.6/55/61 ms → 3.3/6.6/12.5 ms (CPU path), and
+                // lip sync on viewers didn't change (they play sound and picture separately)
+                "-max_interleave_delta", System.getProperty("windowscraft.exp.interleave", "1"),
                 "-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "pipe:1"));
         if (wantPreview) {
             cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
