@@ -289,7 +289,10 @@ public final class StreamSubscriber implements FrameSource {
         // wait for the next one either. Those waits are counted in pictures — about three in all:
         // 64 ms at 60 pictures/s, 114 ms at 30, 315 ms at 10 — and pictures only come when the
         // screen changes. Each wait removed is one picture less: 113 → 80 → 46 ms at 30/s outside
-        // the game, decoded pictures bit-identical. (One picture's wait is left inside FFmpeg.)
+        // the game, decoded pictures bit-identical. The last one was FFmpeg's raw-picture writer:
+        // it runs on helper threads and hands picture k out when picture k+1 is handed in
+        // (FFmpeg's own latency report: 150 of 155 ms in "encode" with pictures 150 ms apart);
+        // one thread hands each out as it comes — now none is held at all.
         // windowscraft.promptDecode=false: the old way (on this PC as a viewer and as a sharer).
         boolean prompt = promptDecode();
         // Pictures as the decoder makes them (NV12, 1.5 bytes a pixel), coloured on the graphics
@@ -309,6 +312,7 @@ public final class StreamSubscriber implements FrameSource {
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
                 "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + ow + ":" + oh + ",format=" + (nv12 ? "nv12" : "bgra"), "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
+                "-threads:v", prompt ? "1" : "0",
                 "-f", "rawvideo", "tcp://127.0.0.1:" + videoListen.getLocalPort(),
                 "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "tcp://127.0.0.1:" + audioListen.getLocalPort()));
         Process ff = Proc.start(cmd, "ffmpeg-dec");
@@ -408,6 +412,10 @@ public final class StreamSubscriber implements FrameSource {
                 }
             }
         });
+        // a big picture (no length in its packet) handed on as soon as it's complete, not when the
+        // next one starts (relay.PictureEnds; windowscraft.pictureEnds=false: not)
+        dev.windowscraft.relay.PictureEnds ends = prompt && !"false".equals(System.getProperty("windowscraft.pictureEnds"))
+                ? new dev.windowscraft.relay.PictureEnds() : null;
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
             boolean videoPaused = false; // (nobody looks at it: sound only, the picture resumes at a keyframe)
@@ -475,7 +483,7 @@ public final class StreamSubscriber implements FrameSource {
                         }
                         continue;
                     }
-                    ffIn.write(c.data());
+                    ffIn.write(ends != null ? ends.process(c.data(), splitter.videoPid()) : c.data());
                     ffIn.flush();
                 }
             } catch (IOException | InterruptedException ignored) {

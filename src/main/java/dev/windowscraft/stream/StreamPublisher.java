@@ -529,7 +529,9 @@ public final class StreamPublisher {
                 "-omit_video_pes_length", StreamSubscriber.promptDecode() ? "0" : "1",
                 "pipe:1"));
         if (wantPreview) {
-            cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
+            // (one thread: FFmpeg's raw-picture writer on helper threads hands each picture out
+            // only when the next one comes in — a picture late on your wall)
+            cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-threads:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
         }
         Process ff = Proc.start(cmd, "ffmpeg-enc");
         ffmpeg = ff;
