@@ -1734,6 +1734,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains(&stem) && class_name(*w) != "ConsoleWindowClass") })
     };
     let finish = |w: Option<HWND>| if let Some(w) = w { let p = pid(w); let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output(); };
+    let rep_times = std::sync::Mutex::new(Vec::<u128>::new());
     let seat = |h: &Helper, idx: i32| {
         // (right after getting up, the helper can still be letting go: the game tries again too)
         let mut r = Err(String::new());
@@ -1746,7 +1747,11 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
             }
             sleep(500);
         }
-        sleep(700); // (the rule follows within ~100 ms)
+        // (the rule follows within ~100 ms — the very first time, once the app folders are worked out)
+        let t = Instant::now();
+        sleep(200);
+        let _ = wait_for(5000, || !ini_forced().is_empty());
+        rep_times.lock().unwrap().push(t.elapsed().as_millis());
         r
     };
     let on = |w: Option<HWND>, r: &RECT| w.map_or(false, |w| { let (x, y) = center(&rect_of(w)); inside(r, x, y) });
@@ -1871,6 +1876,18 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
             let theirs: Vec<String> = top_windows().into_iter().filter(|w| inb.contains(&pid(*w))).map(|w| format!("{}:{:?}/{}", pid(w), title(w), class_name(w))).collect();
             rep.check("\"Open another copy here\" starts it in that monitor's box, on that monitor", boxed && on(c, &rm),
                 format!("{r:?} · {:?} at {} · in the box: {inb:?} · their windows: {theirs:?}", c.map(pid), c.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
+            // another copy of an app that otherwise always runs normally (a second Discord)
+            let r = h5.call(&format!("boxlaunch\t{}\t{}\t", m.idx, app("wcapp_x").display()), "boxlaunched", 20000);
+            let x = (0..80).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains("wcapp_x") && class_name(*w) != "ConsoleWindowClass") });
+            sleep(600);
+            let boxed = x.map_or(false, |w| in_box(&h5, m.idx).contains(&pid(w)));
+            rep.check("…also for an app that otherwise always runs normally (a second Discord, on purpose)", boxed && on(x, &rm),
+                format!("{r:?} · {:?} at {}", x.map(pid), x.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
+            sleep(3500);
+            let ini = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Sandboxie.ini")).unwrap_or_default();
+            let ini = String::from_utf16_lossy(&ini.get(2..).unwrap_or(&[]).chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>());
+            rep.check("…and right after, it's back on the always-normal list (a boxed app starting it gets your real one)",
+                ini.to_lowercase().contains("breakoutprocess=wcapp_x.exe"), "");
             let _ = h5.call(&format!("remove {}", m.idx), "removed", 30000);
             sleep(1500);
             let left = c.map_or(false, |w| unsafe { IsWindow(Some(w)).as_bool() });
@@ -1879,6 +1896,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         h5.stop();
     }
     sleep(1000);
+    rep.note(format!("(the rule was there this many ms after sitting down: {:?})", rep_times.lock().unwrap()));
     rep.check("at the end, no rule is left that would box your desk's apps", ini_forced().is_empty(), format!("{:?}", ini_forced()));
     if let Some(sb) = ["C:\\Program Files\\Sandboxie-Plus\\Start.exe"].into_iter().find(|p| std::path::Path::new(p).exists()) {
         let _ = Command::new(sb).arg("/terminate_all").output();

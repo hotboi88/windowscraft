@@ -3069,7 +3069,9 @@ static FORCED: Mutex<Option<String>> = Mutex::new(None);
 static BOXES_MADE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_THREAD: AtomicBool = AtomicBool::new(false);
 static ISO_DIRTY: AtomicBool = AtomicBool::new(false);
-const ALWAYS_NORMAL: [&str; 22] = ["explorer.exe", "javaw.exe", "java.exe", "steam.exe", "steamwebhelper.exe", "steamservice.exe",
+// (Discord and WhatsApp too, as you asked: opened from a monitor, the one you're signed in to comes
+//  over to it, rather than a copy of its own)
+const ALWAYS_NORMAL: [&str; 26] = ["discord.exe", "discordptb.exe", "discordcanary.exe", "whatsapp.exe", "explorer.exe", "javaw.exe", "java.exe", "steam.exe", "steamwebhelper.exe", "steamservice.exe",
     "epicgameslauncher.exe", "epicwebhelper.exe", "battle.net.exe", "agent.exe", "riotclientservices.exe", "riotclientux.exe",
     "easyanticheat.exe", "easyanticheat_eos.exe", "beservice.exe", "beservice_x64.exe", "start_protected_game.exe", "vgc.exe",
     "taskmgr.exe", "msiexec.exe", "systemsettings.exe", "minecraftlauncher.exe"];
@@ -3209,6 +3211,10 @@ fn app_folders() -> Vec<String> {
     v.extend(ISO_APPDIRS.lock().unwrap().iter().cloned()); // (game libraries elsewhere: D:\SteamLibrary…)
     v
 }
+
+/// While "open another copy here" starts one of the always-normal programs in a box on purpose
+/// (a second Discord): that one isn't let out of the box for those few seconds.
+static LAUNCH_ALLOW: Mutex<Option<String>> = Mutex::new(None);
 
 /// Programs that always run normally (never in a box), lower-case names.
 fn breakout_exes() -> Vec<String> {
@@ -3383,8 +3389,11 @@ fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     let mut s: Vec<(String, String)> = [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "-"), ("AutoDelete", "n"), ("ConfigLevel", "10")]
         .iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     // (these keep programs a boxed app starts out of the box; forced folders are carved around them)
+    let allow = LAUNCH_ALLOW.lock().unwrap().clone();
     for e in breakout_exes() {
-        s.push(("BreakoutProcess".into(), e));
+        if allow.as_deref() != Some(e.as_str()) {
+            s.push(("BreakoutProcess".into(), e));
+        }
     }
     for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
@@ -3519,9 +3528,13 @@ fn box_launch(idx: i32, file: &str, params: &str) -> bool {
         return false;
     }
     let b = box_name(idx);
+    let exe = file.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
+    let let_in = breakout_exes().contains(&exe);
+    if let_in {
+        *LAUNCH_ALLOW.lock().unwrap() = Some(exe.clone());
+    }
     ensure_box(&b);
     reload_conf();
-    let exe = file.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
     LAUNCHES.lock().unwrap().push(Launch {
         idx,
         since: now_filetime().saturating_sub(10_000_000),
@@ -3537,6 +3550,16 @@ fn box_launch(idx: i32, file: &str, params: &str) -> bool {
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let ok = sbie_start(&refs);
     eprintln!("info=opening {exe} in box {b}: {}", if ok { "started" } else { "Sandboxie's launcher didn't start" });
+    if let_in {
+        // (it's running in the box by now: from here on it's let out again when a boxed app starts it)
+        let b2 = b.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            *LAUNCH_ALLOW.lock().unwrap() = None;
+            ensure_box(&b2);
+            reload_conf();
+        });
+    }
     ok
 }
 
