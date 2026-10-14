@@ -962,20 +962,6 @@ public final class InGameMonitors {
         @Override public void altUp() { onGame(InGameMonitors::ownerStopPointing); }
 
         @Override
-        public void deskRestarted(String exe) {
-            onGame(() -> {
-                String name = switch (exe) {
-                    case "brave.exe" -> "Brave";
-                    case "chrome.exe" -> "Chrome";
-                    case "msedge.exe" -> "Edge";
-                    default -> "browser";
-                };
-                hint(MinecraftClient.getInstance(), "Your " + name + " restarted for a moment so this monitor's own " + name
-                        + " has your sign-ins (once per monitor)");
-            });
-        }
-
-        @Override
         public void gameKey(int vk, int scancode, boolean down) {
             int key = glfwKey(vk);
             if (key < 0) return;

@@ -383,7 +383,7 @@ fn test_app(name: &str) {
 
 // ---- the helpers, spoken to like the game does -----------------------------------------------
 
-const EVENTS: [&str; 20] = ["deskrestart", "gkey", "single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
+const EVENTS: [&str; 19] = ["gkey", "single", "moved", "adminapp", "gone", "esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "lookmode", "mask"];
 
 struct Helper {
     child: Child,
@@ -1367,10 +1367,6 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         None => rep.skip("\"Own browser\"", "Edge isn't installed"),
     }
 
-    // ---- 14b. a browser opened on a monitor is the monitor's own: separate sound, your sign-ins
-    play();
-    own_browser_flow(rep, &h, &b, game, shot);
-
     // ---- 16. the monitor's picture: Windows Graphics Capture sees it (what your wall shows)
     let cap = dir.join("wc-capture.exe");
     if cap.exists() {
@@ -1622,108 +1618,6 @@ fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND,
     let p = pid(w);
     let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
     sleep(500);
-}
-
-/// Edge open on your desk, signed in to a site (a real cookie from a little local page). You open
-/// Edge on a monitor: the monitor gets its own Edge — a different program (its sound never mixes
-/// with your desk's) that already has your sign-in — and your desk Edge comes back with its page.
-fn own_browser_flow(rep: &mut Report, h: &Helper, b: &Mon, game: HWND, shot: &dyn Fn(&str)) {
-    let Some(e) = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
-        .into_iter().find(|p| std::path::Path::new(p).exists()) else {
-        rep.skip("a browser opened on a monitor is the monitor's own", "Edge isn't installed");
-        return;
-    };
-    let _ = Command::new("taskkill").args(["/IM", "msedge.exe", "/F"]).output();
-    let _ = h.call("unseat", "unseated", 8000);
-    sleep(21000); // (earlier launches for a monitor are over: this Edge is just yours, on your desk)
-    // the "site": sets a sign-in cookie
-    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else { return };
-    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-    std::thread::spawn(move || {
-        use std::io::{Read, Write};
-        for c in listener.incoming().flatten() {
-            let mut c = c;
-            let mut buf = [0u8; 2048];
-            let _ = c.read(&mut buf);
-            let _ = c.write_all(b"HTTP/1.1 200 OK\r\nSet-Cookie: wcselftest=signedin; Max-Age=86400; Path=/\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<html><head><title>wc-cookie-page</title></head><body>signed in</body></html>");
-        }
-    });
-    let prim = primary();
-    unsafe {
-        let _ = SetCursorPos(prim.left + 200, prim.top + 200);
-    }
-    let url = format!("http://127.0.0.1:{port}/");
-    let _ = Command::new(e).args(["--no-first-run", "--no-default-browser-check", url.as_str()]).spawn();
-    let desk = (0..60).find_map(|_| {
-        sleep(500);
-        top_windows().into_iter().find(|w| exe_of(pid(*w)) == "msedge.exe" && title(*w).contains("wc-cookie-page"))
-    });
-    let Some(desk) = desk else {
-        rep.check("a browser opened on a monitor is the monitor's own", false, "the desk Edge didn't open the page");
-        return;
-    };
-    sleep(3000);
-    let desk_pid = pid(desk);
-    let key = format!("selftest{}", std::process::id());
-    let dir = std::path::Path::new(&std::env::var("LOCALAPPDATA").unwrap_or_default()).join("WindowsCraft").join("profiles").join(format!("msedge-{key}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    h.send(&format!("profilekey {} {key}", b.idx));
-    unsafe {
-        let _ = AllowSetForegroundWindow(ASFW_ANY);
-    }
-    let _ = h.call(&format!("seat {} 0.5 0.5 {}", b.idx, game.0 as isize), "seated", 8000);
-    sleep(500);
-    let rb = now_rect(h, b.idx).unwrap_or(b.r);
-    let t = Instant::now();
-    let _ = Command::new(e).args(["--new-window"]).spawn(); // (Edge, opened from the monitor)
-    let on_b = |exclude: u32| top_windows().into_iter().find(|w| {
-        let (x, y) = center(&rect_of(*w));
-        exe_of(pid(*w)) == "msedge.exe" && pid(*w) != exclude && inside(&rb, x, y) && unsafe { IsWindowVisible(*w).as_bool() }
-    });
-    let mut own = None;
-    for _ in 0..80 {
-        sleep(500);
-        let back: Vec<HWND> = top_windows().into_iter().filter(|w| exe_of(pid(*w)) == "msedge.exe" && title(*w).contains("wc-cookie-page")).collect();
-        if let Some(w) = on_b(0) {
-            if !back.iter().any(|x| pid(*x) == pid(w)) && pid(w) != desk_pid {
-                own = Some(w);
-                if !back.is_empty() {
-                    break;
-                }
-            }
-        }
-    }
-    sleep(1000);
-    shot("14b-own-browser");
-    let restarted = h.events_since(t).iter().any(|ev| ev.starts_with("deskrestart msedge.exe"));
-    let desk_back: Vec<HWND> = top_windows().into_iter().filter(|w| exe_of(pid(*w)) == "msedge.exe" && title(*w).contains("wc-cookie-page")).collect();
-    let desk_home = desk_back.iter().any(|w| { let (x, y) = center(&rect_of(*w)); inside(&prim, x, y) });
-    let cookies = std::fs::read(dir.join("Default").join("Network").join("Cookies")).unwrap_or_default();
-    let signed_in = cookies.windows(10).any(|w| w == b"wcselftest");
-    let separate = own.map_or(false, |w| desk_back.iter().all(|d| pid(*d) != pid(w)));
-    rep.check("Edge opened on a monitor is the monitor's own Edge: a separate program from your desk's (their sound never mixes)",
-        own.is_some() && separate, format!("on the monitor: {:?} · desk Edge windows: {}", own.map(|w| (title(w), pid(w))), desk_back.len()));
-    rep.check("…it already has your sign-ins (nothing to sign in to)", signed_in, format!("its profile at {} · cookie found: {signed_in}", dir.display()));
-    rep.check("…and your desk Edge came back by itself, on your desk, with its page (once, for this monitor)", restarted && desk_home,
-        format!("restarted: {restarted} · desk page back on your desk: {desk_home}"));
-    // again: no restart this time, and the new window is the monitor's own Edge again
-    if let Some(ownw) = own {
-        let t2 = Instant::now();
-        let _ = Command::new(e).args(["--new-window"]).spawn();
-        sleep(8000);
-        let again = h.events_since(t2).iter().any(|ev| ev.starts_with("deskrestart"));
-        let wins: Vec<HWND> = top_windows().into_iter().filter(|w| {
-            let (x, y) = center(&rect_of(*w));
-            exe_of(pid(*w)) == "msedge.exe" && inside(&rb, x, y) && unsafe { IsWindowVisible(*w).as_bool() }
-        }).collect();
-        let all_own = !wins.is_empty() && wins.iter().all(|w| pid(*w) == pid(ownw));
-        rep.check("…opening Edge on that monitor again: no restart, and it's the monitor's own Edge again (two windows, one sound — both play)",
-            !again && all_own && wins.len() >= 2, format!("restart again: {again} · Edge windows on the monitor: {} (all its own: {all_own})", wins.len()));
-    }
-    let _ = h.call("unseat", "unseated", 8000);
-    let _ = Command::new("taskkill").args(["/IM", "msedge.exe", "/F"]).output();
-    sleep(1500);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn union(a: &RECT, b: &RECT) -> RECT {

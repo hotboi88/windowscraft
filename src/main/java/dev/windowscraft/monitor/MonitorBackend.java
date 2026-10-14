@@ -54,8 +54,6 @@ public interface MonitorBackend {
         default void seatMoved(int index) {}
         /** Pointing, with an app on the monitor in front (you clicked it): your key, for the game ({@code vk} Windows' key code). */
         default void gameKey(int vk, int scancode, boolean down) {}
-        /** Your desk browser closed and reopened for a moment, so a monitor's own copy got your sign-ins. */
-        default void deskRestarted(String exe) {}
     }
 
     CompletableFuture<Driver> status();
@@ -105,7 +103,7 @@ public interface MonitorBackend {
     /** Which wall this monitor is (its own browser copies are kept per wall). */
     default void profileKey(Mon m, String key) {}
 
-    /** The monitor's own copy of that browser (made from your profile the first time) opens on it. */
+    /** The monitor's own copy of that browser (its own profile, kept for this wall) opens on it. */
     default CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) { return CompletableFuture.completedFuture(false); }
 
     /**

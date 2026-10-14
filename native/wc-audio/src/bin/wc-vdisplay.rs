@@ -2898,14 +2898,7 @@ fn on_window_shown(h: HWND, fresh: bool) {
                 });
                 if let Some(i) = hit {
                     let l = launches.remove(i);
-                    if l.idx < 0 {
-                        // (your desk browser, opened again with its tabs: it stays on your desk)
-                        drop(launches);
-                        if monitor_of_window(h).is_some() {
-                            place_window(h, &primary_area());
-                        }
-                        return;
-                    }
+
                     if created >= l.since {
                         owned().lock().unwrap().insert(p, l.idx); // a program started for that monitor: it lives there
                     }
@@ -2942,12 +2935,7 @@ fn on_window_shown(h: HWND, fresh: bool) {
             POINTING.load(Ordering::SeqCst), game_in_front(), on_desk);
     }
     match target {
-        Some(idx) => {
-            place_on(h, idx);
-            if fresh {
-                maybe_own_browser(h, idx);
-            }
-        }
+        Some(idx) => place_on(h, idx),
         None => {
             // nothing says it belongs on an in-game monitor, yet it opened on one (an app putting
             // itself back where it was last time): it goes to your desk
@@ -2960,326 +2948,24 @@ fn on_window_shown(h: HWND, fresh: bool) {
     }
 }
 
-// ---- each monitor's own browser ---------------------------------------------------------------
+// ---- a monitor's own browser ("Own Brave" in its menu) -----------------------------------------
 //
-// Windows hands out sound per program, never per window: one browser with windows on two monitors
-// (or on a monitor and your desk) is one sound. So a browser opened on an in-game monitor is that
-// monitor's own copy of it — its own program, its own sound; every window and tab in it plays from
-// that monitor, all at once — made from your own browser profile (sign-ins, passwords, bookmarks,
-// extensions), so there's nothing to sign in to. Your desk keeps your browser as it is.
+// A separate copy of that browser for this monitor: its own program (so its own sound), its own
+// profile kept for this wall. Nothing is copied from your desk browser, and it's never restarted.
 
-const BROWSERS: [&str; 4] = ["brave.exe", "chrome.exe", "msedge.exe", "vivaldi.exe"];
 static PROFILE_KEYS: Mutex<Option<HashMap<i32, String>>> = Mutex::new(None);
-static OWN_LOCK: Mutex<()> = Mutex::new(());
-/// Profiles still missing files your browser held locked: (from, to, exe, files) — retried once it's closed.
-static SEED_PENDING: Mutex<Vec<(std::path::PathBuf, std::path::PathBuf, String, Vec<std::path::PathBuf>)>> = Mutex::new(Vec::new());
 
 fn profile_key(idx: i32) -> String {
     PROFILE_KEYS.lock().unwrap().as_ref().and_then(|m| m.get(&idx).cloned()).unwrap_or_else(|| format!("monitor{idx}"))
 }
 
-fn own_profile_dir(idx: i32, exe: &str) -> std::path::PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
-    std::path::Path::new(&base).join("WindowsCraft").join("profiles").join(format!("{}-{}", exe.trim_end_matches(".exe"), profile_key(idx)))
-}
-
-/// Where that browser keeps your profile.
-fn desk_user_data(exe: &str) -> Option<std::path::PathBuf> {
-    let local = std::env::var("LOCALAPPDATA").ok()?;
-    let p = std::path::Path::new(&local);
-    let d = match exe {
-        "brave.exe" => p.join("BraveSoftware").join("Brave-Browser").join("User Data"),
-        "chrome.exe" => p.join("Google").join("Chrome").join("User Data"),
-        "msedge.exe" => p.join("Microsoft").join("Edge").join("User Data"),
-        "vivaldi.exe" => p.join("Vivaldi").join("User Data"),
-        _ => return None,
-    };
-    d.join("Local State").exists().then_some(d)
-}
-
-/// A process's whole command line ("" if it can't be read).
-fn cmdline(pid: u32) -> String {
-    unsafe {
-        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return String::new() };
-        let mut buf = vec![0u64; 4096];
-        let mut len = 0u32;
-        let st = windows::Wdk::System::Threading::NtQueryInformationProcess(h, windows::Wdk::System::Threading::PROCESSINFOCLASS(60),
-            buf.as_mut_ptr() as *mut _, (buf.len() * 8) as u32, &mut len);
-        let _ = CloseHandle(h);
-        if st.is_err() {
-            return String::new();
-        }
-        let us = &*(buf.as_ptr() as *const windows::Win32::Foundation::UNICODE_STRING);
-        if us.Buffer.0.is_null() {
-            return String::new();
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(us.Buffer.0, us.Length as usize / 2))
-    }
-}
-
-/// A monitor's own browser copy (not your desk browser)?
-fn is_own_copy(pid: u32) -> bool { cmdline(pid).to_lowercase().contains("\\windowscraft\\profiles\\") }
-
-fn exe_full(pid: u32) -> Option<String> {
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buf = [0u16; 1024];
-        let mut n = buf.len() as u32;
-        let r = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).ok().map(|_| String::from_utf16_lossy(&buf[..n as usize]));
-        let _ = CloseHandle(h);
-        r
-    }
-}
-
-/// Every running process of that program that's your desk browser (not a monitor's copy).
-fn desk_browser_pids(exe: &str) -> Vec<u32> {
-    use windows::Win32::System::Diagnostics::ToolHelp::*;
-    let mut out = Vec::new();
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
-        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut ok = Process32FirstW(snap, &mut e).is_ok();
-        while ok {
-            let n = String::from_utf16_lossy(&e.szExeFile[..e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len())]).to_ascii_lowercase();
-            if n == exe && !is_own_copy(e.th32ProcessID) {
-                out.push(e.th32ProcessID);
-            }
-            ok = Process32NextW(snap, &mut e).is_ok();
-        }
-        let _ = CloseHandle(snap);
-    }
-    out
-}
-
-fn any_own_copy_running(dir: &std::path::Path) -> bool {
-    use windows::Win32::System::Diagnostics::ToolHelp::*;
-    let d = dir.display().to_string().to_lowercase();
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
-        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut ok = Process32FirstW(snap, &mut e).is_ok();
-        let mut found = false;
-        while ok && !found {
-            found = cmdline(e.th32ProcessID).to_lowercase().contains(&d);
-            ok = Process32NextW(snap, &mut e).is_ok();
-        }
-        let _ = CloseHandle(snap);
-        found
-    }
-}
-
-/// Your profile copied into a monitor's own: "Local State" (the key its sign-ins are sealed with —
-/// same Windows user, so they open) and the profile you use, without caches. Returns what was locked.
-fn seed_profile(from: &std::path::Path, to: &std::path::Path) -> Vec<std::path::PathBuf> {
-    const SKIP: [&str; 21] = ["cache", "code cache", "gpucache", "dawncache", "dawngraphitecache", "dawnwebgpucache", "grshadercache", "shadercache",
-        "graphitedawncache", "media cache", "application cache", "crashpad", "blob_storage", "cachestorage", "scriptcache", "jumplisticons",
-        "jumplisticonsold", "component_crx_cache", "download_cache", "optimization_guide_model_store", "safe browsing"];
-    const SKIP_FILES: [&str; 5] = ["lockfile", "singletonlock", "singletoncookie", "singletonsocket", "lock"];
-    let mut locked = Vec::new();
-    let _ = std::fs::create_dir_all(to);
-    let ls = std::fs::read_to_string(from.join("Local State")).unwrap_or_default();
-    let profile = ls.find("\"last_used\":\"").and_then(|i| {
-        let rest = &ls[i + 13..];
-        rest.find('"').map(|j| rest[..j].to_string())
-    }).filter(|n| !n.is_empty() && from.join(n).is_dir()).unwrap_or_else(|| "Default".to_string());
-    if std::fs::copy(from.join("Local State"), to.join("Local State")).is_err() {
-        locked.push(from.join("Local State"));
-    }
-    fn walk(a: &std::path::Path, b: &std::path::Path, locked: &mut Vec<std::path::PathBuf>) {
-        let _ = std::fs::create_dir_all(b);
-        let Ok(rd) = std::fs::read_dir(a) else { return };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            let p = e.path();
-            if p.is_dir() {
-                if !SKIP.contains(&name.as_str()) {
-                    walk(&p, &b.join(e.file_name()), locked);
-                }
-            } else if !SKIP_FILES.contains(&name.as_str()) && std::fs::copy(&p, b.join(e.file_name())).is_err() {
-                locked.push(p);
-            }
-        }
-    }
-    walk(&from.join(&profile), &to.join(&profile), &mut locked);
-    locked
-}
-
-fn retry_locked(from: &std::path::Path, to: &std::path::Path, files: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
-    files.iter().filter(|f| {
-        let Ok(rel) = f.strip_prefix(from) else { return false };
-        let dst = to.join(rel);
-        if let Some(par) = dst.parent() {
-            let _ = std::fs::create_dir_all(par);
-        }
-        std::fs::copy(f, dst).is_err()
-    }).cloned().collect()
-}
-
-/// Your desk browser closes for a moment (its windows asked to close, as you would; whatever's
-/// left after a few seconds is ended). True if it had windows open, i.e. it should come back.
-fn close_desk_browser(exe: &str, keep_closed: Option<HWND>) -> bool {
-    let pids = desk_browser_pids(exe);
-    let wins: Vec<HWND> = app_windows().into_iter().filter(|w| pids.contains(&pid(*w))).collect();
-    let had = wins.iter().any(|w| Some(*w) != keep_closed);
-    for w in &wins {
-        unsafe {
-            let _ = PostMessageW(Some(*w), WM_CLOSE, WPARAM(0), LPARAM(0));
-        }
-    }
-    let t0 = Instant::now();
-    while !desk_browser_pids(exe).is_empty() && t0.elapsed() < Duration::from_secs(8) {
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    for p in desk_browser_pids(exe) {
-        // (no windows left: only its background part, still holding your profile)
-        unsafe {
-            if let Ok(h) = OpenProcess(PROCESS_TERMINATE, false, p) {
-                let _ = TerminateProcess(h, 0);
-                let _ = CloseHandle(h);
-            }
-        }
-    }
-    let t0 = Instant::now();
-    while !desk_browser_pids(exe).is_empty() && t0.elapsed() < Duration::from_secs(4) {
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    had
-}
-
-/// Your desk browser back, with the tabs it had, on your desk.
-fn launch_desk(file: &str, params: &str, exe: &str) {
-    LAUNCHES.lock().unwrap().push(Launch {
-        idx: -1,
-        since: now_filetime().saturating_sub(10_000_000),
-        exe: exe.to_string(),
-        before: app_windows().into_iter().map(|h| h.0 as isize).collect(),
-        until: Instant::now() + Duration::from_secs(20),
-    });
-    let f = wide(file);
-    let p = wide(params);
-    unsafe {
-        let info = SHELLEXECUTEINFOW {
-            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-            fMask: SEE_MASK_FLAG_NO_UI,
-            lpFile: PCWSTR(f.as_ptr()),
-            lpParameters: PCWSTR(p.as_ptr()),
-            nShow: SW_SHOWNOACTIVATE.0,
-            ..Default::default()
-        };
-        let mut info = info;
-        let _ = ShellExecuteExW(&mut info);
-    }
-}
-
-/// The page a browser window shows (its address bar), if it can be read.
-fn window_url(h: HWND) -> Option<String> {
-    use windows::Win32::System::Com::*;
-    use windows::Win32::UI::Accessibility::*;
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let r = (|| -> windows::core::Result<Option<String>> {
-            let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
-            let el = uia.ElementFromHandle(h)?;
-            let all = el.FindAll(TreeScope_Descendants, &uia.CreateTrueCondition()?)?;
-            for i in 0..all.Length()? {
-                let e = all.GetElement(i)?;
-                if e.CurrentControlType()? != UIA_EditControlTypeId {
-                    continue;
-                }
-                if let Ok(v) = e.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
-                    return Ok(Some(v.CurrentValue()?.to_string()));
-                }
-            }
-            Ok(None)
-        })();
-        r.ok().flatten().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
-    }
-}
-
-/// Opens (makes, the first time) monitor `idx`'s own copy of that browser, with `url` if any.
-/// Returns false if it couldn't.
-fn own_browser(idx: i32, exe_path: &str, url: Option<String>, replacing: Option<HWND>) -> bool {
-    let _g = OWN_LOCK.lock().unwrap();
+fn own_browser(idx: i32, exe_path: &str) -> bool {
     let exe = exe_path.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
-    let dir = own_profile_dir(idx, &exe);
-    let mut restarted = false;
-    if !dir.join("Local State").exists() {
-        if let Some(from) = desk_user_data(&exe) {
-            let mut locked = seed_profile(&from, &dir);
-            if !locked.is_empty() {
-                // your browser keeps your sign-ins locked while it runs: it closes for a moment
-                // (once for this monitor), they come over, and it opens again with its tabs
-                eprintln!("info=your {exe} holds {} files of your profile: closing it for a moment", locked.len());
-                let had = close_desk_browser(&exe, replacing);
-                locked = retry_locked(&from, &dir, &locked);
-                if had {
-                    launch_desk(exe_path, "--restore-last-session", &exe);
-                    restarted = true;
-                }
-                if !locked.is_empty() {
-                    eprintln!("info={} files still locked: they follow when the browser is closed", locked.len());
-                    SEED_PENDING.lock().unwrap().push((from.clone(), dir.clone(), exe.clone(), locked));
-                }
-            }
-            eprintln!("info=in-game monitor {idx} has its own {exe} now (made from your profile)");
-        }
-    } else if let Some(h) = replacing {
-        unsafe {
-            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-        }
-    }
-    if restarted {
-        emit(&format!("deskrestart {exe}"));
-    }
-    let params = format!("--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window{}", dir.display(),
-        url.map(|u| format!(" \"{}\"", u.replace('"', ""))).unwrap_or_default());
+    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
+    let dir = std::path::Path::new(&base).join("WindowsCraft").join("profiles").join(format!("{}-{}", exe.trim_end_matches(".exe"), profile_key(idx)));
+    let _ = std::fs::create_dir_all(&dir);
+    let params = format!("--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window", dir.display());
     launch(idx, exe_path, &params, &exe)
-}
-
-/// Every so often: profile files that were locked come over once nothing holds them.
-fn seed_pending_tick() {
-    let mut list = SEED_PENDING.lock().unwrap();
-    if list.is_empty() {
-        return;
-    }
-    list.retain_mut(|(from, to, exe, files)| {
-        if !desk_browser_pids(exe).is_empty() || any_own_copy_running(to) {
-            return true;
-        }
-        *files = retry_locked(from, to, files);
-        files.is_empty()
-    });
-}
-
-/// A browser window opened on monitor `idx` that isn't the monitor's own copy (your desk
-/// browser, opened from the monitor or by an app on it): the monitor's own copy opens instead,
-/// with the same page.
-fn maybe_own_browser(h: HWND, idx: i32) {
-    let p = pid(h);
-    let Some((_, exe)) = process_info(p) else { return };
-    if !BROWSERS.contains(&exe.as_str()) || is_own_copy(p) {
-        return;
-    }
-    // only your everyday browser: not one started with a profile of its own, nor one WindowsCraft
-    // started for this monitor
-    if owned().lock().unwrap().get(&p) == Some(&idx) || cmdline(p).to_lowercase().contains("--user-data-dir") {
-        return;
-    }
-    let Some(exe_path) = exe_full(p) else { return };
-    let hv = h.0 as isize;
-    std::thread::spawn(move || {
-        let h = HWND(hv as *mut _);
-        std::thread::sleep(Duration::from_millis(400)); // (its address bar fills in)
-        let url = window_url(h).filter(|u| {
-            let l = u.to_lowercase();
-            !(l.is_empty() || l.starts_with("about:") || l.contains("://newtab") || l.contains("://new-tab") || l.starts_with("brave://") || l.starts_with("chrome://") || l.starts_with("edge://"))
-        });
-        eprintln!("info=a window of your desk {exe} opened on in-game monitor {idx}{}: the monitor's own {exe} opens it instead",
-            url.as_ref().map(|u| format!(" ({u})")).unwrap_or_default());
-        if !own_browser(idx, &exe_path, url, Some(h)) {
-            eprintln!("info=couldn't open the monitor's own {exe}");
-        }
-    });
 }
 
 /// Which in-game monitor your real cursor is on (None: your own screens).
@@ -3594,9 +3280,7 @@ fn ensure_placer() {
                 if ticks % 3 == 0 {
                     tidy_taskbars();
                 }
-                if ticks % 60 == 0 {
-                    std::thread::spawn(seed_pending_tick);
-                }
+
                 // windows just placed: if the app moved one away again, back it goes
                 let now = Instant::now();
                 let list: Vec<(isize, i32, Instant)> = {
@@ -4250,7 +3934,7 @@ fn main() {
                 let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
                 let exe = f.get(2).copied().unwrap_or("").to_string();
                 std::thread::spawn(move || {
-                    let ok = own_browser(idx, &exe, None, None);
+                    let ok = own_browser(idx, &exe);
                     say(if ok { "ownbrowser ok" } else { "ownbrowser failed" });
                 });
             }
