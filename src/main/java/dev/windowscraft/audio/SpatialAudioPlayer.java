@@ -73,6 +73,15 @@ public final class SpatialAudioPlayer {
 
     private static int ms(int m) { return AudioCapture.BYTES_PER_SECOND * m / 1000 / FRAME * FRAME; }
 
+    private volatile double queuedMs = Double.NaN;
+    private volatile long lastLoudNanos;
+
+    /** Sound written to the sound card but not heard yet (ms); NaN without a sound device. For lip sync. */
+    public double soundQueuedMs() { return queuedMs; }
+
+    /** Was anything audible in the last minute? (Lip sync only matters for a screen with sound; a quiet scene doesn't count.) */
+    public boolean audibleLately() { return lastLoudNanos != 0 && System.nanoTime() - lastLoudNanos < 60_000_000_000L; }
+
     /** How often playback had to be refilled because sound arrived too late (diagnostics). */
     public long underruns() { return underruns; }
 
@@ -145,6 +154,7 @@ public final class SpatialAudioPlayer {
                         adjustments++;
                     }
                     line.write(buf, start, len);
+                    queuedMs = (line.getBufferSize() - line.available()) / (double) FRAME * 1000.0 / AudioCapture.RATE;
                 }
                 // No pacing here, ever: the decoder already delivers in real time, and reading
                 // slower than that would back up FFmpeg and freeze the picture too.
@@ -240,6 +250,7 @@ public final class SpatialAudioPlayer {
         }
         lastRms = Math.sqrt(sum / (CHUNK / 2.0));
         boolean loud = lastRms > 0.02;
+        if (lastRms > 0.005) lastLoudNanos = System.nanoTime();
         if (loud && !wasLoud) {
             long queuedNanos = line == null ? 0 : (long) ((line.getBufferSize() - line.available()) / 4.0 / AudioCapture.RATE * 1e9);
             lastOnsetNanos = System.nanoTime() + queuedNanos;

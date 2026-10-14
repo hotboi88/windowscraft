@@ -16,7 +16,7 @@ public final class TsSplitter {
     private int carryLen;
     private ByteArrayOutputStream run = new ByteArrayOutputStream(MAX_RUN);
     private boolean runIsKey;
-    private int pmtPid = -1, videoPid = -1;
+    private int pmtPid = -1, videoPid = -1, audioPid = -1;
     private boolean runOnlyTables;
 
     public List<RelayServer.Chunk> feed(byte[] buf, int len) {
@@ -61,6 +61,7 @@ public final class TsSplitter {
             runOnlyTables = true;
         } else if (pid == pmtPid) {
             videoPid = parsePmt(b, o, videoPid);
+            audioPid = parsePmtAudio(b, o, audioPid);
         } else if (pid == videoPid && isKeyframeStart(b, o)) {
             if (!runOnlyTables) flush(out);
             runIsKey = true;
@@ -74,6 +75,19 @@ public final class TsSplitter {
 
     /** The video's PID once the tables have been seen (-1 before). */
     public int videoPid() { return videoPid; }
+
+    /** The sound's PID once the tables have been seen (-1 before, or none). */
+    public int audioPid() { return audioPid; }
+
+    /** Only the packets of that PID (the counterpart of {@link #without}). */
+    public static byte[] only(byte[] data, int pid) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream(data.length);
+        for (int i = 0; i + PACKET <= data.length; i += PACKET) {
+            int p = ((data[i + 1] & 0x1F) << 8) | (data[i + 2] & 0xFF);
+            if (p == pid) o.write(data, i, PACKET);
+        }
+        return o.toByteArray();
+    }
 
     /** The same run of packets without the ones of that PID (the sound and tables stay). */
     public static byte[] without(byte[] data, int pid) {
@@ -126,6 +140,22 @@ public final class TsSplitter {
             int pid = ((b[q + 1] & 0x1F) << 8) | (b[q + 2] & 0xFF);
             int esInfo = ((b[q + 3] & 0x0F) << 8) | (b[q + 4] & 0xFF);
             if (type == 0x1B || type == 0x24) return pid; // H.264 / HEVC
+            q += 5 + esInfo;
+        }
+        return fallback;
+    }
+
+    static int parsePmtAudio(byte[] b, int o, int fallback) {
+        int p = sectionStart(b, o);
+        if (p < 0 || b[p] != 0x02) return fallback;
+        int sectionLen = ((b[p + 1] & 0x0F) << 8) | (b[p + 2] & 0xFF);
+        int end = Math.min(p + 3 + sectionLen - 4, o + PACKET);
+        int progInfoLen = ((b[p + 10] & 0x0F) << 8) | (b[p + 11] & 0xFF);
+        for (int q = p + 12 + progInfoLen; q + 5 <= end; ) {
+            int type = b[q] & 0xFF;
+            int pid = ((b[q + 1] & 0x1F) << 8) | (b[q + 2] & 0xFF);
+            int esInfo = ((b[q + 3] & 0x0F) << 8) | (b[q + 4] & 0xFF);
+            if (type == 0x0F || type == 0x11 || type == 0x03 || type == 0x04 || type == 0x81) return pid; // AAC, MPEG audio, AC-3
             q += 5 + esInfo;
         }
         return fallback;

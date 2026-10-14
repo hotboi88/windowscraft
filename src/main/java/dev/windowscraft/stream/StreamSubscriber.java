@@ -325,6 +325,7 @@ public final class StreamSubscriber implements FrameSource {
         long[] queuedBytes = {0};
         double[] byteRate = {0}; // incoming bytes/s, smoothed
         TsSplitter splitter = new TsSplitter();
+        AvSync sync = new AvSync(); // (lip sync: see AvSync)
         dev.windowscraft.relay.PtsWatch ptsWatch = new dev.windowscraft.relay.PtsWatch();
         dev.windowscraft.relay.UdpReceiver rxNow = udp;
         synchronized (arrivals) { arrivals.clear(); }
@@ -366,6 +367,7 @@ public final class StreamSubscriber implements FrameSource {
                         ptsWatch.feed(buf, 0, n, onPts);
                     }
                     List<RelayServer.Chunk> chunks = splitter.feed(buf, n);
+                    noteArrivals(chunks, splitter.videoPid(), splitter.audioPid(), sync);
                     synchronized (lock) {
                         for (RelayServer.Chunk c : chunks) { queue.add(c); queuedBytes[0] += c.data().length; }
                         lock.notifyAll();
@@ -416,8 +418,12 @@ public final class StreamSubscriber implements FrameSource {
         // next one starts (relay.PictureEnds; windowscraft.pictureEnds=false: not)
         dev.windowscraft.relay.PictureEnds ends = prompt && !"false".equals(System.getProperty("windowscraft.pictureEnds"))
                 ? new dev.windowscraft.relay.PictureEnds() : null;
+        // lip sync: while pictures are held back, they wait here (sound goes on at once)
+        ArrayDeque<Held> held = new ArrayDeque<>();
         daemon("viewer decode feed", () -> {
             boolean waitForKey = false;
+            long nextSyncStep = 0;
+            long holdNanos = 0;
             boolean videoPaused = false; // (nobody looks at it: sound only, the picture resumes at a keyframe)
             // a piece of the picture never arrived: the pictures after it would be smeared and
             // streaky until the next keyframe — show the last good one until then instead (the
@@ -426,13 +432,34 @@ public final class StreamSubscriber implements FrameSource {
             long seenSkipped = rxNow != null ? rxNow.skipped : 0;
             try {
                 while (running) {
+                    long now = System.nanoTime();
+                    if (now >= nextSyncStep) { // (4 times a second: is it wanted, and how much)
+                        nextSyncStep = now + 250_000_000L;
+                        boolean wanted = audio.audibleLately() && !streamId.equals(dev.windowscraft.client.ScreenControl.workingStream());
+                        double hold = sync.step(wanted, audio.soundQueuedMs(), now);
+                        holdNanos = (long) (hold * 1e6);
+                        lipHoldMs = hold;
+                        if (dev.windowscraft.measure.Measure.ON) LIP_HOLD.record(holdNanos);
+                    }
+                    // held pictures whose time has come
+                    boolean wrote = false;
+                    while (!held.isEmpty() && held.peek().arrived() + holdNanos <= now) {
+                        byte[] v = held.poll().data();
+                        ffIn.write(ends != null ? ends.process(v, splitter.videoPid()) : v);
+                        wrote = true;
+                    }
+                    if (wrote) ffIn.flush();
                     RelayServer.Chunk c;
                     synchronized (lock) {
                         // more than ~1 s waiting for the decoder: jump to the newest keyframe
                         if (byteRate[0] > 0 && queuedBytes[0] > Math.max(256 * 1024, byteRate[0])) {
                             waitForKey = !skipToNewestKeyframe(queue, queuedBytes);
                         }
-                        while (queue.isEmpty() && running) lock.wait(1000);
+                        if (queue.isEmpty() && running) {
+                            // (wake for the next held picture, or the next step of lip sync)
+                            long until = Math.min(nextSyncStep, held.isEmpty() ? Long.MAX_VALUE : held.peek().arrived() + holdNanos);
+                            lock.wait(Math.max(1, Math.min(1000, (until - System.nanoTime()) / 1_000_000L)));
+                        }
                         c = queue.poll();
                         if (c == null) continue;
                         queuedBytes[0] -= c.data().length;
@@ -445,6 +472,7 @@ public final class StreamSubscriber implements FrameSource {
                     // keyframe (at most a second; until then the wall keeps its last picture).
                     boolean hidden = framesDecoded > 0 && System.nanoTime() - lastTakenNanos > HIDDEN_NANOS && splitter.videoPid() >= 0;
                     if (hidden || (videoPaused && !c.keyframe())) {
+                        held.clear(); // (pictures nobody sees: not decoded at all)
                         if (!videoPaused) {
                             videoPaused = true;
                             WindowsCraftClient.LOGGER.info("Viewer for {}: nobody's looking, decoding its sound only", streamId.substring(0, 8));
@@ -483,6 +511,15 @@ public final class StreamSubscriber implements FrameSource {
                         }
                         continue;
                     }
+                    if (holdNanos > 0 || !held.isEmpty()) {
+                        // lip sync: the pictures wait their turn; sound and tables go on now
+                        int vpid = splitter.videoPid();
+                        byte[] rest = TsSplitter.without(c.data(), vpid), pictures = TsSplitter.only(c.data(), vpid);
+                        if (rest.length > 0) ffIn.write(rest);
+                        if (pictures.length > 0) held.add(new Held(c.madeNanos(), pictures));
+                        ffIn.flush();
+                        continue;
+                    }
                     ffIn.write(ends != null ? ends.process(c.data(), splitter.videoPid()) : c.data());
                     ffIn.flush();
                 }
@@ -519,6 +556,32 @@ public final class StreamSubscriber implements FrameSource {
         video.setReceiveBufferSize(4 << 20);
         readFrames(video.getInputStream());
         if (running) throw new IOException("no picture");
+    }
+
+    /** Pictures held back for lip sync: their packets, and when they arrived. */
+    private record Held(long arrived, byte[] data) {}
+
+    /** How long pictures are held back for lip sync right now (ms; 0 = the quickest way). */
+    private volatile double lipHoldMs;
+
+    public double lipHoldMs() { return lipHoldMs; }
+
+    private static final dev.windowscraft.measure.Measure.Metric LIP_HOLD = dev.windowscraft.measure.Measure.ms("view.lip_hold",
+            "someone else's screen: how long its pictures are held back so they show with their sound (0 while you use it)");
+
+    /** Net thread: when each picture and sound packet started arriving, with its timestamp (lip sync). */
+    private static void noteArrivals(List<RelayServer.Chunk> chunks, int vpid, int apid, AvSync sync) {
+        if (vpid < 0 || apid < 0) return;
+        for (RelayServer.Chunk ch : chunks) {
+            byte[] d = ch.data();
+            for (int o = 0; o + 188 <= d.length; o += 188) {
+                if ((d[o + 1] & 0x40) == 0) continue;
+                int pid = ((d[o + 1] & 0x1F) << 8) | (d[o + 2] & 0xFF);
+                if (pid != vpid && pid != apid) continue;
+                long pts = AvSync.ptsIfStart(d, o);
+                if (pts >= 0) sync.arrived(pid == vpid, pts, ch.madeNanos());
+            }
+        }
     }
 
     /** Drops queued data up to the newest keyframe; false if none is queued yet. Caller holds the lock. */

@@ -164,6 +164,9 @@ public final class ScreenControl {
 
     /** Each frame: which wall is under your view; with Alt held its pointer follows your view. */
     public static void frame(MinecraftClient mc) {
+        RemoteDisplays.Remote working = TheaterMode.controlledRemote() != null ? TheaterMode.controlledRemote() : usingR;
+        workingStream = working != null && working.info != null && System.nanoTime() - remoteWorkedAt < 4_000_000_000L
+                ? working.info.streamId() : null;
         Display real = dev.windowscraft.monitor.InGameMonitors.seated();
         if (real != null) {
             double[] at = dev.windowscraft.monitor.InGameMonitors.pointerOnSeat();
@@ -297,6 +300,15 @@ public final class ScreenControl {
 
     /** The remote wall you're using (pointing at with Alt, or sitting at), or null. */
     private static RemoteDisplays.Remote usingR;
+    private static long remoteWorkedAt;
+    private static volatile String workingStream;
+
+    /**
+     * The stream of someone else's screen you're working right now (pointing at or sitting at it,
+     * and you moved, clicked or typed in the last few seconds), or null. Its pictures come the
+     * quickest way then, not held back for lip sync. Any thread.
+     */
+    public static String workingStream() { return workingStream; }
     private static boolean remoteDirty;
     private static long remoteSentAt, remoteBeatAt;
     private static int remoteButtons;
@@ -307,6 +319,7 @@ public final class ScreenControl {
         u = Math.max(0, Math.min(1, u));
         v = Math.max(0, Math.min(1, v));
         if (u == p[0] && v == p[1]) return;
+        remoteWorkedAt = System.nanoTime();
         p[0] = u;
         p[1] = v;
         remoteDirty = true;
@@ -327,6 +340,7 @@ public final class ScreenControl {
     }
 
     private static void sendRemote(RemoteDisplays.Remote r, int op, int a, double f) {
+        remoteWorkedAt = System.nanoTime();
         flushRemote(r, true);
         double[] p = mine(r);
         remoteSentAt = remoteBeatAt = System.nanoTime();
