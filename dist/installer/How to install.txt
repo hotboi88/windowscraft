@@ -1,4 +1,11 @@
-WindowsCraft 0.15.1 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.2: someone else's screen shows each change the moment it arrives (the last change
+before a screen went still could wait for the next one), its pictures are coloured by the
+graphics card (less work for the PC watching), and a movie on it plays with its sound in step
+while you just watch (the picture takes the quickest way again the moment you use the screen).
+WindowsCraft now uses one tested FFmpeg version (fetched once more in the background if yours is
+older), and direct GPU sharing double-checks before it decides it doesn't work on your PC.
 
 New in 0.15.1: the sound of a screen you share now reaches the people watching (on Windows most
 of it was lost on the way); someone who starts watching gets the full frame rate (they were
