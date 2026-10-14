@@ -974,8 +974,9 @@ fn on_area(h: HWND, area: &RECT) -> bool {
 }
 
 fn title(h: HWND) -> String {
+    // (read as Windows keeps it, without asking the window: an app that's stuck can't hold us up)
     let mut buf = [0u16; 256];
-    let n = unsafe { GetWindowTextW(h, &mut buf) } as usize;
+    let n = unsafe { windows::Win32::UI::WindowsAndMessaging::InternalGetWindowText(h, &mut buf) } as usize;
     String::from_utf16_lossy(&buf[..n.min(buf.len())]).replace(['\n', '\r'], " ")
 }
 
@@ -1918,7 +1919,44 @@ fn give_back(to_game: bool) {
     });
 }
 
+/// Brings a window in front, with the keyboard. Done on a thread of its own, waited for only so
+/// long: handing the keyboard over involves the window in front now, and if that app is stuck
+/// (or Windows holds it up — a boxed app can), whoever asked must not get stuck with it. That's
+/// the thread carrying your mouse, or the one answering the game.
 fn foreground(h: HWND) -> bool {
+    unsafe {
+        if GetForegroundWindow() == h {
+            return true;
+        }
+    }
+    let hv = h.0 as isize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(foreground_now(HWND(hv as *mut _)));
+    });
+    let t0 = Instant::now();
+    let mut msg = MSG::default();
+    while t0.elapsed() < Duration::from_millis(700) {
+        if let Ok(r) = rx.try_recv() {
+            return r;
+        }
+        // (meanwhile, whatever Windows asks of this thread still gets answered — on the input
+        // thread, that's every move of your mouse — without taking anything off its queue)
+        unsafe {
+            let _ = PeekMessageW(&mut msg, None, 0xBFFE, 0xBFFE, PM_NOREMOVE);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    unsafe {
+        let fg = GetForegroundWindow();
+        let fp = pid(fg);
+        eprintln!("info=bringing \"{}\" ({}) in front got stuck on the window in front, \"{}\" ({}, process {fp}{}): going on without waiting",
+            title(h), class_name(h), title(fg), class_name(fg), { let b = box_of(fp); if b.is_empty() { String::new() } else { format!(", box {b}") } });
+        GetForegroundWindow() == h
+    }
+}
+
+fn foreground_now(h: HWND) -> bool {
     unsafe {
         if GetForegroundWindow() == h {
             return true;
@@ -3072,7 +3110,8 @@ fn sbie_start(args: &[&str]) -> bool {
     let Ok(mut child) = c.spawn() else { return false };
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_secs(15) {
-        if let Ok(Some(_)) = child.try_wait() {
+        if let Ok(Some(st)) = child.try_wait() {
+            eprintln!("info=Sandboxie's launcher ({}) finished: {st} after {} ms", args.join(" "), t0.elapsed().as_millis());
             return true;
         }
         std::thread::sleep(Duration::from_millis(50));
