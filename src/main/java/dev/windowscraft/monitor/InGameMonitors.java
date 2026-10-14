@@ -681,9 +681,10 @@ public final class InGameMonitors {
         seatedMon = m;
         seatedOn = d;
         altLooking = false;
-        // a fullscreen game stays over your taskbar while you sit (it would cover the screen's bottom)
+        // your real taskbar stays where you can see it while you sit, also in fullscreen (where the
+        // game normally keeps itself above everything): the screen sits right above it
         onTop = mc.getWindow().isFullscreen() && !testing;
-        if (onTop) dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true);
+        if (onTop) dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
         b.seat(m, u, v, dev.windowscraft.capture.win.WinGeom.gameWindow).whenComplete((r, e) -> mc.execute(() -> {
             if ("ok".equals(r) || seatedOn != d) return;
             String why = e != null ? e.getMessage() : r;
@@ -704,9 +705,9 @@ public final class InGameMonitors {
         if (seatedMon == null) return;
         seatedMon = null;
         seatedOn = null;
-        if (onTop) {
+        if (onTop) { // (fullscreen again as it was: above everything)
             onTop = false;
-            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
+            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true);
         }
         MonitorBackend b = backend();
         if (b != null) b.unseat();
@@ -1056,7 +1057,7 @@ public final class InGameMonitors {
                 boolean wasSeated = seatedMon != null;
                 seatedMon = null;
                 seatedOn = null;
-                if (onTop) { onTop = false; dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false); }
+                if (onTop) { onTop = false; dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, true); }
                 restorePause();
                 if (backend instanceof dev.windowscraft.capture.win.VDisplayHelper) dev.windowscraft.capture.win.VDisplayHelper.unclip();
                 if (wasSeated) TheaterMode.leaveNow();

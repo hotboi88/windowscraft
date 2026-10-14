@@ -144,6 +144,7 @@ public final class WinGameTest implements ClientModInitializer {
                 log("fullscreen seated: visible part " + java.util.Arrays.toString(dev.windowscraft.client.GameArea.visible()));
                 shot(mc, "4b_seated_fullscreen");
                 checkUncovered(mc, "fullscreen");
+                checkTaskbarShows(mc);
                 dev.windowscraft.client.TheaterMode.leaveNow();
                 fs = 5;
                 tick = 0;
@@ -199,6 +200,33 @@ public final class WinGameTest implements ClientModInitializer {
             }
             default -> fs = 0;
         }
+    }
+
+    /** Seated in fullscreen: your real taskbar is there to see, and the screen sits right above it. */
+    private void checkTaskbarShows(MinecraftClient mc) {
+        var u = com.sun.jna.platform.win32.User32.INSTANCE;
+        long game = dev.windowscraft.capture.win.WinGeom.gameWindow;
+        var mon = u.MonitorFromWindow(new com.sun.jna.platform.win32.WinDef.HWND(new com.sun.jna.Pointer(game)), 2);
+        var mi = new com.sun.jna.platform.win32.WinUser.MONITORINFO();
+        u.GetMonitorInfo(mon, mi);
+        var w = mi.rcWork;
+        var m = mi.rcMonitor;
+        if (w.bottom >= m.bottom) { log("fullscreen: no taskbar at the bottom of this screen (work area " + w + ")"); return; }
+        long at = dev.windowscraft.capture.win.WinGeom.rootAt((w.left + w.right) / 2, (w.bottom + m.bottom) / 2);
+        char[] cls = new char[64];
+        int n = u.GetClassName(new com.sun.jna.platform.win32.WinDef.HWND(new com.sun.jna.Pointer(at)), cls, 64);
+        String c = new String(cls, 0, Math.max(0, n));
+        check(at != game && c.startsWith("Shell_"), "fullscreen, seated: your real taskbar shows (at its spot: " + c + ")");
+        int[] ca = dev.windowscraft.capture.win.WinGeom.clientArea(game);
+        var shown = dev.windowscraft.client.DeskView.showing();
+        if (ca == null || shown == null) return;
+        double y1 = -1e9;
+        for (Vec3d p : dev.windowscraft.client.ScreenControl.pictureCorners(shown)) {
+            double[] q = dev.windowscraft.client.FrameView.project(p);
+            if (q != null) y1 = Math.max(y1, q[1]);
+        }
+        double bottom = ca[1] + y1 * ca[3] / (double) mc.getWindow().getFramebufferHeight();
+        check(bottom <= w.bottom + 1, "…and the screen sits above it (its bottom at " + Math.round(bottom) + ", the taskbar starts at " + w.bottom + ")");
     }
 
     /** Along the seated picture's edges, what you really see on the desktop is the game (no taskbar over it). */

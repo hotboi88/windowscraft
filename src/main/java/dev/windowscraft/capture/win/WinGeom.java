@@ -196,6 +196,20 @@ public final class WinGeom {
                     }
                 }
             }
+            // and never under where your taskbar lives, shown or not at this moment (it comes up
+            // over the game whenever the game isn't in front — as while you sit at a monitor)
+            try {
+                var mon = com.sun.jna.platform.win32.User32.INSTANCE.MonitorFromWindow(game, 2); // MONITOR_DEFAULTTONEAREST
+                var mi = new com.sun.jna.platform.win32.WinUser.MONITORINFO();
+                if (com.sun.jna.platform.win32.User32.INSTANCE.GetMonitorInfo(mon, mi).booleanValue()) {
+                    RECT w = mi.rcWork, m = mi.rcMonitor;
+                    if (w.bottom < m.bottom) vb = Math.min(vb, w.bottom);
+                    if (w.top > m.top) vt = Math.max(vt, w.top);
+                    if (w.left > m.left) vl = Math.max(vl, w.left);
+                    if (w.right < m.right) vr = Math.min(vr, w.right);
+                }
+            } catch (Throwable ignored) {
+            }
             if (vr - vl < cw / 3 || vb - vt < ch / 3) return null;
             return new int[]{vl - left, vt - top, vr - vl, vb - vt, cw, ch};
         } catch (Throwable t) {
