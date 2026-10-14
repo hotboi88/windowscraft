@@ -80,7 +80,9 @@ public final class BenchMonitor implements ClientModInitializer {
                     return;
                 }
                 var mon = InGameMonitors.monitorOf(wall);
-                if (mon == null || tick < 60) return;
+                // windowscraft.bench.lateWindow=S: leave the new monitor showing just its desktop for
+                // S seconds first (does the "came out black" check misfire on a quiet new monitor?)
+                if (mon == null || tick < Math.max(60, 20 * Integer.getInteger("windowscraft.bench.lateWindow", 0))) return;
                 HWND w = User32.INSTANCE.FindWindow(null, "WindowsCraft bench window");
                 if (w == null) { log("BENCH FAILED: the bench window isn't open"); mc.scheduleStop(); stage = 99; return; }
                 User32.INSTANCE.SetWindowPos(w, null, mon.left(), mon.top(), 0, 0, 0x0001 | 0x0040); // SWP_NOSIZE | SWP_SHOWWINDOW
