@@ -85,7 +85,7 @@ Check "the config tool is there" (Test-Path $ini) $ini
 foreach ($b in "WCMon1", "WCMon2") {
     & $ini set $b Enabled y | Out-Null
     & $ini set $b BorderColor "#000000,off,0" | Out-Null
-    & $ini set $b BoxNameTitle "-" | Out-Null
+    & $ini set $b BoxNameTitle $(if ($env:WC_TITLE) { $env:WC_TITLE } else { "-" }) | Out-Null
     & $ini set $b AutoDelete n | Out-Null
     & $ini set $b ConfigLevel 10 | Out-Null
 }
