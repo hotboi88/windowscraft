@@ -684,7 +684,10 @@ public final class InGameMonitors {
         // your real taskbar stays where you can see it while you sit, also in fullscreen (where the
         // game normally keeps itself above everything): the screen sits right above it
         onTop = mc.getWindow().isFullscreen() && !testing;
-        if (onTop) dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
+        if (onTop) {
+            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
+            dev.windowscraft.capture.win.WinGeom.taskbarOverGame(dev.windowscraft.capture.win.WinGeom.gameWindow);
+        }
         b.seat(m, u, v, dev.windowscraft.capture.win.WinGeom.gameWindow).whenComplete((r, e) -> mc.execute(() -> {
             if ("ok".equals(r) || seatedOn != d) return;
             String why = e != null ? e.getMessage() : r;
@@ -756,7 +759,12 @@ public final class InGameMonitors {
 
     public static void tick(MinecraftClient mc) {
         MonitorBackend b = backend;
-        if (b != null && (seatedMon != null || pointMon != null)) b.beat(); // "the game is still here" (a frozen game never keeps your mouse)
+        if (b != null && (seatedMon != null || pointMon != null)) b.beat();
+        // seated in fullscreen: the game stays below your taskbar (the game or Windows may put it back on top)
+        if (onTop && seatedMon != null && ticks % 5 == 0) {
+            dev.windowscraft.capture.win.WinGeom.keepOnTop(dev.windowscraft.capture.win.WinGeom.gameWindow, false);
+            dev.windowscraft.capture.win.WinGeom.taskbarOverGame(dev.windowscraft.capture.win.WinGeom.gameWindow);
+        } // "the game is still here" (a frozen game never keeps your mouse)
         if (pointMon != null) {
             // you opened a menu, or switched to another window for real: your cursor is yours again
             // (an app on that monitor in front — you clicked it while pointing — isn't "away")

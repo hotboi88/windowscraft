@@ -142,6 +142,31 @@ public final class WinGeom {
         }
     }
 
+    /**
+     * Your real taskbar(s) on the game's screen brought up over the game (never activated): seated
+     * at a monitor with the game in fullscreen, the taskbar stays where you can see it.
+     */
+    public static void taskbarOverGame(long game) {
+        if (!WINDOWS || game == 0) return;
+        try {
+            var u = Win32.User32.I;
+            int[] ca = clientArea(game);
+            for (String cls : new String[]{"Shell_TrayWnd", "Shell_SecondaryTrayWnd"}) {
+                HWND tb = null;
+                for (int guard = 0; guard < 16; guard++) {
+                    tb = u.FindWindowEx(null, tb, cls, null);
+                    if (tb == null) break;
+                    RECT r = new RECT();
+                    if (!u.IsWindowVisible(tb) || !u.GetWindowRect(tb, r)) continue;
+                    if (ca != null && (r.right <= ca[0] || r.left >= ca[0] + ca[2] || r.bottom <= ca[1] || r.top >= ca[1] + ca[3])) continue;
+                    // HWND_TOPMOST; SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS
+                    u.SetWindowPos(tb, new HWND(Pointer.createConstant(-1)), 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010 | 0x0200 | 0x4000);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** The window in front (its top-level window): {left, top, right, bottom} in physical pixels, or null. */
     public static int[] foregroundRect() {
         if (!WINDOWS) return null;
