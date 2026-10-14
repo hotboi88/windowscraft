@@ -101,6 +101,7 @@ public final class RemoteDisplays {
             streamId = first.info.streamId();
             subscriber = new StreamSubscriber(audioId, streamId, first.info.width(), first.info.height(), first.info.fps());
             subscriber.reportAs(first.info.displayId());
+            subscriber.setLipSync(first.prefs().lipSync);
             texture = new DisplayTexture("remote/" + streamId);
         }
 
@@ -123,6 +124,8 @@ public final class RemoteDisplays {
         public boolean muted;
         public boolean direct = dev.windowscraft.config.ClientSettings.remoteDirect();
         public double volume = 1.0;
+        /** Picture and sound: Automatic, the quickest picture, or always with its sound (StreamSubscriber.LIP_*). */
+        public int lipSync = dev.windowscraft.stream.StreamSubscriber.LIP_AUTO;
     }
     private static int tick;
 

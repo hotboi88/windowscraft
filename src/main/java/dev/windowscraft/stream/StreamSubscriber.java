@@ -437,7 +437,9 @@ public final class StreamSubscriber implements FrameSource {
                     long now = System.nanoTime();
                     if (now >= nextSyncStep) { // (4 times a second: is it wanted, and how much)
                         nextSyncStep = now + 250_000_000L;
-                        boolean wanted = audio.audibleLately() && !streamId.equals(dev.windowscraft.client.ScreenControl.workingStream());
+                        int mode = lipSync;
+                        boolean wanted = mode != LIP_QUICKEST && audio.audibleLately()
+                                && (mode == LIP_WITH_SOUND || !streamId.equals(dev.windowscraft.client.ScreenControl.workingStream()));
                         double hold = sync.step(wanted, audio.soundQueuedMs(), now);
                         holdNanos = (long) (hold * 1e6);
                         lipHoldMs = hold;
@@ -599,6 +601,12 @@ public final class StreamSubscriber implements FrameSource {
 
     /** How long pictures are held back for lip sync right now (ms; 0 = the quickest way). */
     private volatile double lipHoldMs;
+
+    /** Picture and sound (the screen's options): Automatic, the quickest picture, or always with its sound. */
+    public static final int LIP_AUTO = 0, LIP_QUICKEST = 1, LIP_WITH_SOUND = 2;
+    private volatile int lipSync = LIP_AUTO;
+
+    public void setLipSync(int mode) { lipSync = mode; }
 
     public double lipHoldMs() { return lipHoldMs; }
 

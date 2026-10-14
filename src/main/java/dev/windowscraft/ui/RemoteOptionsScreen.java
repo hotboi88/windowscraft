@@ -21,7 +21,7 @@ import org.lwjgl.glfw.GLFW;
  */
 public final class RemoteOptionsScreen extends Screen {
     private final RemoteDisplays.Remote remote;
-    private int px, py, pw = 320, ph = 212, pad = 14;
+    private int px, py, pw = 320, ph = 262, pad = 14;
     private final VolumeSlider slider = new VolumeSlider();
     private final List<Hit> hits = new ArrayList<>();
 
@@ -45,7 +45,7 @@ public final class RemoteOptionsScreen extends Screen {
     protected void init() {
         pw = Math.min(320, width - 20);
         px = (width - pw) / 2;
-        py = (height - ph) / 2;
+        py = Math.max(4, (height - ph) / 2);
     }
 
     @Override public boolean shouldPause() { return false; }
@@ -110,6 +110,40 @@ public final class RemoteOptionsScreen extends Screen {
         y = py + 140;
         UiKit.textScaled(g, textRenderer, "SHADERS ON SCREENS", px + pad, y, 0.75f, UiKit.TEXT_MUTED);
         trueColoursToggle(g, mx, my, px + pad, y + 10);
+
+        // PICTURE AND SOUND: lip sync (Automatic / quickest / with its sound)
+        y = py + 178;
+        UiKit.textScaled(g, textRenderer, "PICTURE AND SOUND", px + pad, y, 0.75f, UiKit.TEXT_MUTED);
+        String[] lip = {"Automatic", "Quickest", "With its sound"};
+        int lx = px + pad;
+        int[] lw = new int[3];
+        int total = 4;
+        for (int i = 0; i < 3; i++) total += lw[i] = textRenderer.getWidth(lip[i]) + 16;
+        UiKit.round(g, lx, y + 10, total, 18, 3, UiKit.INSET);
+        int sx2 = lx + 2;
+        for (int i = 0; i < 3; i++) {
+            boolean sel = prefs.lipSync == i, hov = UiKit.inside(mx, my, sx2, y + 12, lw[i], 14);
+            if (sel) UiKit.round(g, sx2, y + 12, lw[i], 14, 2, UiKit.SEG_ACTIVE);
+            else if (hov) UiKit.round(g, sx2, y + 12, lw[i], 14, 2, UiKit.SURFACE_HOVER);
+            UiKit.text(g, textRenderer, lip[i], sx2 + lw[i] / 2 - textRenderer.getWidth(lip[i]) / 2, y + 15, sel ? UiKit.TEXT : UiKit.TEXT_2);
+            final int mode = i;
+            hits.add(new Hit(sx2, y + 12, lw[i], 14, () -> {
+                prefs.lipSync = mode;
+                var sub = remote.subscriber();
+                if (sub != null) sub.setLipSync(mode);
+            }));
+            sx2 += lw[i];
+        }
+        var sub = remote.subscriber();
+        double hold = sub == null ? 0 : sub.lipHoldMs();
+        String now = hold > 20 ? String.format(java.util.Locale.ROOT, " Now: the picture waits %.2f s for its sound.", hold / 1000) : " Now: the quickest picture.";
+        String lipExplain = switch (prefs.lipSync) {
+            case 1 -> "Every picture as soon as it's in; its sound comes about a third of a second later.";
+            case 2 -> "The picture always waits for its sound, even while you use the screen." + now;
+            default -> "In step with its sound while you watch; the quickest picture while you use it." + now;
+        };
+        List<net.minecraft.text.OrderedText> ll = textRenderer.wrapLines(Text.literal(lipExplain), pw - pad * 2);
+        for (int i = 0; i < Math.min(2, ll.size()); i++) g.drawText(textRenderer, ll.get(i), px + pad, y + 33 + i * 10, UiKit.TEXT_MUTED, false);
 
         // footer: theater + done
         int by = py + ph - 30, bh = 20;
