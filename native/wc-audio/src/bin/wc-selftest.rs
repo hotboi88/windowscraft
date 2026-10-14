@@ -1680,13 +1680,17 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         return;
     }
     let _ = h.call("status", "status", 15000);
-    // test apps: a, b (ordinary), x (excluded by name), h (excluded by folder)
+    // test apps, each in a folder of its own (like installed apps): a, b, c (ordinary), x (excluded
+    // by name), h (excluded by folder)
     let apps = std::path::Path::new("C:\\wcapps");
-    let _ = std::fs::create_dir_all(apps.join("exc"));
-    for n in ["wcapp_a", "wcapp_b", "wcapp_c", "wcapp_x"] {
-        let _ = std::fs::copy(dir.join("wc-selftest.exe"), apps.join(format!("{n}.exe")));
+    let app = |n: &str| -> std::path::PathBuf {
+        let sub = if n == "wcapp_h" { "exc".to_string() } else { n.trim_start_matches("wcapp_").to_string() };
+        apps.join(sub).join(format!("{n}.exe"))
+    };
+    for n in ["wcapp_a", "wcapp_b", "wcapp_c", "wcapp_x", "wcapp_h"] {
+        let _ = std::fs::create_dir_all(app(n).parent().unwrap());
+        let _ = std::fs::copy(dir.join("wc-selftest.exe"), app(n));
     }
-    let _ = std::fs::copy(dir.join("wc-selftest.exe"), apps.join("exc").join("wcapp_h.exe"));
     let tag = std::process::id();
     let setup = |h: &Helper, idx: i32, key: &str| {
         h.send(&format!("profilekey {idx} {key}"));
@@ -1724,14 +1728,24 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     // starts a test app the normal way (as from a monitor's own Start menu); its window
     let start = |exe: &std::path::Path| -> Option<HWND> {
         let stem = exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let _ = Command::new(exe).spawn();
-        (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w) == stem) })
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new(exe).current_dir("C:\\").creation_flags(0x0800_0000).spawn(); // (no console window)
+        // (in a box its title could carry Sandboxie's [#] marker: that's checked on its own)
+        (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains(&stem) && class_name(*w) != "ConsoleWindowClass") })
     };
     let finish = |w: Option<HWND>| if let Some(w) = w { let p = pid(w); let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output(); };
     let seat = |h: &Helper, idx: i32| {
-        bring_forward(game);
-        unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); }
-        let r = h.call(&format!("seat {idx} 0.5 0.5 {}", game.0 as isize), "seated", 8000);
+        // (right after getting up, the helper can still be letting go: the game tries again too)
+        let mut r = Err(String::new());
+        for _ in 0..6 {
+            bring_forward(game);
+            unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); }
+            r = h.call(&format!("seat {idx} 0.5 0.5 {}", game.0 as isize), "seated", 8000);
+            if r.as_ref().map_or(false, |l| l.last().map_or(false, |x| x == "seated")) {
+                break;
+            }
+            sleep(500);
+        }
         sleep(700); // (the rule follows within ~100 ms)
         r
     };
@@ -1740,22 +1754,29 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let rb = now_rect(&h, mb.idx).unwrap_or(mb.r);
 
     // 1. not sitting anywhere: no rule, apps start normally
-    let w = start(&apps.join("wcapp_a.exe"));
+    let w = start(&app("wcapp_a"));
     rep.check("not sitting anywhere: no rule, apps start normally", w.is_some() && ini_forced().is_empty() && !in_box(&h, ma.idx).contains(&w.map_or(0, pid)),
         format!("window {:?} · rules {:?}", w.map(pid), ini_forced()));
     finish(w);
     // 2. each monitor its own box: sitting at A → A's box, on A
     let s = seat(&h, ma.idx);
     let rules = ini_forced();
-    rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {rules:?}"));
-    let wa = start(&apps.join("wcapp_a.exe"));
+    rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {} folders", rules.len()));
+    let mine: Vec<&String> = rules.iter().filter(|l| l.to_lowercase().contains("wcapps")).collect();
+    let low = |l: &String| l.to_lowercase().replace('/', "\\");
+    rep.check("…it covers the ordinary apps' folders, and is carved around the exceptions (not their folders, nor a folder above them)",
+        ["\\wcapps\\a", "\\wcapps\\b", "\\wcapps\\c"].iter().all(|f| mine.iter().any(|l| low(l).ends_with(f)))
+            && !mine.iter().any(|l| { let l = low(l); l.ends_with("\\wcapps") || l.ends_with("\\wcapps\\x") || l.ends_with("\\wcapps\\exc") }),
+        format!("{mine:?}"));
+    let wa = start(&app("wcapp_a"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
     rep.check("…an app you start there runs in A's box", wa.is_some() && ina.contains(&wa.map_or(0, pid)) && !inb.contains(&wa.map_or(0, pid)),
         format!("window {:?} · A's box {ina:?} · B's box {inb:?}", wa.map(pid)));
     rep.check("…and opens on monitor A", on(wa, &ra), format!("at {} (A {})", wa.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
+    rep.check("…looking like itself: no Sandboxie [#] marker in its title", wa.map_or(false, |w| !title(w).contains("[#]")), format!("title {:?}", wa.map(title)));
     // 3. exceptions stay out, while sitting there
-    let wx = start(&apps.join("wcapp_x.exe"));
-    let wh = start(&apps.join("exc").join("wcapp_h.exe"));
+    let wx = start(&app("wcapp_x"));
+    let wh = start(&app("wcapp_h"));
     let ina = in_box(&h, ma.idx);
     rep.check("an app on the always-normal list stays out of the box", wx.is_some() && !ina.contains(&wx.map_or(0, pid)), format!("{:?} · A's box {ina:?}", wx.map(pid)));
     rep.check("an app in an excepted folder (WindowsCraft, the game, anti-cheat games) stays out too", wh.is_some() && !ina.contains(&wh.map_or(0, pid)), format!("{:?}", wh.map(pid)));
@@ -1766,7 +1787,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let s = seat(&h, mb.idx);
     let rules = ini_forced();
     rep.check("sitting at monitor B: the rule moved to B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {rules:?}"));
-    let wb = start(&apps.join("wcapp_b.exe"));
+    let wb = start(&app("wcapp_b"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
     rep.check("…an app started at B runs in B's box, on B", wb.is_some() && inb.contains(&wb.map_or(0, pid)) && !ina.contains(&wb.map_or(0, pid)) && on(wb, &rb),
         format!("window {:?} at {} · A's box {ina:?} · B's box {inb:?}", wb.map(pid), wb.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
@@ -1776,7 +1797,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     h.send(&format!("isolate {} 0", mb.idx));
     sleep(600);
     let rules = ini_forced();
-    let w = start(&apps.join("wcapp_c.exe"));
+    let w = start(&app("wcapp_c"));
     rep.check("own copies turned off on every monitor: no rule left, even sitting there; apps start normally", rules.is_empty() && w.is_some() && !in_box(&h, mb.idx).contains(&w.map_or(0, pid)),
         format!("rules {rules:?} · {:?}", w.map(pid)));
     finish(w);
@@ -1784,11 +1805,12 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     h.send(&format!("isolate {} 1", mb.idx));
     sleep(600);
     let before = ini_forced();
+    rep.note(format!("(sitting at B, own copies back on: {} folders)", before.len()));
     h.stop();
     sleep(1500);
     let after = ini_forced();
     rep.check("the helper stopping while you sit there leaves no rule behind", !before.is_empty() && after.is_empty(), format!("before {before:?} · after {after:?}"));
-    let w = start(&apps.join("wcapp_c.exe"));
+    let w = start(&app("wcapp_c"));
     let off = w.is_some() && ini_forced().is_empty();
     rep.check("…and apps start normally afterwards", off, format!("{:?}", w.map(pid)));
     finish(w);
@@ -1799,8 +1821,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         setup(&h2, m.idx, &ka);
         exceptions(&h2);
         sleep(300);
-        let _ = seat(&h2, m.idx);
+        let sr = seat(&h2, m.idx);
         let before = ini_forced();
+        rep.note(format!("(sat down for this check: {sr:?} · {} folders)", before.len()));
         h2.kill();
         sleep(800);
         let stuck = ini_forced();
@@ -1822,8 +1845,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
                 setup(&h4, m.idx, &kb);
                 exceptions(&h4);
                 sleep(300);
-                let _ = seat(&h4, m.idx);
+                let sr = seat(&h4, m.idx);
                 let before = ini_forced();
+                rep.note(format!("(sat down for this check: {sr:?} · {} folders)", before.len()));
                 let _ = d.kill();
                 let cleared = wait_for(8000, || ini_forced().is_empty());
                 rep.check("the game going away while you sit there leaves no rule behind", !before.is_empty() && cleared, format!("before {before:?} · cleared {cleared}"));
@@ -1839,8 +1863,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
             exceptions(&h5);
             sleep(300);
             let rm = now_rect(&h5, m.idx).unwrap_or(m.r);
-            let r = h5.call(&format!("boxlaunch\t{}\t{}\t", m.idx, apps.join("wcapp_c.exe").display()), "boxlaunched", 20000);
-            let c = (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w) == "wcapp_c") });
+            let r = h5.call(&format!("boxlaunch\t{}\t{}\t", m.idx, app("wcapp_c").display()), "boxlaunched", 20000);
+            let c = (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains("wcapp_c") && class_name(*w) != "ConsoleWindowClass") });
             sleep(600);
             let boxed = c.map_or(false, |w| in_box(&h5, m.idx).contains(&pid(w)));
             rep.check("\"Open another copy here\" starts it in that monitor's box, on that monitor", boxed && on(c, &rm), format!("{r:?} · {:?} at {}", c.map(pid), c.map(|w| fmt(&rect_of(w))).unwrap_or_default()));

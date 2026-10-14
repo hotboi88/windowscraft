@@ -1872,6 +1872,7 @@ fn hook_thread() {
 
 /// Mouse and keyboard back: no clip; with `to_game`, the pointer over the game and the game in front.
 fn give_back(to_game: bool) {
+    let t0 = Instant::now();
     SEATED.store(false, Ordering::SeqCst);
     ALT.store(false, Ordering::SeqCst);
     KEYS_KEPT.lock().unwrap().clear();
@@ -1895,10 +1896,17 @@ fn give_back(to_game: bool) {
             if GetWindowRect(game, &mut r).is_ok() {
                 let _ = SetCursorPos((r.left + r.right) / 2, (r.top + r.bottom) / 2);
             }
+            let tf = Instant::now();
             if !foreground(game) {
                 eprintln!("info=the game didn't get the keyboard back straight away");
             }
+            if tf.elapsed() > Duration::from_millis(300) {
+                eprintln!("info=bringing the game back in front took {} ms", tf.elapsed().as_millis());
+            }
         }
+    }
+    if t0.elapsed() > Duration::from_millis(300) {
+        eprintln!("info=giving the mouse and keyboard back took {} ms", t0.elapsed().as_millis());
     }
     // a full-screen video there stays above its taskbar once you're back in the game: right away,
     // and again a few times while Windows settles who's in front (off the hook thread)
@@ -2461,6 +2469,9 @@ fn unseat() {
         let t0 = Instant::now();
         while HOOK_THREAD.load(Ordering::SeqCst) != 0 && t0.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(5));
+        }
+        if HOOK_THREAD.load(Ordering::SeqCst) != 0 {
+            eprintln!("info=getting up: the input thread is still busy after 2 s");
         }
     }
     unsafe {
@@ -3050,13 +3061,23 @@ fn box_name(idx: i32) -> String {
 
 fn isolated(idx: i32) -> bool { ISOLATE.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(false) }
 
-fn sbie_start(args: &[&str]) -> Option<std::process::Output> {
-    let d = sbie_dir()?;
+/// Runs Sandboxie's launcher (never while a force rule could box it: only for "open another copy",
+/// closing and wiping a box). Its output isn't kept: a program it starts would hold that open.
+fn sbie_start(args: &[&str]) -> bool {
+    let Some(d) = sbie_dir() else { return false };
     let mut c = std::process::Command::new(d.join("Start.exe"));
-    c.args(args);
+    c.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     use std::os::windows::process::CommandExt;
     c.creation_flags(0x0800_0000);
-    c.output().ok()
+    let Ok(mut child) = c.spawn() else { return false };
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(15) {
+        if let Ok(Some(_)) = child.try_wait() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true // (still starting the program: fine)
 }
 
 // The rules live in Sandboxie.ini, in our own sections only ([WC…]); they're written straight into
@@ -3148,13 +3169,16 @@ fn app_folders() -> Vec<String> {
     v
 }
 
-/// A monitor's box: no border, no [#] in titles, kept (never wiped on its own), its exceptions —
-/// and, while you sit at it, its force rule.
-fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
-    let mut s: Vec<(String, String)> = [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "n"), ("AutoDelete", "n"), ("ConfigLevel", "10")]
-        .iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+/// Programs that always run normally (never in a box), lower-case names.
+fn breakout_exes() -> Vec<String> {
     let mut exes: Vec<String> = ALWAYS_NORMAL.iter().map(|s| s.to_string()).collect();
     exes.extend(ISO_EXES.lock().unwrap().iter().cloned());
+    exes.iter().map(|e| e.to_lowercase()).collect()
+}
+
+/// Folders whose programs always run normally: the game's, Java's, anti-cheat games', yours,
+/// WindowsCraft's, Sandboxie's, Windows'.
+fn breakout_dirs() -> Vec<String> {
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
     if let Ok(me) = std::env::current_exe() {
         if let Some(d) = me.parent() {
@@ -3167,14 +3191,141 @@ fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     if let Ok(w) = std::env::var("WINDIR") {
         dirs.push(w);
     }
-    for e in exes {
+    dirs
+}
+
+// Sandboxie can't make an exception inside a forced folder (its driver has none: a program in a
+// forced folder is always boxed). So the rule is "carved": an app folder is forced whole unless an
+// exception lives in it — then its sub-folders are, one by one, around the exception. Worked out
+// in the background and kept; new folders are picked up on the next pass.
+static CARVED: Mutex<Option<(String, Instant, Vec<String>)>> = Mutex::new(None);
+static CARVING: AtomicBool = AtomicBool::new(false);
+const CARVE_DEPTH: u32 = 4;
+
+fn norm_dir(p: &str) -> String {
+    p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+fn carve_sig() -> String {
+    format!("{:?}|{:?}|{:?}", app_folders(), breakout_dirs(), breakout_exes())
+}
+
+/// None: nothing in here is an exception (force all of it). Some(list): the parts to force.
+fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, ex: &[String], names: &std::collections::HashSet<String>, budget: &mut usize) -> Option<Vec<String>> {
+    use std::os::windows::fs::MetadataExt;
+    if ex.iter().any(|e| e == lower) {
+        return Some(Vec::new());
+    }
+    let pre = format!("{lower}\\");
+    let ex_inside = ex.iter().any(|e| e.starts_with(&pre));
+    if (depth > CARVE_DEPTH || *budget == 0) && !ex_inside {
+        return None;
+    }
+    *budget = budget.saturating_sub(1);
+    let Ok(rd) = std::fs::read_dir(dir) else { return if ex_inside { Some(Vec::new()) } else { None } };
+    let mut kids = Vec::new();
+    for e in rd.flatten() {
+        let Ok(md) = e.metadata() else { continue };
+        if md.is_dir() {
+            if md.file_attributes() & 0x400 == 0 {
+                kids.push(e.path()); // (not links: they point elsewhere)
+            }
+        } else if names.contains(&e.file_name().to_string_lossy().to_lowercase()) {
+            return Some(Vec::new()); // an always-normal program lives here: none of this folder
+        }
+    }
+    let mut parts = Vec::new();
+    let mut clean = !ex_inside;
+    for k in kids {
+        let kl = format!("{pre}{}", k.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+        match carve_walk(&k, &kl, depth + 1, ex, names, budget) {
+            None => parts.push(k.display().to_string()),
+            Some(v) => {
+                clean = false;
+                parts.extend(v);
+            }
+        }
+    }
+    if clean { None } else { Some(parts) }
+}
+
+fn carve() -> Vec<String> {
+    let t0 = Instant::now();
+    let ex: Vec<String> = breakout_dirs().iter().map(|d| norm_dir(d)).filter(|d| !d.is_empty()).collect();
+    let names: std::collections::HashSet<String> = breakout_exes().into_iter().collect();
+    let mut budget = 40_000usize;
+    let mut out: Vec<String> = Vec::new();
+    for root in app_folders() {
+        let rl = norm_dir(&root);
+        if ex.iter().any(|e| rl == *e || rl.starts_with(&format!("{e}\\"))) {
+            continue;
+        }
+        match carve_walk(std::path::Path::new(root.trim_end_matches('\\')), &rl, 0, &ex, &names, &mut budget) {
+            None => out.push(root.trim_end_matches('\\').to_string()),
+            Some(v) => out.extend(v),
+        }
+    }
+    // (an app folder inside another: once is enough)
+    out.sort_by_key(|d| norm_dir(d));
+    out.dedup_by_key(|d| norm_dir(d));
+    let mut kept: Vec<String> = Vec::new();
+    for d in out {
+        let l = norm_dir(&d);
+        if !kept.iter().any(|k| l.starts_with(&format!("{}\\", norm_dir(k)))) {
+            kept.push(d);
+        }
+    }
+    eprintln!("info=own copies: {} app folders to box ({} ms{})", kept.len(), t0.elapsed().as_millis(), if budget == 0 { ", stopped looking deeper" } else { "" });
+    kept
+}
+
+/// The folders whose programs land in the box while you sit there.
+fn force_folders() -> Vec<String> {
+    let sig = carve_sig();
+    if let Some((s, at, v)) = CARVED.lock().unwrap().as_ref() {
+        if *s == sig {
+            if at.elapsed() > Duration::from_secs(60) {
+                refresh_carve();
+            }
+            return v.clone();
+        }
+    }
+    let v = carve();
+    *CARVED.lock().unwrap() = Some((sig, Instant::now(), v.clone()));
+    v
+}
+
+/// Works the folders out again in the background (when they've changed, the rule is rewritten).
+fn refresh_carve() {
+    if CARVING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let sig = carve_sig();
+        let v = carve();
+        let changed = CARVED.lock().unwrap().as_ref().map_or(true, |(s, _, old)| *s != sig || *old != v);
+        *CARVED.lock().unwrap() = Some((sig, Instant::now(), v));
+        CARVING.store(false, Ordering::SeqCst);
+        if changed {
+            ISO_DIRTY.store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+/// A monitor's box: no border, no [#] in titles, kept (never wiped on its own), its exceptions —
+/// and, while you sit at it, its force rule.
+fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
+    let mut s: Vec<(String, String)> = [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "-"), ("AutoDelete", "n"), ("ConfigLevel", "10")]
+        .iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    // (these keep programs a boxed app starts out of the box; forced folders are carved around them)
+    for e in breakout_exes() {
         s.push(("BreakoutProcess".into(), e));
     }
-    for d in dirs {
+    for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
     }
     if forced {
-        for d in app_folders() {
+        for d in force_folders() {
             s.push(("ForceFolder".into(), d));
         }
     }
@@ -3319,7 +3470,7 @@ fn box_launch(idx: i32, file: &str, params: &str) -> bool {
         args.extend(split_args(params));
     }
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    sbie_start(&refs).is_some()
+    sbie_start(&refs)
 }
 
 fn split_args(s: &str) -> Vec<String> {
@@ -4355,6 +4506,7 @@ fn main() {
                 *ISO_DIRS.lock().unwrap() = groups.get(1).cloned().unwrap_or_default();
                 *ISO_APPDIRS.lock().unwrap() = groups.get(2).cloned().unwrap_or_default();
                 ISO_DIRTY.store(true, Ordering::SeqCst);
+                refresh_carve(); // (worked out now, before anyone sits down)
                 for b in BOXES_MADE.lock().unwrap().clone() {
                     ensure_box(&b);
                 }

@@ -43,7 +43,7 @@ Check "the config tool is there" (Test-Path $ini) $ini
 foreach ($b in "WCMon1", "WCMon2") {
     & $ini set $b Enabled y | Out-Null
     & $ini set $b BorderColor "#000000,off,0" | Out-Null
-    & $ini set $b BoxNameTitle n | Out-Null
+    & $ini set $b BoxNameTitle "-" | Out-Null
     & $ini set $b AutoDelete n | Out-Null
     & $ini set $b ConfigLevel 10 | Out-Null
 }
@@ -221,11 +221,11 @@ function StartGui($exe, $t) {
     $stem = [IO.Path]::GetFileNameWithoutExtension($exe)
     $null = Start-Process $exe -ArgumentList "--window", $t -PassThru
     $w = $null; $end = (Get-Date).AddSeconds(12)
-    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -eq $t -or $_.MainWindowTitle -eq $stem } | Select-Object -First 1 }
+    while (-not $w -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300; $w = Get-Process | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Select-Object -First 1 }
     if (-not $w) { return "no window" }
     $b = BoxOf $w.Id
-    if ($w.MainWindowTitle -eq $stem) { Note "($stem in box '$b' came without its arguments)" }
-    Get-Process | Where-Object { $_.MainWindowTitle -eq $t -or $_.MainWindowTitle -eq $stem } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Note "($stem → box '$b', window title '$($w.MainWindowTitle)')"
+    Get-Process | Where-Object { $_.MainWindowTitle -like "*$t*" -or $_.MainWindowTitle -like "*$stem*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     return $b
 }
 $n0 = StartGui "C:\wcforce\wcapp_a.exe" "wc-plain"
@@ -240,8 +240,10 @@ Note "with exceptions: result $r · $(IniNow)"
 $h1 = StartGui "C:\wcforce\exc\wcapp_h.exe" "wc-force-h"
 $b1 = StartGui "C:\wcforce\wcapp_b.exe" "wc-force-b"
 $a2 = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-a2"
-Check "a program in an exceptions folder isn't boxed, even inside a forced folder" ($h1 -eq "") "box '$h1'"
-Check "a program named as an exception isn't boxed" ($b1 -eq "") "box '$b1'"
+# (Sandboxie's driver has no exceptions inside a forced folder — Breakout* only covers programs a
+#  boxed program starts — so WindowsCraft carves its forced folders around the exceptions instead;
+#  recorded here, not a check)
+Note "Breakout* inside a forced folder: excepted folder → box '$h1', excepted name → box '$b1'"
 Check "…while others still are" ($a2 -eq "WCMon1") "box '$a2'"
 $t0 = Get-Date
 $r = SetBoxRules @()
