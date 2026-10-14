@@ -79,7 +79,7 @@ Cobbleverse itself, a 4K in-game monitor, sound by ear.
    and decoded pictures matched in order) is unreliable — FFmpeg drops the pictures it reads while
    sizing up the stream (`-fflags nobuffer`), which shifts the match (it read ~1.2 s at 17/s); use
    `view.e2e_testpattern` (timing strip) minus `view.arrival_age`. Standalone tools:
-   `declat.py`-style real-time feeding, matched from the end.
+   `tools/bench/declat.py` (pictures) and `audlat.py` (sound), fed in real time, matched from the end.
 6. **Extra render frame** (copy in frame N, show in N+1): same-frame test switch 13.0 → 5.6 ms
    (own wall), 12.2 → 4.0 ms (viewer). Prototype on the branch: copy on arrival into a slot the
    render thread sets aside (pump thread) — own wall 13.0/16.7/17.6 → 6.2/10.6/11.7 ms, viewer
