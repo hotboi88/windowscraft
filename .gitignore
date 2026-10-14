@@ -6,7 +6,7 @@ run-server/
 out/
 .idea/
 *.iml
-native/wc-audio/target/
+native/wc-audio/target*/
 dist/*.zip
 run-iris/
 run-bench/

@@ -146,7 +146,7 @@ ask him for results before building on assumptions.
 
 ## 6. What's next (in this order)
 
-### Step 0 — measurement only (approved, not started)
+### Step 0 — measurement only (approved; instrumentation done — results and ranked list in docs/STEP0.md)
 Add instrumentation, **off by default**, then measure. No optimizations in this step.
 - Host and peer separately.
 - Median / P95 / P99 end-to-end latency and frame times.

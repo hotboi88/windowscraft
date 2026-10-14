@@ -257,7 +257,9 @@ public final class StreamSubscriber implements FrameSource {
         boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
         List<String> cmd = new ArrayList<>(List.of(Ffmpeg.executable().toString(), "-hide_banner", "-loglevel", "warning", "-nostats",
                 "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "500000"));
-        if (windows) cmd.addAll(List.of("-hwaccel", "auto"));
+        // (Step 0 experiment, dev only: windowscraft.exp.hwaccel = none / auto / d3d11va / cuda …)
+        String hw = System.getProperty("windowscraft.exp.hwaccel", "auto");
+        if (windows && !hw.equals("none")) cmd.addAll(List.of("-hwaccel", hw));
         cmd.addAll(List.of("-f", "mpegts", "-i", "pipe:0",
                 // frames out as soon as they're decoded: no frame-rate conversion, no duplicates
                 "-map", "0:v:0", "-vf", (light ? "fps=30," : "") + "scale=" + width + ":" + height + ",format=bgra", "-fps_mode", "passthrough",

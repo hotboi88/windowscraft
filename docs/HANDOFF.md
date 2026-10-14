@@ -62,9 +62,20 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
   sandbox-probe (Sandboxie probe + `wc-selftest --sandbox` end-to-end, 23 checks), movie-test,
   windows-stress.
 
-## Next: Step 0 — measurement only (approved, not started)
+## Step 0 — measurement: instrumentation done, first findings in docs/STEP0.md (14 Oct 2026)
 
-No optimizations yet. Add instrumentation, off by default, and measure host and peer separately:
+Measured on the owner's RTX 4060 PC (one-PC benchmark, tools/bench). Branches (not yet on GitHub —
+that PC has no GitHub sign-in): `step0-measurement` (the measuring + benchmark, off by default) and
+`step0-fix-prototypes` (measured fixes, waiting for the owner's OK). Top findings: stream sound
+almost entirely dropped on Windows (sound input stamped per packet with the wall clock; fix on the
+branch); every new viewer falsely drops to 30 fps and turns the sharer down (fix on the branch);
+direct GPU sharing switched off on the owner's PC by a likely false "black" verdict; lip sync
+256 ms (sound late); the viewer's decoder holds ~130 ms. The Windows self-test ran on the real PC:
+64/70 passed (see STEP0.md). Still to measure: a real Tailscale peer, Cobbleverse frame rate,
+a 4K monitor, sound by ear.
+
+Original Step 0 brief (kept for reference) — no optimizations yet. Add instrumentation, off by
+default, and measure host and peer separately:
 - median / P95 / P99 latency and frame times;
 - input timing incl. server-thread and render-thread delays;
 - capture, encode, transport, decode and present timings;

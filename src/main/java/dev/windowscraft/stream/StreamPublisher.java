@@ -595,8 +595,17 @@ public final class StreamPublisher {
                 }
             }
         });
+        // (dev only, for looking into a stream: windowscraft.exp.dumpTs=<file> keeps its first 4 MB)
+        java.io.OutputStream dump = null;
+        String dumpTo = System.getProperty("windowscraft.exp.dumpTs");
+        if (dumpTo != null) try { dump = new java.io.FileOutputStream(dumpTo); } catch (IOException ignored) {}
+        long dumped = 0;
         int n;
         while (running && (n = out.read(buf)) > 0) {
+            if (dump != null) {
+                try { dump.write(buf, 0, n); dumped += n; } catch (IOException ignored) {}
+                if (dumped > (4 << 20)) { try { dump.close(); } catch (IOException ignored) {} dump = null; }
+            }
             long w0 = System.nanoTime();
             synchronized (net) {
                 net.write(buf, 0, n);
