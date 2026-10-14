@@ -1,0 +1,46 @@
+# The two-player test on a real dedicated server: Alice shares, Bob watches (picture, sound,
+# delay, A/V offset), asks to use Alice's screen and uses it from the chair. Linux, software
+# OpenGL, no sound card: sound is decoded and counted, not played.
+name: Two-player test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/main/java/dev/windowscraft/stream/**'
+      - 'src/main/java/dev/windowscraft/relay/**'
+      - 'src/main/java/dev/windowscraft/net/**'
+      - 'src/main/java/dev/windowscraft/client/**'
+      - 'src/testmod/java/dev/windowscraft/autotest/MultiplayerTest.java'
+      - 'tools/mptest/**'
+      - '.github/workflows/mp-test.yml'
+  workflow_dispatch:
+
+jobs:
+  mp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Display and build
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb ffmpeg > /dev/null
+          gradle build -x test --no-daemon -q
+          gradle downloadAssets --no-daemon -q
+      - name: Two players
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          DISPLAY=:99 GRADLE_FLAGS= OUT=build/mptest tools/mptest/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mp-test
+          path: build/mptest/
