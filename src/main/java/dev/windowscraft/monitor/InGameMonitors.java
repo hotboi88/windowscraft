@@ -223,7 +223,8 @@ public final class InGameMonitors {
                 SourceInfo src = sourceFor(m, n);
                 LIVE.put(src.id(), m);
                 NUMBER.put(src.id(), n);
-                b.profileKey(m, d.tablet ? "tablet" : d.id.toString().substring(0, 8));
+                Sandbox.push(m, d);
+                Sandbox.refresh();
                 DisplayManager.get().start(d, src, settingsFor(d));
                 if (d.tablet) hint(mc, "Your tablet is on");
                 else hint(mc, name(src) + " is on · sit down with " + TheaterMode.keyName() + " to use it · sneak + "
@@ -330,6 +331,7 @@ public final class InGameMonitors {
                 WindowsCraftClient.LOGGER.info("In-game monitor {} moved: {} → {}", fresh.index(), old, fresh);
                 LIVE.put(e.getKey(), fresh);
                 if (seatedMon != null && seatedMon.index() == fresh.index()) seatedMon = fresh;
+                Sandbox.pushAll();
                 restartShares(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1)));
             }
         })).exceptionally(t -> null);
@@ -352,6 +354,38 @@ public final class InGameMonitors {
     }
 
     // ---- moving windows ------------------------------------------------------------------------------
+
+    // ---- own copies of apps (each monitor's own Sandboxie box) ----
+
+    public static void setOwnCopies(Display d, boolean on) {
+        d.ownCopies = on;
+        DisplayManager.get().save();
+        Mon m = monitorOf(d);
+        if (m != null) Sandbox.push(m, d);
+    }
+
+    /** Another copy of that program, in this monitor's box. */
+    public static CompletableFuture<Boolean> openCopyHere(Display d, String exe) {
+        Mon m = monitorOf(d);
+        MonitorBackend b = backend();
+        if (m == null || b == null || exe == null || exe.isEmpty()) return CompletableFuture.completedFuture(false);
+        guardFocus();
+        return b.boxLaunch(m, exe, "").exceptionally(t -> false);
+    }
+
+    public static CompletableFuture<Void> resetCopies(Display d) {
+        Mon m = monitorOf(d);
+        MonitorBackend b = backend();
+        if (m == null || b == null) return CompletableFuture.completedFuture(null);
+        return b.boxReset(m).exceptionally(t -> null);
+    }
+
+    public static CompletableFuture<List<MonitorBackend.Win>> copiesOn(Display d) {
+        Mon m = monitorOf(d);
+        MonitorBackend b = backend();
+        if (m == null || b == null || !Sandbox.ready()) return CompletableFuture.completedFuture(List.of());
+        return b.boxApps(m).exceptionally(t -> List.of());
+    }
 
     public static CompletableFuture<List<MonitorBackend.Win>> windowsOn(Display d) {
         Mon m = monitorOf(d);

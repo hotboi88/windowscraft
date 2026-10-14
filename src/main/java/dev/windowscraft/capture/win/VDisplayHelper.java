@@ -50,7 +50,7 @@ public final class VDisplayHelper implements MonitorBackend {
             // on it gets an error to show, instead of U silently doing nothing)
             Process proc = process;
             long secs = command.startsWith("install") || command.startsWith("uninstall") || command.startsWith("repair") ? 600 : command.startsWith("add") ? 90
-                    : command.startsWith("setmode") || command.startsWith("seat") || command.startsWith("remove") ? 40 : 20;
+                    : command.startsWith("setmode") || command.startsWith("seat") || command.startsWith("remove") || command.startsWith("box") ? 40 : 20;
             CompletableFuture.delayedExecutor(secs, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
                 if (f.isDone()) return;
                 WindowsCraftClient.LOGGER.warn("The in-game monitor helper didn't answer \"{}\" in {} s: restarting it", command.split("[ \t]")[0], secs);
@@ -256,6 +256,32 @@ public final class VDisplayHelper implements MonitorBackend {
 
     @Override public void beat() { send("beat"); }
     @Override public void profileKey(Mon m, String key) { send("profilekey " + m.index() + " " + key); }
+    @Override public void isolate(Mon m, boolean on) { send("isolate " + m.index() + " " + (on ? 1 : 0)); }
+    @Override
+    public void isolationExceptions(List<String> programs, List<String> folders) {
+        StringBuilder sb = new StringBuilder("isoexclude");
+        for (String p : programs) sb.append('\t').append(p.replace('\t', ' '));
+        sb.append("\t|");
+        for (String f : folders) sb.append('\t').append(f.replace('\t', ' '));
+        send(sb.toString());
+    }
+    @Override
+    public CompletableFuture<String> sandboxStatus() {
+        return call("sbiestatus", "sbie").thenApply(l -> { String[] p = last(l).split(" "); return p.length > 1 ? p[1] : "missing"; });
+    }
+    @Override
+    public CompletableFuture<String> installSandbox(Path installer) {
+        return call("installsbie " + installer.toAbsolutePath(), "installsbie").thenApply(l -> {
+            String[] p = last(l).split(" ");
+            return p.length > 3 ? (p[1].equals("ok") ? p[3] : p[1]) : "failed";
+        });
+    }
+    @Override
+    public CompletableFuture<Boolean> boxLaunch(Mon m, String file, String params) {
+        return call("boxlaunch\t" + m.index() + "\t" + file.replace('\t', ' ') + "\t" + params.replace('\t', ' '), "boxlaunched").thenApply(l -> last(l).endsWith("ok"));
+    }
+    @Override public CompletableFuture<Void> boxReset(Mon m) { return call("boxreset " + m.index(), "boxreset").thenApply(l -> null); }
+    @Override public CompletableFuture<List<Win>> boxApps(Mon m) { return call("boxapps " + m.index(), "windows-end").thenApply(VDisplayHelper::wins); }
     @Override
     public CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) {
         return call("ownbrowser\t" + m.index() + "\t" + exePath.replace('\t', ' ').replace('\n', ' '), "ownbrowser").thenApply(l -> last(l).endsWith("ok"));

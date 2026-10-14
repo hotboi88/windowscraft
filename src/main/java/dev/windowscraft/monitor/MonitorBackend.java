@@ -100,6 +100,22 @@ public interface MonitorBackend {
     /** "The game is still here" while seated or pointing. */
     void beat();
 
+    // ---- own copies of apps (Sandboxie boxes, one per monitor) ----
+    /** "Own copies" for that monitor on or off. */
+    default void isolate(Mon m, boolean on) {}
+    /** Programs (file names) and folders that never go in a box. */
+    default void isolationExceptions(List<String> programs, List<String> folders) {}
+    /** "ok", "missing" or "stopped". */
+    default CompletableFuture<String> sandboxStatus() { return CompletableFuture.completedFuture("missing"); }
+    /** Installs Sandboxie-Plus quietly (one permission prompt). Completes with the status after. */
+    default CompletableFuture<String> installSandbox(Path installer) { return CompletableFuture.completedFuture("missing"); }
+    /** Starts a program in that monitor's box (another copy of it). */
+    default CompletableFuture<Boolean> boxLaunch(Mon m, String file, String params) { return CompletableFuture.completedFuture(false); }
+    /** Closes everything in that monitor's box and wipes it (its logins and data). */
+    default CompletableFuture<Void> boxReset(Mon m) { return CompletableFuture.completedFuture(null); }
+    /** The windows of programs running in that monitor's box. */
+    default CompletableFuture<List<Win>> boxApps(Mon m) { return CompletableFuture.completedFuture(List.of()); }
+
     /** Which wall this monitor is (its own browser copies are kept per wall). */
     default void profileKey(Mon m, String key) {}
 

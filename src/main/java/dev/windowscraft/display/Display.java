@@ -34,6 +34,8 @@ public final class Display {
     public final java.util.Map<UUID, String> picked = new java.util.LinkedHashMap<>(), blocked = new java.util.LinkedHashMap<>();
     /** The size you chose for its in-game monitor (0: the usual 1920 × 1080). */
     public int monitorW, monitorH;
+    /** In-game monitor: apps started at it run as its own copies (its own Sandboxie box). */
+    public boolean ownCopies = true;
 
     // runtime only
     Share share;

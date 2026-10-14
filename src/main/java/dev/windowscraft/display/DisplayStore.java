@@ -96,6 +96,7 @@ final class DisplayStore {
                 } else {
                     d.picked.putAll(d.controllers); // (from before: the people you'd allowed)
                 }
+                if (o.has("ownCopies")) d.ownCopies = o.get("ownCopies").getAsBoolean();
                 if (o.has("monitorW")) {
                     d.monitorW = o.get("monitorW").getAsInt();
                     d.monitorH = o.get("monitorH").getAsInt();
@@ -141,6 +142,7 @@ final class DisplayStore {
             o.addProperty("access", d.access);
             writePeople(o, "picked", d.picked);
             writePeople(o, "blocked", d.blocked);
+            if (!d.ownCopies) o.addProperty("ownCopies", false);
             if (d.monitorW > 0) {
                 o.addProperty("monitorW", d.monitorW);
                 o.addProperty("monitorH", d.monitorH);

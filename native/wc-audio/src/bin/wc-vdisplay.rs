@@ -4281,6 +4281,32 @@ fn main() {
                 sbie_start(&["/reload"]);
             }
             Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
+            Some("installsbie") => {
+                // Sandboxie-Plus, quietly (Windows asks for permission once): its own window never starts
+                let file = line.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                let (r, code) = run_elevated(&file, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS");
+                for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+                    unsafe {
+                        let path = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+                        let mut k = HKEY::default();
+                        if RegOpenKeyExW(root, PCWSTR(path.as_ptr()), None, KEY_READ | KEY_SET_VALUE, &mut k) == ERROR_SUCCESS {
+                            for name in ["SandboxiePlus_AutoRun", "SandboxieControl", "SandMan"] {
+                                let n = wide(name);
+                                let _ = RegDeleteValueW(k, PCWSTR(n.as_ptr()));
+                            }
+                            let _ = RegCloseKey(k);
+                        }
+                    }
+                }
+                let t0 = Instant::now();
+                while r == "ok" && sbie_status() != "ok" && t0.elapsed() < Duration::from_secs(20) {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                for pr in ["SandMan.exe"] {
+                    let _ = std::process::Command::new("taskkill").args(["/IM", pr, "/F"]).output();
+                }
+                say(&format!("installsbie {r} {code} {}", sbie_status()));
+            }
             Some("boxlaunch") => {
                 let f: Vec<&str> = line.split('\t').collect();
                 let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);

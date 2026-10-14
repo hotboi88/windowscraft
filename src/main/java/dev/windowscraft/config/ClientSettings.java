@@ -26,6 +26,8 @@ public final class ClientSettings {
     private static boolean deskView = true;
     /** How close you were (× the fitted distance) when you last got up from a screen you use / one you watch. */
     private static double seatZoom = -1, watchZoom = -1;
+    /** Programs you picked to always run normally (never as a monitor's own copy). */
+    private static java.util.List<String> isoPrograms = new java.util.ArrayList<>();
     private static boolean offscreenPause = true, distanceFpsLimit = true, lightMipmaps = false; // (every picture sharp, from up close or far)
     private static int tabletW = 1920, tabletH = 1080; // (wide, like a monitor)
 
@@ -52,6 +54,7 @@ public final class ClientSettings {
                     if (o.has("distanceFpsLimit")) distanceFpsLimit = o.get("distanceFpsLimit").getAsBoolean();
                     if (o.has("deskView")) deskView = o.get("deskView").getAsBoolean();
                     if (o.has("seatZoom")) seatZoom = o.get("seatZoom").getAsDouble();
+                    if (o.has("isoPrograms")) { isoPrograms = new java.util.ArrayList<>(); for (var e : o.getAsJsonArray("isoPrograms")) isoPrograms.add(e.getAsString()); }
                     if (o.has("watchZoom")) watchZoom = o.get("watchZoom").getAsDouble();
                     if (o.has("uploadKbps")) uploadKbps = Math.max(1000, o.get("uploadKbps").getAsInt());
                     if (o.has("fewerMipmaps")) lightMipmaps = o.get("fewerMipmaps").getAsBoolean(); // (a new key: the old default was on)
@@ -136,6 +139,9 @@ public final class ClientSettings {
     public static int uploadKbps() { get(); return uploadKbps; }
     public static boolean deskView() { get(); return deskView; }
     public static void setDeskView(boolean v) { get(); deskView = v; set(current); }
+    public static java.util.List<String> isoPrograms() { get(); return java.util.List.copyOf(isoPrograms); }
+    public static void setIsoPrograms(java.util.List<String> v) { get(); isoPrograms = new java.util.ArrayList<>(v); set(current); }
+
     /** The zoom you left a screen at (-1: never yet). */
     public static double seatZoom(boolean using) { get(); return using ? seatZoom : watchZoom; }
     public static void setSeatZoom(boolean using, double z) {
@@ -173,6 +179,9 @@ public final class ClientSettings {
         o.addProperty("uploadKbps", uploadKbps);
         o.addProperty("deskView", deskView);
         o.addProperty("seatZoom", seatZoom);
+        com.google.gson.JsonArray iso = new com.google.gson.JsonArray();
+        for (String p : isoPrograms) iso.add(p);
+        o.add("isoPrograms", iso);
         o.addProperty("watchZoom", watchZoom);
         o.addProperty("tabletWide", tabletW);
         o.addProperty("tabletHigh", tabletH);
