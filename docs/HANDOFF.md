@@ -108,6 +108,17 @@ full FFmpeg restart on quality change; no guest relative mouse.
   right after `register`. `GpuShare.delivering()` counts announced pictures (waiting for a first
   picture as well would wait for ever). Seen in his modpack (Alice's copy, 1080p60 bench window):
   "wall via direct GPU sharing", 43–50 pictures/s.
+- Resized shares on GPU sharing: "free <slot> <n>" names which pictures (the n-th "ntslots"; the
+  game's `GpuShare.Slots.version`) — a "free" still on its way for the pictures before a resize
+  could hand the game's new, unchecked picture to the helper (the very race above). And the wall
+  keeps the last picture until the first one at the new size is copied (`GpuShareTexture`
+  `allocPending`: its texture is resized in that frame); before, each resize showed the resting
+  CPU capture's picture (up to 1 s old) for a frame or two, uploaded at 8–10 ms on the render
+  thread. Tested in his modpack: the bench window resized every 4 s (`BW_RESIZE=4`; ~10 resizes in the 40 s measured): GPU-shared pictures 54/s throughout, never
+  "read back empty"; CPU uploads at a resize 11 (7.5–9.8 ms each) → 0; game 175 / 60 → 196 / 68 fps
+  (average / 1 % low; partly run-to-run noise).
+- The self-test waits 25 s (was 10) for Task Manager to open: its first start on a fresh CI
+  runner took longer (the windows-selftest flake: "Task Manager … it didn't open", first round only).
 - A shared screen that's live but paused (nobody watching for 8 s): its CPU capture rests and its
   wall copy may be smaller (`StreamPublisher.paused()` in `DisplayManager.tickGpuSharing`).
   Before, a paused stream still counted as "a CPU stream needs frames": full size, full rate, on

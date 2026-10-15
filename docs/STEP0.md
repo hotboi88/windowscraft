@@ -156,6 +156,11 @@ for its own wall — the "capture" figure in the share's perf line:
 | live and watched, GPU capture+encode | 1/s | 1/s |
 | live and watched, CPU stream (`-Dwindowscraft.gpuCapture=false`) | full size, full rate | full size, 42–48/s (back from 1/s as the viewer arrives) |
 
+Resizing a shared window (his modpack, the bench window ¾ as big and back every 4 s, ~10 resizes
+in the 40 s measured): direct GPU sharing all along, 54 pictures/s on the wall; the wall's CPU
+uploads at a resize 11 × 7.5–9.8 ms → none (it keeps the last picture until one at the new size
+is there); game 174.8 / 59.6 → 196.0 / 67.9 fps (average / 1 % low), longest frame 47.9 → 39.7 ms.
+
 Dev bench (tools/bench, `BOB_DELAY=90`: the viewer arrives after the stream has paused): the viewer
 decoded 1920×1080 at 52/s (GPU stream) and 48/s (CPU stream) after the resume; the sharer's game
 119 fps average / 86 1 % low, all helpers 0.23 cores.
