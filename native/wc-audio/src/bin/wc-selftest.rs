@@ -1156,7 +1156,9 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     let tr = rect_of(tray);
     let (mx, my) = center(&tr);
     let visible = !tray.0.is_null() && unsafe { IsWindowVisible(tray) }.as_bool() && inside(&prim, mx, my) && root_at(mx, my) == tray;
-    rep.check("your main taskbar is still there", visible, format!("{} at {}", if tray.0.is_null() { "none" } else { "Shell_TrayWnd" }, fmt(&tr)));
+    let over = root_at(mx, my);
+    rep.check("your main taskbar is still there", visible, format!("{} at {}{}", if tray.0.is_null() { "none" } else { "Shell_TrayWnd" }, fmt(&tr),
+        if over != tray { format!("; over its middle: {} \"{}\"", class_name(over), title(over)) } else { String::new() }));
 
     // ---- 8. new windows open where you opened them
     // from your desk: a new app opens on your desk (not on a monitor)
