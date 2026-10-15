@@ -15,6 +15,12 @@
 //!   text                            (diagnostics) print "text=<...>" of the focused control
 //!   slot <n> <command>              any of the above for person n (their own target, keys and
 //!                                   buttons, on their own thread); "slot <n> end" lets them go
+//!   slot <n> pad <buttons> <lt> <rt> <lx> <ly> <rx> <ry>
+//!                                   person n's game controller (XInput's buttons and values): a
+//!                                   controller of their own on this PC, through ViGEmBus (if it's
+//!                                   installed), for any game that reads controllers — also one
+//!                                   that isn't in front. Unplugged when they go; let go of (left
+//!                                   plugged in) when nothing comes for 3 s.
 //! stderr: "error=..." / "info=...". Exits when stdin closes or the parent exits.
 
 use std::io::{self, BufRead, Write};
@@ -46,6 +52,72 @@ struct Input {
     last_click: Option<(u32, Instant, i32, i32)>,
     held_scancodes: Vec<u32>,
     hovering: bool,
+}
+
+/// One person's own Xbox controller on this PC (ViGEmBus), made with their first "pad".
+struct Pad {
+    target: Option<vigem_client::Xbox360Wired<vigem_client::Client>>,
+    unavailable: bool,
+    last: Instant,
+    held: bool,
+}
+
+impl Pad {
+    fn new() -> Pad {
+        Pad { target: None, unavailable: false, last: Instant::now(), held: false }
+    }
+
+    /// "pad <buttons> <lt> <rt> <lx> <ly> <rx> <ry>"
+    fn set(&mut self, p: &[&str]) {
+        let n = |i: usize| p.get(i).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+        let g = vigem_client::XGamepad {
+            buttons: vigem_client::XButtons(n(1) as u16),
+            left_trigger: n(2).clamp(0, 255) as u8,
+            right_trigger: n(3).clamp(0, 255) as u8,
+            thumb_lx: n(4).clamp(-32768, 32767) as i16,
+            thumb_ly: n(5).clamp(-32768, 32767) as i16,
+            thumb_rx: n(6).clamp(-32768, 32767) as i16,
+            thumb_ry: n(7).clamp(-32768, 32767) as i16,
+        };
+        if self.target.is_none() && !self.unavailable {
+            match vigem_client::Client::connect() {
+                Ok(c) => {
+                    let mut t = vigem_client::Xbox360Wired::new(c, vigem_client::TargetId::XBOX360_WIRED);
+                    match t.plugin().and_then(|_| t.wait_ready()) {
+                        Ok(()) => {
+                            eprintln!("info=a game controller of their own (a virtual Xbox controller)");
+                            self.target = Some(t);
+                        }
+                        Err(e) => {
+                            eprintln!("info=couldn't add a game controller ({e:?})");
+                            self.unavailable = true;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("info=no game controllers for guests: ViGEmBus isn't there ({e:?})");
+                    self.unavailable = true;
+                }
+            }
+        }
+        if let Some(t) = &mut self.target {
+            if let Err(e) = t.update(&g) {
+                eprintln!("info=a game controller update didn't go through ({e:?})");
+            }
+        }
+        self.last = Instant::now();
+        self.held = g != vigem_client::XGamepad::default();
+    }
+
+    /// Nothing from them for 3 s (their connection went): let go of everything, stay plugged in.
+    fn tick(&mut self) {
+        if self.held && self.last.elapsed() > std::time::Duration::from_secs(3) {
+            if let Some(t) = &mut self.target {
+                let _ = t.update(&vigem_client::XGamepad::default());
+            }
+            self.held = false;
+        }
+    }
 }
 
 fn lp(x: i32, y: i32) -> LPARAM {
@@ -447,17 +519,24 @@ fn main() {
                             let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
                         }
                         let mut mine = Input::new();
+                        let mut pad = Pad::new();
                         loop {
                             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                                 Ok(l) => {
                                     let q: Vec<&str> = l.split_whitespace().collect();
-                                    handle(&mut mine, &q);
+                                    if q.first() == Some(&"pad") {
+                                        pad.set(&q); // (no window needed: the controller is the whole PC's)
+                                    } else {
+                                        handle(&mut mine, &q);
+                                    }
                                 }
                                 // (nothing from them: still, the moment you use that app yourself, let go)
                                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => mine.yield_to_owner(),
                                 Err(_) => break,
                             }
+                            pad.tick();
                         }
+                        drop(pad); // (unplugged)
                         mine.blur();
                         mine.leave();
                         mine.detach();

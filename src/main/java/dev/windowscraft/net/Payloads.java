@@ -68,7 +68,34 @@ public final class Payloads {
 
     /** What a player does with someone else's screen (only reaches its owner if they allowed it). */
     public static final int OP_MOVE = 0, OP_BUTTON_DOWN = 1, OP_BUTTON_UP = 2, OP_WHEEL = 3, OP_KEY_DOWN = 4, OP_KEY_UP = 5,
-            OP_SIT = 6, OP_STAND = 7, OP_POINT = 8, OP_UNPOINT = 9, OP_LAST = 9;
+            OP_SIT = 6, OP_STAND = 7, OP_POINT = 8, OP_UNPOINT = 9, OP_PAD = 10, OP_LAST = 10;
+
+    /**
+     * A game controller's whole state in one {@link #OP_PAD} message (x, y, a, f): the left stick
+     * as x and y, the buttons (Xbox layout: XInput's bits) and both triggers (0..255) in a, the
+     * right stick in f — 12 bits each, a whole number a float carries exactly. Sticks are -1..1,
+     * up positive (as XInput has it).
+     */
+    public record GamePad(int buttons, int leftTrigger, int rightTrigger, float lx, float ly, float rx, float ry) {
+        public static final GamePad NEUTRAL = new GamePad(0, 0, 0, 0, 0, 0, 0);
+
+        public float x() { return clamp(lx); }
+        public float y() { return clamp(ly); }
+        public int a() { return (buttons & 0xFFFF) | (Math.max(0, Math.min(255, leftTrigger)) << 16) | (Math.max(0, Math.min(255, rightTrigger)) << 24); }
+        public float f() { return q(rx) * 4096 + q(ry); }
+
+        public static GamePad of(float x, float y, int a, float f) {
+            int packed = Math.max(0, Math.min(4096 * 4096 - 1, Math.round(f)));
+            return new GamePad(a & 0xFFFF, (a >>> 16) & 0xFF, (a >>> 24) & 0xFF, clamp(x), clamp(y), unq(packed >> 12), unq(packed & 0xFFF));
+        }
+
+        /** XInput's -32768..32767 for a stick value. */
+        public static int axis(float v) { return Math.max(-32768, Math.min(32767, Math.round(clamp(v) * 32767f))); }
+
+        private static float clamp(float v) { return Float.isFinite(v) ? Math.max(-1f, Math.min(1f, v)) : 0f; }
+        private static int q(float v) { return Math.round((clamp(v) + 1f) / 2f * 4095f); }
+        private static float unq(int q) { return q == 2048 || q == 2047 ? 0f : q / 4095f * 2f - 1f; }
+    }
 
     /** Client → server: I'm using that screen (x, y: the pointer, 0..1 across and down its picture; a: button/scancode; f: wheel). */
     public record Control(UUID displayId, int op, float x, float y, int a, float f) implements CustomPayload {

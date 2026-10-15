@@ -164,6 +164,7 @@ public final class ScreenControl {
 
     /** Each frame: which wall is under your view; with Alt held its pointer follows your view. */
     public static void frame(MinecraftClient mc) {
+        GuestPad.frame(mc.world == null ? null : TheaterMode.controlledRemote()); // (your controller, while you sit at someone's screen)
         RemoteDisplays.Remote working = TheaterMode.controlledRemote() != null ? TheaterMode.controlledRemote() : usingR;
         workingStream = working != null && working.info != null && System.nanoTime() - remoteWorkedAt < 4_000_000_000L
                 ? working.info.streamId() : null;
@@ -335,7 +336,9 @@ public final class ScreenControl {
             ClientNet.control(r.id, Payloads.OP_MOVE, p[0], p[1], 0, 0);
         } else if (now - remoteBeatAt > 1_000_000_000L) {
             remoteBeatAt = now;
-            ClientNet.control(r.id, Payloads.OP_POINT, p[0], p[1], 0, 0);
+            // (a = 1: still sitting there — after a hitch long enough for the owner to have let you
+            // go, you're sat down again, keys and controller and all)
+            ClientNet.control(r.id, Payloads.OP_POINT, p[0], p[1], TheaterMode.controlledRemote() == r ? 1 : 0, 0);
         }
     }
 
@@ -486,13 +489,14 @@ public final class ScreenControl {
             }
             LANE.execute(() -> {
                 Route r = route(mc, display);
-                if (r != null && r.monitor()) { // an in-game monitor: right here, right now
+                // an in-game monitor: right here, right now (and a game controller on any wall: it's the PC's, not the window's)
+                if (r != null && (r.monitor() || c.op() == Payloads.OP_PAD)) {
                     RELAY_WAIT.since(arrived);
                     String name = r.allowed().get(from);
                     if (name == null) return; // (not someone you allowed)
                     long t0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
                     try {
-                        handleGuest(mc, r.d(), from, name, c, true);
+                        handleGuest(mc, r.d(), from, name, c, r.monitor());
                     } finally {
                         GUEST_APPLY.since(t0);
                     }
@@ -524,8 +528,8 @@ public final class ScreenControl {
         Display d = DisplayManager.get().byId(c.displayId());
         if (d == null || !controllable(d) || !d.controllers.containsKey(m.from())) return;
         boolean monitor = dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source());
-        if (monitor && LANE_ON) { // (the lane does monitors: one order for all their input)
-            LANE.execute(() -> handleGuest(mc, d, m.from(), m.fromName(), c, true));
+        if ((monitor || c.op() == Payloads.OP_PAD) && LANE_ON) { // (the lane does monitors: one order for all their input; and controllers)
+            LANE.execute(() -> handleGuest(mc, d, m.from(), m.fromName(), c, monitor));
             return;
         }
         handleGuest(mc, d, m.from(), m.fromName(), c, monitor);
@@ -535,6 +539,11 @@ public final class ScreenControl {
     private static void handleGuest(MinecraftClient mc, Display d, UUID from, String fromName, Payloads.Control c, boolean monitor) {
         Map<UUID, Guest> guests = GUESTS.computeIfAbsent(d.id, k -> new java.util.concurrent.ConcurrentHashMap<>());
         Guest g = guests.get(from);
+        // their heartbeat says they're still sitting there, but they were let go (a hitch of more
+        // than 3 s on their side): they sit down again
+        if (c.op() == Payloads.OP_POINT && c.a() == 1 && (g == null || !g.seated))
+            c = new Payloads.Control(c.displayId(), Payloads.OP_SIT, c.x(), c.y(), 0, 0);
+        if (c.op() == Payloads.OP_PAD && g == null) return; // (a controller only once they've sat down: see below)
         if (c.op() == Payloads.OP_UNPOINT || c.op() == Payloads.OP_STAND) {
             if (g == null) return;
             if (c.op() == Payloads.OP_STAND || !g.seated) dropGuest(d, from);
@@ -543,7 +552,8 @@ public final class ScreenControl {
         if (g == null) guests.put(from, g = new Guest(fromName));
         // "… is using your screen" only once they really do something with it (a click, a key,
         // sitting down) — never for just looking at it or pointing past it
-        boolean doing = c.op() == Payloads.OP_BUTTON_DOWN || c.op() == Payloads.OP_WHEEL || c.op() == Payloads.OP_SIT || c.op() == Payloads.OP_KEY_DOWN;
+        boolean doing = c.op() == Payloads.OP_BUTTON_DOWN || c.op() == Payloads.OP_WHEEL || c.op() == Payloads.OP_SIT || c.op() == Payloads.OP_KEY_DOWN
+                || c.op() == Payloads.OP_PAD && c.a() != 0;
         if (doing) {
             Long last = ANNOUNCED.get(from);
             if (last == null || System.nanoTime() - last > 60_000_000_000L) {
@@ -555,6 +565,15 @@ public final class ScreenControl {
         }
         g.seen = System.nanoTime();
         if (c.op() != Payloads.OP_POINT && c.op() != Payloads.OP_KEY_DOWN && c.op() != Payloads.OP_KEY_UP) g.active = g.seen;
+        if (c.op() == Payloads.OP_PAD) {
+            // their game controller: a controller of their own on this PC (ViGEmBus), for whatever
+            // game reads controllers — also while that game isn't in front. Only from the chair, like keys.
+            if (!g.seated) return;
+            Payloads.GamePad p = Payloads.GamePad.of(c.x(), c.y(), c.a(), c.f());
+            g.send("pad " + p.buttons() + " " + p.leftTrigger() + " " + p.rightTrigger() + " " + Payloads.GamePad.axis(p.lx()) + " "
+                    + Payloads.GamePad.axis(p.ly()) + " " + Payloads.GamePad.axis(p.rx()) + " " + Payloads.GamePad.axis(p.ry()));
+            return;
+        }
         double x = Math.max(0, Math.min(1, c.x())), y = Math.max(0, Math.min(1, c.y()));
         if (monitor) {
             guestOnMonitor(d, g, c, x, y);

@@ -23,3 +23,6 @@ WindowsCraft is licensed under the GNU Lesser General Public License v3.0 or lat
 
 - `wc-audio.exe` is built from `native/wc-audio` (this repository), using the `wasapi`
   Rust crate (MIT) and Microsoft's `windows` crates (MIT/Apache-2.0).
+  `wc-input.exe` (same folder) also uses the `vigem-client` crate (MIT) to give someone using
+  your screen a game controller of their own through ViGEmBus — Nefarius' virtual gamepad
+  driver, which WindowsCraft doesn't bundle or install (without it, that part is off).
