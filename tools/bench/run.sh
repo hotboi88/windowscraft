@@ -4,6 +4,7 @@
 # server on 25565/25585 can keep running.
 #   tools/bench/run.sh SOURCE HEIGHT FPS SECONDS [NAME]     SOURCE = pattern | window | idle
 # SHARER_EXTRA / VIEWER_EXTRA="-Dwindowscraft.exp.…" pass experiment switches to one player only;
+# SERVER_EXTRA="-Dwindowscraft.exp.netsim=rtt=100,jitter=40,loss=1": the viewers far away (relay/NetSim).
 # VIEWERS=2: a second viewer (Carol, run-carol) watches too, starting with Bob.
 # BOB_DELAY=SECONDS (default 8): the viewer starts that long after the sharer (60+: the stream has
 # paused with nobody watching before the viewer arrives).
@@ -37,7 +38,7 @@ if [ "$SRC" = window ] || [ "$SRC" = monitor ]; then
   BW=$!
   sleep 4
 fi
-gradle runMpServer -q -PwcArgs="-Dwindowscraft.measure=$S@$((WARM + 35))" > "$OUT/server-$NAME.log" 2>&1 &
+gradle runMpServer -q -PwcArgs="-Dwindowscraft.measure=$S@$((WARM + 35)) ${SERVER_EXTRA:-}" > "$OUT/server-$NAME.log" 2>&1 &
 for i in $(seq 1 240); do grep -q "Done (" "$OUT/server-$NAME.log" 2>/dev/null && break; sleep 1; done
 SHARER_ROLE=sharer; [ "$SRC" = idle ] && SHARER_ROLE=idle
 TWO=; [ "${VIEWERS:-1}" = 2 ] && TWO="-Dwindowscraft.bench.viewerDir=run-bob,run-carol"

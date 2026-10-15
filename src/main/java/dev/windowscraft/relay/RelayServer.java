@@ -543,6 +543,15 @@ public final class RelayServer implements AutoCloseable {
      * would stay held on the screen).
      */
     private void controlLine(UUID viewer, String streamId, Stream st, String line) {
+        NetSim sim = NetSim.UP;
+        if (sim != null) { // (dev: their input over a bad line)
+            sim.laterReliable(() -> controlLineNow(viewer, streamId, st, line)); // (TCP: late, never lost)
+            return;
+        }
+        controlLineNow(viewer, streamId, st, line);
+    }
+
+    private void controlLineNow(UUID viewer, String streamId, Stream st, String line) {
         ControlRoute route = control;
         String[] p = line.trim().split(" ");
         if (route == null || p.length != 7 || !p[0].equals("C")) return;

@@ -81,33 +81,44 @@ public final class UdpLink implements AutoCloseable {
                 p.setLength(buf.length);
                 socket.receive(p);
                 if (p.getLength() < 9) continue;
-                ByteBuffer b = ByteBuffer.wrap(buf, 0, p.getLength());
-                byte type = b.get();
-                Session s = sessions.get(b.getLong());
-                if (s == null || s.closed) continue;
-                s.heard(p.getSocketAddress());
-                switch (type) {
-                    case HELLO -> {}
-                    case ACK -> { if (b.remaining() >= 4) s.acked = b.getInt(); }
-                    case PING -> {
-                        if (b.remaining() >= 8) {
-                            ByteBuffer r = ByteBuffer.allocate(9).put(PONG).putLong(b.getLong());
-                            s.sendRaw(r.array(), 9);
-                        }
-                    }
-                    case NAK -> {
-                        if (b.remaining() < 2) continue;
-                        int n = b.getShort() & 0xFFFF;
-                        for (int i = 0; i < n && b.remaining() >= 6; i++) {
-                            int from = b.getInt(), count = b.getShort() & 0xFFFF;
-                            for (int k = 0; k < count && s.retx.size() < 4000; k++) s.retx.add(from + k);
-                        }
-                    }
-                    default -> {}
+                NetSim sim = NetSim.UP;
+                if (sim != null) { // (dev: a bad line from the viewer)
+                    byte[] copy = java.util.Arrays.copyOf(buf, p.getLength());
+                    SocketAddress from = p.getSocketAddress();
+                    sim.later(() -> received(copy, copy.length, from));
+                    continue;
                 }
+                received(buf, p.getLength(), p.getSocketAddress());
             } catch (IOException e) {
                 if (!open) return;
             }
+        }
+    }
+
+    private void received(byte[] buf, int len, SocketAddress fromAddress) {
+        ByteBuffer b = ByteBuffer.wrap(buf, 0, len);
+        byte type = b.get();
+        Session s = sessions.get(b.getLong());
+        if (s == null || s.closed) return;
+        s.heard(fromAddress);
+        switch (type) {
+            case HELLO -> {}
+            case ACK -> { if (b.remaining() >= 4) s.acked = b.getInt(); }
+            case PING -> {
+                if (b.remaining() >= 8) {
+                    ByteBuffer r = ByteBuffer.allocate(9).put(PONG).putLong(b.getLong());
+                    s.sendRaw(r.array(), 9);
+                }
+            }
+            case NAK -> {
+                if (b.remaining() < 2) return;
+                int n = b.getShort() & 0xFFFF;
+                for (int i = 0; i < n && b.remaining() >= 6; i++) {
+                    int from = b.getInt(), count = b.getShort() & 0xFFFF;
+                    for (int k = 0; k < count && s.retx.size() < 4000; k++) s.retx.add(from + k);
+                }
+            }
+            default -> {}
         }
     }
 
@@ -253,9 +264,18 @@ public final class UdpLink implements AutoCloseable {
         void sendRaw(byte[] d, int len) {
             SocketAddress to = peer;
             if (to == null || closed) return;
+            lastSendNanos = System.nanoTime();
+            NetSim sim = NetSim.DOWN;
+            if (sim != null) { // (dev: a bad line to the viewer)
+                sim.later(() -> sendNow(d, len, to));
+                return;
+            }
+            sendNow(d, len, to);
+        }
+
+        private void sendNow(byte[] d, int len, SocketAddress to) {
             try {
                 socket.send(new DatagramPacket(d, len, to));
-                lastSendNanos = System.nanoTime();
             } catch (IOException e) {
                 LOG.debug("UDP send failed: {}", e.toString());
             }
