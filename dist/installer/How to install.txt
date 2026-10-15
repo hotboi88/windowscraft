@@ -1,4 +1,9 @@
-WindowsCraft 0.15.7 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.8 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.8: sitting down at a monitor puts the cursor where you were pointing and keeps it
+on that monitor, also on a busy PC (the game could let go of the cursor late and leave it at the
+monitor's edge, free to slip off). The Windows self-test now saves its report on the desktop you
+actually see (with OneDrive, that's a different folder) and checks the monitor's picture too.
 
 New in 0.15.7: windows you share on a wall (not just in-game monitors) now also use direct GPU
 sharing with Sodium; with 0.15.6 they could still fall back to copying through the CPU. While

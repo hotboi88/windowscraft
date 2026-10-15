@@ -144,6 +144,17 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## Windows self-test on the owner's PC again (15 Oct, 0.15.7 → 0.15.8)
+
+| | 13 Oct | 15 Oct, 0.15.7 | after the fixes (0.15.8) |
+|---|---|---|---|
+| passed | 64 / 70 | 61 / 65 (Task Manager skipped: elevated here) | 65 / 67 |
+| main taskbar; a guest's held key in your typing | fail | pass | pass |
+| sitting down: cursor where you pointed | pass | **fail** (2048,1080 for 2880,1620: the game let go late) | pass |
+| full-screen Edge after Esc | fail | fail (a "now syncing" sign-in dialog took the F11) | pass (InPrivate) |
+| a monitor's picture is captured | — | skipped (no wc-capture.exe in the zip) | pass |
+| an app that only runs once comes over (and back) | fail | fail | fail — the test's own bring-forward never reaches the helper here (foreground lock?); to check with Discord |
+
 ## 0.15.7: shared windows on GPU sharing; a paused stream lets the capture rest (RTX 4060, 15 Oct)
 
 Shared window (the 1080p60 bench window on a wall, not an in-game monitor), sharer's CPU captures

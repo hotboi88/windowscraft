@@ -60,7 +60,8 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
   is built that way (`--target-dir target-static`).
 - Mod: `gradle build` → build/libs/windowscraft-<ver>+mc1.21.1.jar (version in gradle.properties).
 - Package: zip of dist/installer/*, the jar, and a "Windows self-test" folder (wc-selftest.exe,
-  wc-input.exe, wc-vdisplay.exe, dist/selftest/Run self-test.bat) → dist/WindowsCraft-<ver>.zip.
+  wc-input.exe, wc-vdisplay.exe, wc-capture.exe, dist/selftest/Run self-test.bat) →
+  dist/WindowsCraft-<ver>.zip (forward slashes in the zip: made with Python's zipfile).
 - CI (GitHub Actions, Windows runners, no real GPU): windows-selftest, windows-game-test,
   sandbox-probe (Sandboxie probe + `wc-selftest --sandbox` end-to-end, 23 checks), movie-test,
   windows-stress.
@@ -97,6 +98,35 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 "rewind" issue); extra render frame; A/V sync off 100–350 ms; 10 Mb/s cap and periodic IDR
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
+
+## 0.15.8 (15 Oct): the self-test on the owner's PC, and what it found
+
+Run on his PC (Windows 11 Home 25H2, build 26200; CI is Server 2025, 26100) three times:
+61/65 → 64/67 → 65/67. Fixed:
+- **Sitting down: the cursor where you pointed, and held on the monitor.** The game lets go of
+  its hold on the cursor when it stops being in front (drops the clip, puts the cursor back where
+  it took it from); wc-vdisplay put it back only at 40/90/180 ms after `seat`. On his busier PC
+  the game let go later: the cursor ended on the monitor's top edge (2048,1080 for a middle at
+  2880,1620) and, until the seated hook took the clip back, could leave the monitor. Now for 3 s a
+  dropped clip (seen by `seat`'s watcher, or taken back by the seated hook: `CLIP_RETAKEN`) is
+  taken back and the cursor goes back to where it last was (not onto the clip's edge; for 40 ms
+  after, unless your own mouse moves: `SEAT_MOVES`). Nothing else ever moves the cursor.
+- The self-test's full-screen Edge opens InPrivate: on a PC signed in with a Microsoft account a
+  new profile signs itself in and its "now syncing" dialog took the F11 (seen in a screenshot).
+- `Run self-test.bat` writes its report to the desktop Windows shows (OneDrive's, often), not
+  `%USERPROFILE%\Desktop`. The zip's self-test folder now has wc-capture.exe (check 16 ran "SKIP").
+- wc-vdisplay logs what comes to the front while you sit, and why an app that came forward
+  elsewhere stays there (for reports).
+Still failing on his PC only: "an app that only runs once … comes over to the monitor" (and its
+"…back to your desk", which follows). The click on the monitor's taskbar is seen (the shell, on
+this monitor), but the desk window coming forward never reaches the helper while seated. Likely
+the test itself: his PC has the usual foreground lock (ForegroundLockTimeout 200000), so the
+self-test's own SetForegroundWindow may not count as an app coming forward — a real app started
+from the taskbar is allowed to. The check now says whether Windows took the test's bring-forward.
+Real check for the owner: seated at a monitor, open Discord (already open on the desk) from the
+monitor's taskbar or Start → it should come over.
+wc-vdisplay.exe is still built with the GNU target (`cargo build --release --bin wc-vdisplay
+--target x86_64-pc-windows-gnu`, as before); wc-selftest/wc-capture with MSVC + crt-static.
 
 ## 0.15.7 (15 Oct): direct GPU sharing for shared windows too; less work while nobody watches
 
