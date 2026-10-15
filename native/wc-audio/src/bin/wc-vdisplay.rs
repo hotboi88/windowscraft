@@ -1182,6 +1182,12 @@ static ALT: AtomicBool = AtomicBool::new(false);
 static ESC_HELD: AtomicBool = AtomicBool::new(false);
 static SEAT_DEVICE: Mutex<String> = Mutex::new(String::new());
 static SEAT_IDX: AtomicI32 = AtomicI32::new(-1);
+/// Your own mouse's moves while you sit (counted: a move of yours is never undone).
+static SEAT_MOVES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The seated hook just took the clip back (someone had let go of it).
+static CLIP_RETAKEN: AtomicBool = AtomicBool::new(false);
+/// Which sitting-down this is (the cursor's watch after one ends when the next begins).
+static SEAT_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
 /// Where the cursor may go while you sit: the monitor, and every monitor joined to it in the game.
 static SEAT_CLIP: Mutex<RECT> = Mutex::new(RECT { left: 0, top: 0, right: 0, bottom: 0 });
@@ -1511,6 +1517,12 @@ fn button_of(msg: u32, data: u32) -> Option<(u8, bool)> {
 }
 
 unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 && SEATED.load(Ordering::SeqCst) && w.0 as u32 == WM_MOUSEMOVE {
+        let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
+        if m.flags & LLMHF_INJECTED_BIT == 0 || m.dwExtraInfo != OUR_INPUT {
+            SEAT_MOVES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
     if code == HC_ACTION as i32 && POINTING.load(Ordering::SeqCst) && !SEATED.load(Ordering::SeqCst) {
         let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
         if m.flags & LLMHF_INJECTED_BIT == 0 || m.dwExtraInfo != OUR_INPUT {
@@ -1832,6 +1844,7 @@ fn hook_thread() {
                     let inside = now.left >= clip.left && now.top >= clip.top && now.right <= clip.right && now.bottom <= clip.bottom;
                     if !inside {
                         let _ = ClipCursor(Some(&clip));
+                        CLIP_RETAKEN.store(true, Ordering::SeqCst); // (and the cursor goes back where it was: see `seat`)
                     }
                 }
                 // and in case a window slipped past the window events: anything new that isn't on
@@ -2055,23 +2068,62 @@ fn seat(idx: i32, device: &str, area: RECT, u: f64, v: f64, game: HWND) -> Resul
         if !SEATED.load(Ordering::SeqCst) && !game.0.is_null() {
             foreground(game); // Esc came in while the monitor's app was being brought forward
         }
-        // Minecraft lets go of its hold on the cursor once it isn't the foreground window any more:
-        // it puts the cursor back where it took it from and drops the clip (so the cursor ended up
-        // in the monitor's corner once clipped again). Put it back where it belongs after that.
-        for wait in [40u64, 90, 180] {
-            std::thread::sleep(Duration::from_millis(wait));
-            if !SEATED.load(Ordering::SeqCst) {
-                break;
-            }
-            let mut c = POINT::default();
-            let _ = GetCursorPos(&mut c);
-            let inside = c.x > clip.left && c.x < clip.right - 1 && c.y > clip.top && c.y < clip.bottom - 1;
-            if !inside {
-                let _ = SetCursorPos(x, y);
-            }
-            let _ = ClipCursor(Some(&clip));
-        }
     }
+    // Minecraft lets go of its hold on the cursor once it isn't the foreground window any more:
+    // it drops the clip and puts the cursor back where it took it from (so the cursor ended up in
+    // the monitor's corner once clipped again — and could leave the monitor until then). On a busy
+    // PC that comes later than a third of a second (seen on the owner's PC). For a few seconds,
+    // whoever lets go of the clip: it's taken back and the cursor goes back where it just was.
+    // Where it is otherwise is never touched (your mouse, or anything else, moves it as it likes).
+    let gen = SEAT_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    CLIP_RETAKEN.store(false, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let mut last = POINT { x, y };
+        let mut settle: Option<(Instant, u32)> = None;
+        while start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(10));
+            if !SEATED.load(Ordering::SeqCst) || SEAT_GEN.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let clip = *SEAT_CLIP.lock().unwrap();
+            unsafe {
+                let mut now = RECT::default();
+                // (an app's own, tighter clip inside the monitor is fine; never in the middle of a drag)
+                let held = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000) != 0;
+                let ours = GetClipCursor(&mut now).is_err()
+                    || now.left >= clip.left && now.top >= clip.top && now.right <= clip.right && now.bottom <= clip.bottom;
+                let retaken = CLIP_RETAKEN.swap(false, Ordering::SeqCst);
+                if !ours && !held || retaken {
+                    if !ours {
+                        let _ = ClipCursor(Some(&clip));
+                    }
+                    let _ = SetCursorPos(last.x, last.y);
+                    // (the one letting go may move the cursor a moment after dropping the clip)
+                    settle = Some((Instant::now() + Duration::from_millis(40), SEAT_MOVES.load(Ordering::SeqCst)));
+                    continue;
+                }
+                let mut c = POINT::default();
+                if GetCursorPos(&mut c).is_err() {
+                    continue;
+                }
+                if let Some((until, moves)) = settle {
+                    if Instant::now() < until && SEAT_MOVES.load(Ordering::SeqCst) == moves {
+                        if c.x != last.x || c.y != last.y {
+                            let _ = SetCursorPos(last.x, last.y);
+                        }
+                        continue;
+                    }
+                    settle = None;
+                }
+                // (a cursor pushed onto the clip's very edge is one being clipped in: not a spot to go back to)
+                let edge = c.x <= clip.left || c.x >= clip.right - 1 || c.y <= clip.top || c.y >= clip.bottom - 1;
+                if !edge {
+                    last = c;
+                }
+            }
+        }
+    });
     Ok(())
 }
 
@@ -3721,20 +3773,28 @@ fn on_window_activated(h: HWND) {
         return; // the shell itself, or a new window (that one goes there by itself)
     }
     let idx = SEAT_IDX.load(Ordering::SeqCst);
+    let Some(area) = monitor_area(idx) else { return };
+    let here = on_area(h, &area);
     if cursor_monitor() != Some(idx) {
+        if !here {
+            eprintln!("info=\"{}\" came forward elsewhere while you sit: stays (the cursor isn't on the monitor)", title(h));
+        }
         return; // (you're on your own screens: what you bring forward there stays there)
     }
     // only when you started it from the monitor's own Start or taskbar just now (not Alt+Tab,
     // not an app bringing itself forward)
     if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
+        if !here {
+            eprintln!("info=\"{}\" came forward elsewhere while you sit: stays (the monitor's Start or taskbar wasn't used just before)", title(h));
+        }
         return;
     }
-    let Some(area) = monitor_area(idx) else { return };
-    if on_area(h, &area) {
+    if here {
         *LAST_SEAT_FRONT.lock().unwrap() = h.0 as isize;
         return;
     }
     if !app_windows().contains(&h) {
+        eprintln!("info=\"{}\" came forward elsewhere while you sit: stays (not an app window)", title(h));
         return;
     }
     if sbie_dir().is_some() && !box_of(pid(h)).is_empty() {
@@ -3921,7 +3981,13 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
             keep_game_looking_active(root);
         }
         if !root.0.is_null() && SEATED.load(Ordering::SeqCst) {
-            if is_shell(root) && on_area(root, &*CLIP.lock().unwrap()) {
+            let (shell, here) = (is_shell(root), on_area(root, &*CLIP.lock().unwrap()));
+            // (for the report: what comes to the front while you sit, and how it's taken)
+            let mut wr = RECT::default();
+            let _ = unsafe { GetWindowRect(root, &mut wr) };
+            eprintln!("info=in front while seated: {} \"{}\" at {}{}{}", class_name(root), title(root), rect_str(&wr),
+                if shell { ", the shell" } else { "" }, if here { ", on this monitor" } else { "" });
+            if shell && here {
                 *SEAT_SHELL_AT.lock().unwrap() = Some(Instant::now()); // (you're using the monitor's own Start or taskbar)
             }
             on_window_shown(root, false);
