@@ -144,6 +144,17 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## A friend's game controller (15 Oct, 0.15.9, ViGEmBus 1.21.442, one PC)
+
+| | median | P95 | max |
+|---|---|---|---|
+| wc-input "pad" → XInput (what games read) | 1.0 ms | | 1.9 ms |
+| friend's game sends → XInput on the owner's PC (70 presses) | 2.0 ms | 3.3 ms | 4.5 ms |
+| friend's controller pressed → XInput on the owner's PC (via GLFW each frame, 39 presses) | 7.9 ms | | 354 ms (first) |
+
+A controller of their own appears 37 ms after their first message; let go of after 3 s without a
+message; unplugged when they go. Over the internet: plus their one-way delay.
+
 ## Two people watching (15 Oct, 0.15.8, dev bench `VIEWERS=2`, 1080p60 window, one PC)
 
 | | one viewer | two viewers |

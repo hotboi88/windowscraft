@@ -99,6 +99,44 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.9 (15 Oct): friends' game controllers (ViGEmBus)
+
+Someone sitting at one of your screens (allowed to use it) with a game controller gets a
+controller of their own on your PC: a virtual Xbox controller through ViGEmBus (Nefarius; the
+owner has 1.21.442 installed — the last release, archived Nov 2023, still works; WindowsCraft
+doesn't install it), for any game that reads controllers, also one that isn't in front — so they
+play while you play Minecraft. Without ViGEmBus nothing changes (wc-input logs it once).
+- Friend's side: `client.GuestPad`, each frame while seated at someone's screen
+  (`TheaterMode.controlledRemote()`): GLFW's first gamepad → XInput's buttons and values (GLFW's
+  stick Y is down-positive: flipped); sent on change (≤ every 8 ms, a hair of stick noise stays
+  home) and once a second; neutral when you get up or unplug it.
+- One message: `OP_PAD` (10) — left stick in x/y, buttons + triggers in a, right stick in f (12
+  bits each: `Payloads.GamePad`, unit-tested over the relay's text). Older servers' relays pass it
+  (the relay doesn't check ops); the game-server path needs `OP_LAST` 10 (0.15.9 servers).
+- Your side: `ScreenControl.handleGuest` → that guest's wc-input slot, `pad <buttons> <lt> <rt>
+  <lx> <ly> <rx> <ry>`; only once they sit (like keys), and on the guest lane for every wall (a
+  controller is the PC's, not a window's). wc-input: one `vigem-client` (MIT, talks to the bus
+  driver itself) Xbox 360 target per slot, made with the first `pad`, unplugged at `slot n end`;
+  nothing for 3 s → let go of (still plugged in).
+- Measured (one PC): helper → XInput 1.0 ms median (1.9 max); controller plugged in 37 ms after
+  the first message; the friend's game → XInput on yours 2.0 / 3.3 / 4.5 ms (median / P95 / max,
+  70 of 70 presses, `BENCH_INPUT=1 VIEWER_EXTRA=-Dwindowscraft.bench.pad=true`, timed by
+  `tools/bench/padcheck.py watch` + `match`). Through GLFW with a controller plugged in on the
+  viewer's side (`padcheck.py loop` plugs one in through wc-input's slot 99, `-Dwindowscraft.bench.pad=glfw`
+  reads it with GLFW each frame): 39 of 39 presses, physical press → XInput on the owner's side 7.9 ms
+  median (one 354 ms at the start); stick directions right.
+- Seated heartbeat: a seated guest's once-a-second `OP_POINT` now has a = 1 ("still sitting"); a
+  guest the owner had let go (nothing for 3 s: a hitch on their side) is sat down again by it.
+  Before, after such a hitch their keys (and now controller) went nowhere until they got up and
+  sat down again (found by the controller bench: the viewer stalled 6 s while loading). Older
+  owners ignore a.
+- Limits: Windows shows every controller to every game — two friends in two different controller
+  games at once can both reach a game that listens to all controllers (idea: Sandboxie's
+  ClosedFilePath per monitor box for the other controllers' devices — untried). Keyboard-and-mouse
+  games stay as before: window messages per person and window (most 3D mouse-look games read the
+  real devices and only answer the real mouse and keyboard). Not done: keyboard + mouse mapped to
+  a controller for friends without one.
+
 ## 0.15.8 (15 Oct): the self-test on the owner's PC, and what it found
 
 Run on his PC (Windows 11 Home 25H2, build 26200; CI is Server 2025, 26100) three times:

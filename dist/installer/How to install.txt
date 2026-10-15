@@ -1,4 +1,11 @@
-WindowsCraft 0.15.8 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.9 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.9: friends can play controller games on your screens while you play Minecraft. When
+someone you allowed sits at one of your screens with a game controller, it shows up on your PC as
+an Xbox controller of their own, for any game that supports controllers (also when that game isn't
+the window in front). Needs ViGEmBus on the PC sharing the screen (Nefarius' virtual gamepad
+driver; WindowsCraft doesn't install it). Measured on one PC: a button press reaches the game in
+about 2 ms, plus your friend's internet delay.
 
 New in 0.15.8: sitting down at a monitor puts the cursor where you were pointing and keeps it
 on that monitor, also on a busy PC (the game could let go of the cursor late and leave it at the
