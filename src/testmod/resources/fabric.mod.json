@@ -1,3 +1,3 @@
 { "schemaVersion": 1, "id": "windowscraft_autotest", "version": "0.0.0", "name": "WindowsCraft autotest", "environment": "*",
-  "entrypoints": { "main": ["dev.windowscraft.autotest.AutoTestServer"], "client": ["dev.windowscraft.autotest.AutoTest", "dev.windowscraft.autotest.MultiplayerTest", "dev.windowscraft.autotest.IrisTest", "dev.windowscraft.autotest.WinGameTest", "dev.windowscraft.autotest.BenchTest", "dev.windowscraft.autotest.BenchMonitor", "dev.windowscraft.autotest.UiShots"] },
+  "entrypoints": { "main": ["dev.windowscraft.autotest.AutoTestServer"], "client": ["dev.windowscraft.autotest.AutoTest", "dev.windowscraft.autotest.MultiplayerTest", "dev.windowscraft.autotest.IrisTest", "dev.windowscraft.autotest.WinGameTest", "dev.windowscraft.autotest.BenchTest", "dev.windowscraft.autotest.BenchMonitor", "dev.windowscraft.autotest.UiShots", "dev.windowscraft.autotest.ProdStart"] },
   "depends": { "windowscraft": "*" } }

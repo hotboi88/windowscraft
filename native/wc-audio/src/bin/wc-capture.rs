@@ -168,7 +168,10 @@ fn create_device(luid: Option<(u32, i32)>) -> windows::core::Result<(ID3D11Devic
     Ok((device.unwrap(), ctx.unwrap()))
 }
 
-fn make_slots(device: &ID3D11Device, w: i32, h: i32, nt_target: Option<windows::Win32::Foundation::HANDLE>) -> windows::core::Result<(Vec<ID3D11Texture2D>, Vec<u64>)> {
+/// Three shared pictures, each first filled with opaque black: the game can tell memory it really
+/// reads (opaque) from memory it took at a wrong size (it reads nothing but zeros) — even where
+/// OpenGL reports no errors at all (Sodium's "no error" context).
+fn make_slots(device: &ID3D11Device, ctx: &ID3D11DeviceContext, w: i32, h: i32, nt_target: Option<windows::Win32::Foundation::HANDLE>) -> windows::core::Result<(Vec<ID3D11Texture2D>, Vec<u64>)> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: w as u32,
         Height: h as u32,
@@ -209,8 +212,15 @@ fn make_slots(device: &ID3D11Device, w: i32, h: i32, nt_target: Option<windows::
             let h = unsafe { t.cast::<IDXGIResource>()?.GetSharedHandle()? };
             handles.push(h.0 as usize as u64);
         }
+        let mut rtv = None;
+        unsafe { device.CreateRenderTargetView(&t, None, Some(&mut rtv))? };
+        if let Some(rtv) = rtv {
+            unsafe { ctx.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]) };
+        }
         textures.push(t);
     }
+    let mut q = None;
+    gpu_selftest::wait_idle(device, ctx, &mut q); // (filled before anyone is told about them)
     Ok((textures, handles))
 }
 
@@ -496,7 +506,7 @@ fn run(a: Args) -> windows::core::Result<()> {
         }
         cpu = Some(c);
     } else {
-        let (s, handles) = make_slots(&device, slot_size.Width, slot_size.Height, nt_target)?;
+        let (s, handles) = make_slots(&device, &ctx, slot_size.Width, slot_size.Height, nt_target)?;
         slots = s;
         if !say(&mut out, &format!("{slots_word} {} {} {} {} {}", slot_size.Width, slot_size.Height, handles[0], handles[1], handles[2])) {
             return Ok(());
@@ -578,7 +588,7 @@ fn run(a: Args) -> windows::core::Result<()> {
                     break;
                 }
             } else {
-                let (s, h) = make_slots(&device, want.Width, want.Height, nt_target)?;
+                let (s, h) = make_slots(&device, &ctx, want.Width, want.Height, nt_target)?;
                 slots = s;
                 for f in free.iter() {
                     f.store(true, Ordering::SeqCst);

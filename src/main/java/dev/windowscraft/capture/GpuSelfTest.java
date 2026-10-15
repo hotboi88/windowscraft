@@ -37,8 +37,11 @@ public final class GpuSelfTest {
         // been the check misreading; if it's really black it's turned off again, with details)
         // (v4: the in-game black check can't be fooled by a read-back another mod catches, nor by a
         // screen that's black itself — a "black" verdict is tested again once; other results stay)
+        // (v5: the real cause of "black" with Sodium — its "no error" OpenGL context hid the driver
+        // refusing a memory size, so a wrong one was kept and read back empty; now the pictures
+        // themselves are checked. A "black" verdict is tested again once; other results stay)
         String gl = glVendor + " / " + glRenderer + " / " + glVersion;
-        String k = "v4 " + gl, before = "v3 " + gl;
+        String k = "v5 " + gl, before = "v4 " + gl;
         if (k.equals(key) && (result != null || running)) return result;
         key = k;
         result = null;

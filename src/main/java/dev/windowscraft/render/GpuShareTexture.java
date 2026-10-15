@@ -113,8 +113,46 @@ public final class GpuShareTexture extends AbstractTexture {
 
     private static long up(long v, long a) { return (v + a - 1) / a * a; }
 
+    /**
+     * Does this OpenGL context report errors? Sodium makes one that doesn't ("no error" context,
+     * on by default): every try below would look as if it worked.
+     */
+    private static boolean noErrorContext() {
+        return (GL11.glGetInteger(GL30.GL_CONTEXT_FLAGS) & 0x00000008) != 0; // GL_CONTEXT_FLAG_NO_ERROR_BIT_KHR
+    }
+
+    private boolean noErrors;
+
+    /** Is the picture's memory really there? Its middle and its very last pixel (the end of the memory) aren't all zeros. */
+    private boolean readable(int tex, int w, int h) {
+        int prevRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING), prevPack = GL11.glGetInteger(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING);
+        GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0);
+        if (probeFbo == 0) probeFbo = GL30.glGenFramebuffers();
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
+        GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, tex, 0);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        try (org.lwjgl.system.MemoryStack st = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.ByteBuffer px = st.malloc(4);
+            for (int[] p : new int[][]{{w / 2, h / 2}, {w - 1, h - 1}}) {
+                px.putInt(0, 0);
+                GL11.glReadPixels(p[0], p[1], 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, px);
+                if (px.getInt(0) == 0) return false;
+            }
+            return true;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
+            GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, prevPack);
+        }
+    }
+
     private void register(GpuShare.Slots s) {
         GpuCrashGuard.arm();
+        noErrors = noErrorContext();
+        // (a refused copy can't be noticed there either: the blit, which every driver takes)
+        if (noErrors && !blit) {
+            blit = true;
+            dev.windowscraft.WindowsCraftClient.LOGGER.info("Direct GPU sharing: this OpenGL context reports no errors (Sodium's \"no error\" context); checking the pictures themselves");
+        }
         copied = 0;
         unregister();
         while (GL11.glGetError() != 0) { /* start clean */ }
@@ -145,10 +183,15 @@ public final class GpuShareTexture extends AbstractTexture {
                     GlStateManager._bindTexture(tex);
                     EXTMemoryObject.glTexStorageMem2DEXT(GL11.GL_TEXTURE_2D, 1, GL11.GL_RGBA8, s.width(), s.height(), mem, 0);
                     e = GL11.glGetError();
+                    // where OpenGL reports no errors (Sodium's "no error" context), a size the driver
+                    // refused looks just like one it took: look at the picture itself — the helper
+                    // fills new ones with opaque black; memory taken at a wrong size reads all zeros
+                    if (e == 0 && noErrors && !readable(tex, s.width(), s.height())) e = -1;
                     if (e != 0) {
                         TextureUtil.releaseTextureId(tex);
                         EXTMemoryObject.glDeleteMemoryObjectsEXT(mem);
-                        last = "OpenGL error " + Integer.toHexString(e) + " making a texture on the shared picture";
+                        last = e == -1 ? "the shared picture read back empty at every memory size tried"
+                                : "OpenGL error " + Integer.toHexString(e) + " making a texture on the shared picture";
                         continue;
                     }
                     memory[i] = mem;
@@ -190,7 +233,9 @@ public final class GpuShareTexture extends AbstractTexture {
         }
     }
 
-    private boolean blit = dev.windowscraft.capture.GpuSelfTest.useBlit();
+    // (dev: -Dwindowscraft.exp.gpuRoute=copy|blit tries one route regardless of the safety test's pick)
+    private boolean blit = "blit".equals(System.getProperty("windowscraft.exp.gpuRoute")) || !"copy".equals(System.getProperty("windowscraft.exp.gpuRoute"))
+            && dev.windowscraft.capture.GpuSelfTest.useBlit();
     private final MipPacer mips = new MipPacer();
     private final long[] copyFences = new long[3];
     private int readFbo, drawFbo;
@@ -292,12 +337,40 @@ public final class GpuShareTexture extends AbstractTexture {
                     .append(GL11.glGetInteger(GL11.GL_PACK_SKIP_PIXELS)).append('/').append(GL11.glGetInteger(GL11.GL_PACK_ALIGNMENT))
                     .append(", read/draw fbo ").append(GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)).append('/')
                     .append(GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING))
-                    .append(", last probe ").append(lastProbe);
+                    .append(", last probe ").append(lastProbe)
+                    .append("; middle of the shared pictures (as OpenGL sees them) ").append(middleOf(glSources[0])).append(" | ")
+                    .append(middleOf(glSources[1])).append(" | ").append(middleOf(glSources[2]))
+                    .append("; the wall's now ").append(middleOf(getGlId()));
         } catch (Throwable t) {
             b.append(" (").append(t).append(')');
         }
         while (GL11.glGetError() != 0) { /* (a query this driver doesn't know: no matter) */ }
         return b.toString();
+    }
+
+    /** The middle pixel of a texture as "r,g,b,a" (diagnostics: is the shared picture itself empty, or the copy?). */
+    private String middleOf(int tex) {
+        if (tex == 0) return "-";
+        int prevRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING), prevPack = GL11.glGetInteger(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING);
+        GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0);
+        if (probeFbo == 0) probeFbo = GL30.glGenFramebuffers();
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
+        GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, tex, 0);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        String out;
+        try (org.lwjgl.system.MemoryStack st = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.ByteBuffer px = st.malloc(4);
+            px.putInt(0, 0x5A5A5A5A);
+            GL11.glReadPixels(width / 2, height / 2, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, px);
+            int e = GL11.glGetError();
+            out = px.getInt(0) == 0x5A5A5A5A ? "unread" + (e != 0 ? " (0x" + Integer.toHexString(e) + ")" : "")
+                    : (px.get(0) & 0xFF) + "," + (px.get(1) & 0xFF) + "," + (px.get(2) & 0xFF) + "," + (px.get(3) & 0xFF);
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
+            GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, prevPack);
+            while (GL11.glGetError() != 0) { /* (diagnostics only) */ }
+        }
+        return out;
     }
 
     /**
