@@ -103,6 +103,9 @@ public final class DisplayRenderer {
             "graphics card time for all our screens in one frame (uploads + drawing)"));
 
     private static void draw(MatrixStack matrices, Vec3d cam) {
+        MinecraftClient pmc = MinecraftClient.getInstance();
+        int fbH = pmc.getWindow().getFramebufferHeight();
+        if (fbH > 0) pixelAngle = 2 * Math.tan(Math.toRadians(pmc.options.getFov().getValue()) / 2) / fbH;
         long t0 = System.nanoTime();
         GPU_WALLS.begin();
         try {
@@ -198,20 +201,25 @@ public final class DisplayRenderer {
 
     /**
      * The picture's corners are pulled toward your eye along the line you see them on: they stay
-     * exactly where they appear on screen, but end up a little nearer than the wall, by a margin
-     * that grows with distance. However steep the angle, the wall behind can't poke through (the
-     * jagged steps and specks shader packs showed), while anything really in front still covers it.
+     * exactly where they appear on screen, but end up a little nearer than the wall — as much as
+     * one and a half of your screen's pixels span along the surface from here. A shader pack's
+     * jitter (TAA) moves the wall by up to about a pixel, which at a steep angle far away is a long
+     * way in depth: there the margin grows, and the concrete never pokes through; straight on and
+     * close it's a hair (~0.007 of a block at 3 blocks), so the screen sits flush on its block and
+     * in a monitor's screen (0.15.10 and before: ~0.08 there — "a gap", "popping out"). Measured
+     * with Solas (testmod ScreenTour): a pull of just depth precision lost the picture entirely
+     * seen steeply from 26 blocks; this one keeps it.
      */
     private static Vec3d towardCamera(Vec3d p, Vec3d cam, Vec3d normal) {
         Vec3d to = p.subtract(cam);
         double d = to.length();
-        if (d < 1e-4 || NO_PULL) return p;
-        // plus as much as sitting 1/32 of a block off the wall would give, measured along your line
-        // of sight instead of out from the wall: the same safety at steep angles (where a
-        // fraction of a pixel of shader-pack jitter is a long way along the wall), but the picture
-        // stays exactly on the surface — no gap to see from the side
+        if (d < 1e-4 || NO_PULL || PULL.equals("off")) return p;
         double facing = Math.max(0.02, Math.abs(to.dotProduct(normal)) / d);
-        double pull = 0.004 + 0.012 * d + Math.min(0.25 + 0.02 * d, (1 / 32.0) / facing);
+        double pull = switch (PULL) {
+            case "full" -> 0.004 + 0.012 * d + Math.min(0.25 + 0.02 * d, (1 / 32.0) / facing); // (dev: as up to 0.15.10)
+            case "small" -> 0.002 + 0.0005 * d + Math.min(0.02, (1 / 512.0) / facing); // (dev: depth precision only)
+            default -> Math.min(0.002 + 1.5 * d * pixelAngle / facing, 0.25 + 0.02 * d);
+        };
         return cam.add(to.multiply(Math.max(0.5, 1 - pull / d)));
     }
 
@@ -522,6 +530,12 @@ public final class DisplayRenderer {
             com.mojang.blaze3d.systems.RenderSystem.disablePolygonOffset();
         }
     }
+
+    /** How big one pixel of your screen is, as an angle (radians), this frame. */
+    private static double pixelAngle = 0.0015;
+
+    /** Dev: how far pictures are pulled toward your eye — pixel (the normal), full (0.15.10), small, off (testmod ScreenTour compares them). */
+    private static final String PULL = System.getProperty("windowscraft.exp.pull", "pixel");
 
     /** Dev only: draw without the depth bias (to compare in tests). */
     private static final boolean NO_BIAS = net.fabricmc.loader.api.FabricLoader.getInstance().isDevelopmentEnvironment()

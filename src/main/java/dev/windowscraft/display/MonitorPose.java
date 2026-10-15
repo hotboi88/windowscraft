@@ -15,8 +15,8 @@ import org.joml.Vector3d;
 public record MonitorPose(double cx, double cy, double cz, double qx, double qy, double qz, double qw) {
     /** The panel: 16 × 10 × 2 model pixels. */
     public static final double HALF_W = 0.5, HALF_H = 5 / 16.0, FRONT = 1 / 16.0;
-    /** The screen on it (model pixels from the panel's centre): x −7..7, y −3..4. */
-    public static final double SCREEN_L = -7 / 16.0, SCREEN_R = 7 / 16.0, SCREEN_B = -3 / 16.0, SCREEN_T = 4 / 16.0;
+    /** The screen on it (model pixels from the panel's centre): x −7..7, y −3.875..4 (16:9). */
+    public static final double SCREEN_L = -7 / 16.0, SCREEN_R = 7 / 16.0, SCREEN_B = -3.875 / 16.0, SCREEN_T = 4 / 16.0; // (16:9, as the texture's screen)
 
     /** A monitor standing on its foot, turned {@code turn} × 45° (like the block model). */
     public static MonitorPose standing(int turn) {

@@ -13,8 +13,9 @@ import net.minecraft.util.math.Vec3d;
  * is the side it mostly faces. Walls have {@code turn == -1}.
  */
 public record WallRect(Direction face, BlockPos min, BlockPos max, int turn, MonitorPose pose) {
-    /** The screen of a gaming monitor block, in its model's own pixels (made facing north): x 1..15, y 6..13, front at z 7. */
-    private static final double M_LEFT = 15 / 16.0, M_RIGHT = 1 / 16.0, M_TOP = 13 / 16.0, M_BOTTOM = 6 / 16.0, M_FRONT = 7 / 16.0 - 1 / 1024.0;
+    /** The screen of a gaming monitor block, in its model's own pixels (made facing north): x 1..15, y 5.125..13 (16:9: a
+     *  16:9 picture covers it edge to edge — up to 0.15.10 it was 6..13, 2:1, with dark bars beside the picture), front at z 7. */
+    private static final double M_LEFT = 15 / 16.0, M_RIGHT = 1 / 16.0, M_TOP = 13 / 16.0, M_BOTTOM = 5.125 / 16.0, M_FRONT = 7 / 16.0 - 1 / 1024.0;
 
     /** How far the picture sits off the block face: practically on it (1/1024 of a block). Keeping
      *  it in front of the concrete is the renderer's job (it pulls the picture toward your eye along
