@@ -157,8 +157,8 @@ game window 1600 × 900, 30 s per phase (`tools/bench/monitor.sh` with `BW_W=384
 | copy out of the helper / into the GPU buffer, median | 26 / 16 ms | **0.4 / 0.3 ms** |
 | captured by Windows → copied out, median / P95 | 72 / 100 ms | **20 / 41 ms** |
 | copied out → on the wall, median | 41 ms | **5 ms** |
-| game fps, average / 1 % low | 114 / 39.8 | **119 / 80.9** |
-| game CPU / helper CPU | 2.21 / 0.94 cores | **0.53 / 0.16** |
+| game fps, average / 1 % low | 114 / 39.8 | **119 / 80.9** (a second run, with the shipped helper: 117 / 55.0) |
+| game CPU / helper CPU | 2.21 / 0.94 cores | **0.53 / 0.16** (second run 0.69 game) |
 | GPU busy | 54 % | **42 %** |
 
 Standing 9 blocks away (wall 680 px tall) it stays at full size in both (1080 isn't twice 680):

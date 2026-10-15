@@ -104,7 +104,7 @@ docs/SETTINGS.md "Built (0.15.3)" has the model (`ClientSettings.Auto`, `on(Auto
 `on(Auto, Display)`, `Display.overrides`), the UI and the old-file migration. First new Automatic
 decision: `display.CopySize` + wc-capture `shrink <n>` (CPU route only; GPU mipmaps before the
 read-back). Measured (docs/STEP0.md, "0.15.3"): a 4K in-game monitor across the room 21 → 30
-pictures/s, 1 % lows 40 → 81 fps, game CPU 2.2 → 0.5 cores. The owner's own settings file had
+pictures/s, 1 % lows 40 → 55–81 fps (two runs), game CPU 2.2 → 0.5–0.7 cores. The owner's own settings file had
 off-screen pause and the distance limit off: he opens in Advanced with those two Off. Bench:
 `-Dwindowscraft.bench.far=N` (a phase N blocks away), `-Dwindowscraft.bench.noSit=true`.
 Next for the CPU route at full size (sitting at a 4K monitor): the game copies each picture twice
