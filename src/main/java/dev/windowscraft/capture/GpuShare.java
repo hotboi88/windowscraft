@@ -145,8 +145,11 @@ public final class GpuShare {
         return out;
     }
 
-    /** The game is done with that picture: the helper may write the next one into it. */
-    public void free(int slot) { send("free " + slot); }
+    /**
+     * The game is done with that picture of the pictures with that version: the helper may write
+     * the next one into it (one of pictures it has made anew since is ignored).
+     */
+    public void free(int slot, int version) { send("free " + slot + " " + version); }
 
     private synchronized void send(String line) {
         Process p = process;

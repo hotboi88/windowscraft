@@ -27,6 +27,9 @@ public final class GpuShareTexture extends AbstractTexture {
     private final int[] glSources = new int[3];
     private final int[] memory = new int[3];
     private int width, height, version = -1;
+    /** Our own texture's size (what the wall shows); it takes the shared pictures' size with the first picture at that size. */
+    private int shownW, shownH;
+    private boolean allocPending;
     private long lastSeq, copied;
     private boolean hasContent;
     private final boolean mipmaps;
@@ -45,8 +48,8 @@ public final class GpuShareTexture extends AbstractTexture {
     @Override public void load(ResourceManager manager) {}
     @Override public void setFilter(boolean bilinear, boolean mipmap) {}
 
-    public int width() { return width; }
-    public int height() { return height; }
+    public int width() { return shownW; }
+    public int height() { return shownH; }
     public boolean hasContent() { return hasContent; }
 
     /** Render thread: pick up a new frame if there is one. Throws on any failure (the wall then goes back to the normal way). */
@@ -61,7 +64,7 @@ public final class GpuShareTexture extends AbstractTexture {
             for (long f : copyFences) if (f != 0) GL32.glDeleteSync(f);
             java.util.Arrays.fill(copyFences, 0L);
             // (the helper keeps new pictures to its opaque fill until they're checked: now it may write them)
-            for (int i = 0; i < 3; i++) share.free(i);
+            for (int i = 0; i < 3; i++) share.free(i, version);
         }
         // pictures whose copy has finished on the graphics card go back to the helper
         for (int i = 0; i < copyFences.length; i++) {
@@ -70,13 +73,13 @@ public final class GpuShareTexture extends AbstractTexture {
             if (st == GL32.GL_ALREADY_SIGNALED || st == GL32.GL_CONDITION_SATISFIED || st == GL32.GL_WAIT_FAILED) {
                 GL32.glDeleteSync(copyFences[i]);
                 copyFences[i] = 0;
-                share.free(i);
+                share.free(i, version);
             }
         }
         // only the newest new picture is copied; the ones before it go straight back
         java.util.List<Integer> fresh = share.takeAnnounced();
         int slot = fresh.isEmpty() ? -1 : fresh.get(fresh.size() - 1);
-        for (int i = 0; i < fresh.size() - 1; i++) if (fresh.get(i) != slot) share.free(fresh.get(i));
+        for (int i = 0; i < fresh.size() - 1; i++) if (fresh.get(i) != slot) share.free(fresh.get(i), version);
         if (fresh.size() > 1) SKIPPED.add(fresh.size() - 1);
         if (slot >= 0 && slot < 3) SHOW_AGE.since(share.capturedAt(slot));
         long seq = share.frameSeq();
@@ -87,6 +90,7 @@ public final class GpuShareTexture extends AbstractTexture {
         }
         if (slot < 0 || slot >= 3) return;
         lastSeq = seq;
+        if (allocPending) allocate(); // (the new size now, with its first picture: no frame without one)
         GPU_COPY.begin();
         while (GL11.glGetError() != 0) { /* not ours */ }
         if (!blit) {
@@ -210,8 +214,16 @@ public final class GpuShareTexture extends AbstractTexture {
         width = s.width();
         height = s.height();
         version = s.version();
-        hasContent = false;
-        // our own texture: same size, with mipmaps (text stays readable from a distance)
+        // the wall keeps showing the last picture until one at the new size is there (a resized
+        // window: else a frame or two of the CPU capture's older picture, uploaded at a cost)
+        allocPending = true;
+    }
+
+    /** Our own texture at the shared pictures' size, with mipmaps (text stays readable from a distance). */
+    private void allocate() {
+        allocPending = false;
+        shownW = width;
+        shownH = height;
         GlStateManager._bindTexture(getGlId());
         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, width, height, 0, GL12.GL_BGRA, GL11.GL_UNSIGNED_BYTE, (java.nio.ByteBuffer) null);
         int levels = mipmaps ? 31 - Integer.numberOfLeadingZeros(Math.max(width, height)) : 0;

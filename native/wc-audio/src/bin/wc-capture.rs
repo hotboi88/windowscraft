@@ -34,6 +34,8 @@
 //!   (OpenGL imports them as external memory, GL_EXT_memory_object_win32), and each "frame" line
 //!   is only written once the graphics card has finished copying that picture:
 //!     stdout: ntslots <w> <h> <handle0> <handle1> <handle2>   (handles valid in the parent process)
+//!     stdin:  free <slot> <n>   the game is done with that picture of the n-th "ntslots" (1 = the
+//!             first); one of pictures made anew since is ignored
 //!
 //!   wc-capture --selftest [--adapter-luid <low>:<high>]
 //!     tries Direct3D↔OpenGL sharing in this process first (see gpu_selftest.rs)
@@ -433,10 +435,14 @@ fn run(a: Args) -> windows::core::Result<()> {
     // at a wrong size reads zeros), then frees them — a captured frame copied in sooner could be
     // see-through (a window partly off the screen) and fail that check
     let free: Arc<[AtomicBool; SLOTS]> = Arc::new([AtomicBool::new(!a.ext), AtomicBool::new(!a.ext), AtomicBool::new(!a.ext)]);
+    // which "ntslots" the pictures are (1 = the first): a "free" still on its way for pictures made
+    // anew since must not hand the game's unchecked new picture back
+    let slot_gen = Arc::new(std::sync::Mutex::new(1u32));
     {
         let stop = stop.clone();
         let fps_now = fps_now.clone();
         let free = free.clone();
+        let slot_gen = slot_gen.clone();
         let timing = timing.clone();
         let shrink = shrink.clone();
         std::thread::spawn(move || {
@@ -445,8 +451,11 @@ fn run(a: Args) -> windows::core::Result<()> {
             for line in stdin.lock().lines() {
                 let Ok(line) = line else { break };
                 if let Some(v) = line.trim().strip_prefix("free ") {
-                    if let Ok(n) = v.trim().parse::<usize>() {
-                        if n < SLOTS {
+                    let mut it = v.split_whitespace();
+                    if let Some(Ok(n)) = it.next().map(|w| w.parse::<usize>()) {
+                        let of = it.next().and_then(|w| w.parse::<u32>().ok());
+                        let now = slot_gen.lock().unwrap_or_else(|e| e.into_inner());
+                        if n < SLOTS && of.map_or(true, |g| g == *now) {
                             free[n].store(true, Ordering::SeqCst);
                         }
                     }
@@ -593,8 +602,12 @@ fn run(a: Args) -> windows::core::Result<()> {
             } else {
                 let (s, h) = make_slots(&device, &ctx, want.Width, want.Height, nt_target)?;
                 slots = s;
-                for f in free.iter() {
-                    f.store(!a.ext, Ordering::SeqCst); // (--ext: the game's until it has checked them)
+                {
+                    let mut g = slot_gen.lock().unwrap_or_else(|e| e.into_inner());
+                    *g += 1;
+                    for f in free.iter() {
+                        f.store(!a.ext, Ordering::SeqCst); // (--ext: the game's until it has checked them)
+                    }
                 }
                 if !say(&mut out, &format!("{slots_word} {} {} {} {} {}", want.Width, want.Height, h[0], h[1], h[2])) {
                     break;
