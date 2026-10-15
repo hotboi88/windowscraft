@@ -115,6 +115,16 @@ sharer's game at 30 fps): click → app 20.7 / 33.1 / 37.1 ms (median / P95 / ma
 has no guests): `BENCH_INPUT=1 SHARER_EXTRA="-Dwindowscraft.bench.gameFps=30" tools/bench/run.sh
 monitor 1080 60 40 NAME`.
 
+Also in 0.15.5: the sound reserve on a screen you hear (`audio.SoundReserve`, used by
+`SpatialAudioPlayer`) gives back a 50 ms step after a calm spell (2 min without sound arriving
+late; doubled, up to 30 min, when a step back was followed by late sound within 5 min), never below
+where it started (120 ms). Before, it only grew (to 320 ms) and stayed — with lip sync the picture
+waits for the sound, so one hiccup kept every later picture that much behind. The extra sound is
+taken out 10 ms at a time (crossfaded, ≤ 5/s). Unit-tested; not seen in a real run yet (the
+one-PC bench never makes sound arrive late, even starting at 30 ms). Dev switches:
+`-Dwindowscraft.exp.audioReserve=MS`, `-Dwindowscraft.exp.audioReserveCalm=S`. The self-test's
+main-taskbar check now names what covers the taskbar.
+
 ## 0.15.4 (14 Oct): fix for 0.15.3's stream restarts
 
 0.15.3's smaller wall copies reached `StreamPublisher.onFrame`, which takes the CPU capture's

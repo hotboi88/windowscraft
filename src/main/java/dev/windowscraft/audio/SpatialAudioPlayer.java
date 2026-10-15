@@ -62,10 +62,19 @@ public final class SpatialAudioPlayer {
     // through untouched; only if the queue drifts far off (two sound cards' clocks never match
     // exactly) is 10 ms removed or repeated — blended over a few ms, so it can't click.
     private static final int FRAME = 4;
-    private static final int START_TARGET = ms(Integer.getInteger("windowscraft.exp.audioReserve", 120)), // (Step 0 experiment, dev only)
-            MAX_TARGET = ms(320), STEP = ms(50), LOW = ms(25), DRIFT = ms(70);
-    /** Grows (up to 320 ms) each time sound still arrives too late — e.g. a heavy modpack's long pauses. */
-    private int target = START_TARGET;
+    private static final int START_MS = Integer.getInteger("windowscraft.exp.audioReserve", 120); // (Step 0 experiment, dev only)
+    private static final int LOW = ms(25), DRIFT = ms(70);
+    /**
+     * Grows (up to 320 ms) each time sound still arrives too late — e.g. a heavy modpack's long
+     * pauses — and gives a step back after a calm spell (SoundReserve; with lip sync the picture
+     * waits for the sound, so a reserve that only grew kept the picture behind for good).
+     */
+    private final SoundReserve reserve = new SoundReserve(START_MS, System.nanoTime(),
+            Long.getLong("windowscraft.exp.audioReserveCalm", SoundReserve.FIRST_CALM_NANOS / 1_000_000_000L) * 1_000_000_000L);
+    private int target = ms(START_MS);
+    /** Sound still to take out of the queue after a step back (bytes), 10 ms at a time. */
+    private int drainLeft;
+    private long lastDrainNanos;
     private static final int ADJUST_FRAMES = 480, FADE_FRAMES = 192; // 10 ms, 4 ms crossfade
     private volatile long underruns, adjustments;
     private double queuedAvg = -1;
@@ -118,9 +127,10 @@ public final class SpatialAudioPlayer {
                         // (re)start with a cushion of silence; fade the sound in so there's no click
                         if (primed) {
                             underruns++;
-                            if (target < MAX_TARGET) {
-                                target = Math.min(MAX_TARGET, target + STEP);
-                                WindowsCraftClient.LOGGER.info("Screen audio arrived late; keeping {} ms queued from now on", target / FRAME * 1000 / AudioCapture.RATE);
+                            drainLeft = 0;
+                            if (reserve.late(System.nanoTime())) {
+                                target = ms(reserve.ms());
+                                WindowsCraftClient.LOGGER.info("Screen audio arrived late; keeping {} ms queued from now on", reserve.ms());
                             }
                         }
                         writeSilence(line, Math.max(0, target - queued));
@@ -133,8 +143,22 @@ public final class SpatialAudioPlayer {
                         continue;
                     }
                     queuedAvg = queuedAvg * 0.97 + queued * 0.03; // ~0.7 s average: ignores burstiness
+                    long nowN = System.nanoTime();
+                    int back = reserve.stepBackIfCalm(nowN);
+                    if (back > 0) {
+                        target = ms(reserve.ms());
+                        drainLeft += ms(back);
+                        WindowsCraftClient.LOGGER.info("Screen audio steady for a while; keeping {} ms queued again", reserve.ms());
+                    }
+                    // after a step back: 10 ms out at a time (at most 5 a second, crossfaded), until it's down
+                    boolean drain = drainLeft > 0 && queued > target + ADJUST_FRAMES * FRAME && nowN - lastDrainNanos > 200_000_000L;
+                    if (drainLeft > 0 && queued <= target) drainLeft = 0;
                     int start = 0, len = CHUNK;
-                    if (queuedAvg > target + DRIFT) {
+                    if (queuedAvg > target + DRIFT || drain) {
+                        if (drain) {
+                            drainLeft -= ADJUST_FRAMES * FRAME;
+                            lastDrainNanos = nowN;
+                        }
                         // steadily too much: skip 10 ms. What would have followed the last thing
                         // played is buf[0..]; fade from that into buf[10 ms..] so the seam is smooth.
                         crossfade(java.util.Arrays.copyOf(buf, FADE_FRAMES * FRAME), buf, ADJUST_FRAMES);
