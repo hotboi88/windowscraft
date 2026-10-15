@@ -489,8 +489,8 @@ public final class ScreenControl {
             }
             LANE.execute(() -> {
                 Route r = route(mc, display);
-                // an in-game monitor: right here, right now (and a game controller on any wall: it's the PC's, not the window's)
-                if (r != null && (r.monitor() || c.op() == Payloads.OP_PAD)) {
+                // an in-game monitor: right here, right now
+                if (r != null && r.monitor()) {
                     RELAY_WAIT.since(arrived);
                     String name = r.allowed().get(from);
                     if (name == null) return; // (not someone you allowed)
@@ -528,8 +528,8 @@ public final class ScreenControl {
         Display d = DisplayManager.get().byId(c.displayId());
         if (d == null || !controllable(d) || !d.controllers.containsKey(m.from())) return;
         boolean monitor = dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source());
-        if ((monitor || c.op() == Payloads.OP_PAD) && LANE_ON) { // (the lane does monitors: one order for all their input; and controllers)
-            LANE.execute(() -> handleGuest(mc, d, m.from(), m.fromName(), c, monitor));
+        if (monitor && LANE_ON) { // (the lane does monitors: one order for all their input)
+            LANE.execute(() -> handleGuest(mc, d, m.from(), m.fromName(), c, true));
             return;
         }
         handleGuest(mc, d, m.from(), m.fromName(), c, monitor);
@@ -567,8 +567,9 @@ public final class ScreenControl {
         if (c.op() != Payloads.OP_POINT && c.op() != Payloads.OP_KEY_DOWN && c.op() != Payloads.OP_KEY_UP) g.active = g.seen;
         if (c.op() == Payloads.OP_PAD) {
             // their game controller: a controller of their own on this PC (ViGEmBus), for whatever
-            // game reads controllers — also while that game isn't in front. Only from the chair, like keys.
-            if (!g.seated) return;
+            // game reads controllers — also while that game isn't in front. Only from the chair, like
+            // keys, and only at your in-game monitors (never for a window of your own desk you share)
+            if (!g.seated || !monitor) return;
             Payloads.GamePad p = Payloads.GamePad.of(c.x(), c.y(), c.a(), c.f());
             g.send("pad " + p.buttons() + " " + p.leftTrigger() + " " + p.rightTrigger() + " " + Payloads.GamePad.axis(p.lx()) + " "
                     + Payloads.GamePad.axis(p.ly()) + " " + Payloads.GamePad.axis(p.rx()) + " " + Payloads.GamePad.axis(p.ry()));

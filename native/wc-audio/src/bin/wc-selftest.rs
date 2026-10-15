@@ -937,7 +937,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     if admin_taskmgr {
         // (it would open on your desk as administrator, where nothing of ours may move, close or
         // type into it — and stay in front, spoiling the checks after it)
-        rep.note("Task Manager: not tried — on this PC Windows starts it as administrator (an administrator account with the usual UAC setting; Windows 11 ignores \"Run as invoker\" for it), so it opens on your desk and can't be moved");
+        rep.note("Task Manager: not tried — on this PC Windows starts it as administrator (an administrator account with the usual UAC setting), so it opens on your desk and can't be moved (WindowsCraft doesn't change how Windows starts it: nothing outside its own monitors)");
     }
     for (what, class, exe, arg) in [("File Explorer", "CabinetWClass", "explorer.exe", "C:\\Windows"), ("Task Manager", "TaskManagerWindow", "taskmgr.exe", "")] {
         if class == "TaskManagerWindow" && admin_taskmgr {
@@ -966,8 +966,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
                 rep.check(&format!("{what} opened while sitting at a monitor opens on that monitor"), on, format!("at {}", fmt(&rect_of(w))));
                 if class == "TaskManagerWindow" {
                     let layer = layer_of_taskmgr();
-                    rep.check("…and while monitors are on, Task Manager starts with normal rights (so it can be moved — no permission prompt)",
-                        layer.as_deref().map_or(false, |v| v.contains("RUNASINVOKER")), format!("{layer:?}"));
+                    rep.check("…and how Windows starts Task Manager is left alone (WindowsCraft changes nothing outside its own monitors)",
+                        layer.as_deref().map_or(true, |v| !v.contains("RUNASINVOKER")), format!("{layer:?}"));
                 }
                 close(w);
             }

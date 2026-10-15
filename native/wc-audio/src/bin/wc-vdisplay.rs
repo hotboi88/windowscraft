@@ -4206,10 +4206,11 @@ fn reg_set_str(path: &str, name: &str, value: Option<&str>) {
 }
 
 // Task Manager normally runs as administrator (without asking), and Windows doesn't let a program
-// with normal rights move an administrator's window — so it could only ever open on your desk.
-// While in-game monitors are on, Task Manager is started with your normal rights instead (the
-// same Windows setting "Run as invoker" that you could set yourself); then it goes where you open
-// it, like any app. It's put back the moment the monitors go (and after a crash, the next start).
+// with normal rights move an administrator's window — so it opens on your desk. Up to 0.15.9
+// Task Manager was started with your normal rights while in-game monitors were on (Windows'
+// "Run as invoker"); that changed Task Manager everywhere, your desk too (and Windows 11 ignores
+// it for administrators anyway), so it's left alone now: WindowsCraft changes nothing outside its
+// own monitors. Only what an older version left behind is put back (also after a crash).
 const LAYERS: &str = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
 const LAYER_BACKUP: &str = "Software\\WindowsCraft\\TaskmgrBackup";
 
@@ -4219,18 +4220,9 @@ fn taskmgr_path() -> String {
     format!("{}\\Taskmgr.exe", String::from_utf16_lossy(&buf[..n.min(buf.len())]))
 }
 
-fn taskmgr_normal_rights(on: bool) {
+fn taskmgr_normal_rights(_on: bool) {
     let path = taskmgr_path();
-    if on {
-        if reg_get(LAYER_BACKUP, "Saved").is_none() {
-            match reg_get_str(LAYERS, &path) {
-                Some(v) => reg_set_str(LAYER_BACKUP, "Value", Some(&v)),
-                None => reg_set_str(LAYER_BACKUP, "Value", None),
-            }
-            reg_set(LAYER_BACKUP, "Saved", Some(1));
-        }
-        reg_set_str(LAYERS, &path, Some("~ RUNASINVOKER"));
-    } else if reg_get(LAYER_BACKUP, "Saved").is_some() {
+    if reg_get(LAYER_BACKUP, "Saved").is_some() {
         let old = reg_get_str(LAYER_BACKUP, "Value");
         reg_set_str(LAYERS, &path, old.as_deref());
         reg_set_str(LAYER_BACKUP, "Value", None);
@@ -4372,6 +4364,11 @@ fn mirrored(added: &AddedMap, idx: i32) -> bool {
 }
 
 fn main() {
+    // what this helper starts on an in-game monitor (and only that: it's this process's own
+    // environment, passed on to the programs it starts) reads game controllers also while it isn't
+    // the window in front — SDL games (many indie and ported games) don't by default — so someone
+    // playing it with their controller can while you play Minecraft. Your desk's apps never see this.
+    std::env::set_var("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
     unsafe {
         let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // a thread needs an input queue before it can share input state with another (foreground)
