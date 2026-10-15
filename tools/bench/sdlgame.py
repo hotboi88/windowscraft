@@ -1,9 +1,14 @@
 # A stand-in game on SDL (as many indie and ported games are): prints each A press it gets.
 import ctypes, os, sys, time
+# sdlgame.py TITLE X Y BG [LOG]: BG 0 or 1 sets SDL's background-events hint; "inherit" leaves
+# whatever the one starting it passed on (WindowsCraft's monitor helper passes 1). LOG: print there.
 title, x, y, bg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if len(sys.argv) > 5:
+    sys.stdout = open(sys.argv[5], "w", buffering=1)
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 os.environ["SDL_VIDEO_WINDOW_POS"] = "%s,%s" % (x, y)
-os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = bg  # SDL's default is 0: no controller input while not in front
+if bg in ("0", "1"):
+    os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = bg  # SDL's default is 0: no controller input while not in front
 import pygame
 pygame.init()
 screen = pygame.display.set_mode((360, 200))
@@ -11,7 +16,7 @@ pygame.display.set_caption(title)
 hwnd = pygame.display.get_wm_info()["window"]
 pygame.joystick.init()
 sticks = {}
-print("ready sdl bg=%s hwnd %d" % (bg, hwnd), flush=True)
+print("ready sdl bg=%s (hint now %s) hwnd %d" % (bg, os.environ.get("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"), hwnd), flush=True)
 held = False
 while True:
     for e in pygame.event.get():
