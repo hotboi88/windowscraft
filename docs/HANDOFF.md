@@ -98,6 +98,33 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.7 (15 Oct): direct GPU sharing for shared windows too; less work while nobody watches
+
+- Shared windows (not in-game monitors) on GPU sharing in a no-error context: a window that
+  drew before the game had checked the new shared pictures wrote over the helper's opaque fill
+  (a window's own off-screen pixels are all zeros), so every memory size "read back empty" and
+  the share fell back to the CPU. wc-capture `--ext` now keeps new pictures to itself — held, its
+  opaque fill only — until the game has checked them: `GpuShareTexture.update` frees all three
+  right after `register`. `GpuShare.delivering()` counts announced pictures (waiting for a first
+  picture as well would wait for ever). Seen in his modpack (Alice's copy, 1080p60 bench window):
+  "wall via direct GPU sharing", 43–50 pictures/s.
+- A shared screen that's live but paused (nobody watching for 8 s): its CPU capture rests and its
+  wall copy may be smaller (`StreamPublisher.paused()` in `DisplayManager.tickGpuSharing`).
+  Before, a paused stream still counted as "a CPU stream needs frames": full size, full rate, on
+  top of GPU sharing (seen: 43–50 CPU captures/s while the wall was fed by GPU sharing; now 1/s).
+  Checked both ways with the viewer arriving after the pause (`BOB_DELAY=90 tools/bench/run.sh
+  window 1080 60 40 NAME`, and with `SHARER_EXTRA=-Dwindowscraft.gpuCapture=false` for the CPU
+  stream): 1920×1080 decoded at 52/s and 48/s after the resume.
+- Measuring: nvidia-smi (`-lms 1000`) now ends with the game however it ends (a Windows job,
+  KILL_ON_JOB_CLOSE, `SystemSampler.GameJob`); a test game ended from outside left it running
+  for ever (52 found on the owner's PC, one per test run).
+- The relay listens on the server's `server-ip` when it has one (else all addresses, as before):
+  the test servers (server-ip 127.0.0.1) no longer ask Windows Firewall for a port.
+- Tools: `tools/prodclient/server.sh SERVER_DIR` (a copy of a modded server: its mods, never its
+  world; offline, flat, 25567 / relay 25587) and `run.sh` `PLAYER=` / `SERVER=HOST:PORT`; the
+  bench's sharer retries going live (a slow modpack world has no wall yet at first);
+  `windowscraft.bench.viewerDir`. Three modpack copies (server, Alice, Bob) need ~20 GB free.
+
 ## 0.15.6 (14 Oct): direct GPU sharing works with Sodium (the owner's "black" verdict, solved)
 
 Found with his modpack in a launcher-style client (`tools/prodclient/run.sh INSTANCE`: a copy of

@@ -144,6 +144,22 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## 0.15.7: shared windows on GPU sharing; a paused stream lets the capture rest (RTX 4060, 15 Oct)
+
+Shared window (the 1080p60 bench window on a wall, not an in-game monitor), sharer's CPU captures
+for its own wall — the "capture" figure in the share's perf line:
+
+| | 0.15.6 | 0.15.7 |
+|---|---|---|
+| shared window in his modpack (Sodium) | CPU route ("read back empty at every memory size") | **direct GPU sharing, 43–50 pictures/s** |
+| live, nobody watching (paused), GPU sharing feeding the wall | 43–50 CPU captures/s, full size | **1/s** |
+| live and watched, GPU capture+encode | 1/s | 1/s |
+| live and watched, CPU stream (`-Dwindowscraft.gpuCapture=false`) | full size, full rate | full size, 42–48/s (back from 1/s as the viewer arrives) |
+
+Dev bench (tools/bench, `BOB_DELAY=90`: the viewer arrives after the stream has paused): the viewer
+decoded 1920×1080 at 52/s (GPU stream) and 48/s (CPU stream) after the resume; the sharer's game
+119 fps average / 86 1 % low, all helpers 0.23 cores.
+
 ## 0.15.6: direct GPU sharing in the owner's modpack (Cobbleverse, Iris + Solas), RTX 4060
 
 `tools/prodclient/run.sh` (a copy of his instance, launcher-style), in-game monitor bench standing
