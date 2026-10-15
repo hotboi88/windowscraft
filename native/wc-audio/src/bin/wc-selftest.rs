@@ -1010,10 +1010,13 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             click(false); // (using the monitor's own taskbar…)
             sleep(400);
             let desk_home = rect_of(desk);
-            unsafe {
+            // (whether Windows let the test bring it forward at all: on a PC with the usual
+            // foreground lock it may not — a real app started from the taskbar is allowed to)
+            let took = unsafe {
                 let _ = AllowSetForegroundWindow(ASFW_ANY);
-                let _ = SetForegroundWindow(desk); // (…and the app brings its one window forward)
-            }
+                SetForegroundWindow(desk).as_bool() // (…and the app brings its one window forward)
+            };
+            let front_then = foreground_root();
             // where it is, every 10 ms: one clean move (no back and forth)
             let mut spots: Vec<RECT> = vec![rect_of(desk)];
             let t2 = Instant::now();
@@ -1035,7 +1038,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             let fg = foreground_root();
             rep.check("an app that only runs once, open on your desk, comes over to the monitor when you open it there: centred, a modest size, in front",
                 inside(&ra, dx, dy) && centred && modest && fg == desk,
-                format!("now at {} (monitor's work area {}) · front: {} \"{}\"", fmt(&r), fmt(&wa), class_name(fg), title(fg)));
+                format!("now at {} (monitor's work area {}) · front: {} \"{}\" · Windows took the test's bring-forward: {took}, in front right after: {}",
+                    fmt(&r), fmt(&wa), class_name(fg), title(fg), class_name(front_then)));
             rep.check("…in one clean move (it never jumps back)", home_visits == 0 && spots.len() <= 4,
                 spots.iter().map(fmt).collect::<Vec<_>>().join(" → "));
             // a Store app (Calculator…): its window already exists, hidden ("cloaked"), and is revealed
@@ -1081,10 +1085,10 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             sleep(100);
             click(false); // (your own taskbar…)
             sleep(400);
-            unsafe {
+            let took = unsafe {
                 let _ = AllowSetForegroundWindow(ASFW_ANY);
-                let _ = SetForegroundWindow(desk); // (…and the app brings its one window forward)
-            }
+                SetForegroundWindow(desk).as_bool() // (…and the app brings its one window forward)
+            };
             let back = wait_for(1500, || { let (x, y) = center(&rect_of(desk)); inside(&prim, x, y) });
             sleep(500);
             let r = rect_of(desk);
@@ -1092,7 +1096,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             let wp = work_area_of(&prim);
             let (wx, wy) = center(&wp);
             rep.check("…and opening it from your own desktop brings it back to your desk, centred", back && (dx - wx).abs() <= 4 && (dy - wy).abs() <= 4,
-                format!("now at {} (your work area {})", fmt(&r), fmt(&wp)));
+                format!("now at {} (your work area {}) · Windows took the test's bring-forward: {took}", fmt(&r), fmt(&wp)));
             unsafe {
                 let _ = SetWindowPos(desk, None, desk_home.left, desk_home.top, desk_home.right - desk_home.left, desk_home.bottom - desk_home.top, SWP_NOZORDER | SWP_NOACTIVATE);
             }
@@ -1642,7 +1646,9 @@ fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND,
     let profile = std::env::temp_dir().join(format!("wc-selftest-edge-full-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&profile);
     let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
-    let r = h.call(&format!("launch\t{}\t{e}\t--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank\tmsedge.exe", a.idx, profile.display()), "launched", 10000);
+    // (InPrivate: on a PC signed in with a Microsoft account, a new profile signs itself in and puts
+    // a "now syncing" dialog over the page, which takes the F11)
+    let r = h.call(&format!("launch\t{}\t{e}\t--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --inprivate --new-window about:blank\tmsedge.exe", a.idx, profile.display()), "launched", 10000);
     // (its browser window: not one of the little pop-ups Edge sometimes shows first)
     let big = |w: &HWND| { let r = rect_of(*w); r.right - r.left >= 500 && r.bottom - r.top >= 350 };
     let Some(w) = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty() && big(w)) else {

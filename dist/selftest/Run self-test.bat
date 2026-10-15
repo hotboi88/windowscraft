@@ -6,7 +6,11 @@ if not errorlevel 1 (
   pause
   exit /b 1
 )
-set OUT=%USERPROFILE%\Desktop\WindowsCraft self-test
+rem (the desktop you see: often OneDrive's, not %USERPROFILE%\Desktop)
+set DESK=
+for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESK=%%d"
+if not defined DESK set "DESK=%USERPROFILE%\Desktop"
+set "OUT=%DESK%\WindowsCraft self-test"
 if not exist "%OUT%" mkdir "%OUT%"
 echo Checking in-game monitors on this PC. Your screens will blink and the mouse will move.
 echo Please don't touch the mouse or keyboard for about two minutes.
