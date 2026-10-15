@@ -98,6 +98,26 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.6 (14 Oct): direct GPU sharing works with Sodium (the owner's "black" verdict, solved)
+
+Found with his modpack in a launcher-style client (`tools/prodclient/run.sh INSTANCE`: a copy of
+the instance — never its saves — offline, the world opened by the test mod's ProdStart once
+loading is done; `BW=1`, `SODIUM_NO_ERROR=0`, `GPU_SHARING=off`). Cause: Sodium's "no error"
+OpenGL context (`use_no_error_g_l_context`, on by default) — glGetError is always 0, so the first
+memory size tried for the imported D3D11 picture (too small on NVIDIA: it pads rows; the driver
+says "Memory object too small") was kept, and the picture read back all zeros. Fix: wc-capture
+fills each new shared picture with opaque black; in a no-error context (`GL_CONTEXT_FLAGS` &
+NO_ERROR) `GpuShareTexture` reads each imported picture's middle and last pixel (all zeros = wrong
+size: next size) and always copies by blit. Verdict key v5 (a "black" verdict is tested again).
+The black check's log now also prints the shared pictures' middles as OpenGL sees them.
+Measured in his modpack (309 mods, Iris + Solas, 1600×900 game, standing 9 blocks away), 4K
+in-game monitor: CPU route 37 fps avg / 15.5 1 % low, 22 pictures/s, captured→wall ~106 ms,
+game 4.0 + helper 1.0 cores → GPU sharing 89 / 28.5, 52/s, 0/7/11 ms, 1.8 + 0.2 cores (GPU now
+92–100 % busy: Solas + the 4K bench window + DWM). 1080p: 2.3 → 1.6 cores, 97/40 → 107/43 fps.
+Other glGetError uses (StreamingTexture's persistent map, Nv12Converter's first check) only pick a
+fallback; in a no-error context they never fall back (fine on his card). Still to see in his game:
+watching a friend's screen with Iris (the NV12 colour pass).
+
 ## 0.15.5 (14 Oct): guests' input on in-game monitors handled the moment it arrives
 
 `ScreenControl` "guest lane" (one thread, "WindowsCraft guest input"): input over the relay to one

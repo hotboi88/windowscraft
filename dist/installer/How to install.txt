@@ -1,5 +1,12 @@
 WindowsCraft 0.15.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
+New in 0.15.6: direct GPU sharing now works with Sodium. Sodium's "no error" OpenGL mode (on by
+default) hid a mistake that made the shared pictures come out black, so WindowsCraft turned GPU
+sharing off and copied every picture through the CPU instead. Measured with a 4K in-game monitor
+in the Cobbleverse modpack (Iris + Solas): the game went from 37 to 89 frames a second, the
+monitor from 22 to 52 pictures a second, and the picture's delay from ~100 ms to a few ms. If
+your PC had decided "black" before, it tests again by itself.
+
 New in 0.15.5: when someone you allowed uses one of your in-game monitors, their clicks and keys
 reach it the moment they arrive, instead of waiting for your game to draw its next frame (measured:
 a click took about 21 ms to reach the app with your game at 30 frames a second; now about 3 ms),

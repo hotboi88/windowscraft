@@ -144,6 +144,23 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## 0.15.6: direct GPU sharing in the owner's modpack (Cobbleverse, Iris + Solas), RTX 4060
+
+`tools/prodclient/run.sh` (a copy of his instance, launcher-style), in-game monitor bench standing
+9 blocks away, game window 1600 × 900, the bench window on the monitor at 60/s:
+
+| 4K in-game monitor | CPU route (GPU sharing off: what he had) | GPU sharing (0.15.6) |
+|---|---|---|
+| game fps, average / 1 % low | 37.1 / 15.5 | **89.1 / 28.5** |
+| pictures on the wall | 22/s | **52/s** |
+| captured → on the wall | ~58 (helper) + 48 (wall) ms median | **0 / 7 / 11 ms** |
+| game CPU / WindowsCraft threads / helper | 3.96 / 1.33 / 1.02 cores | **1.81 / 0.08 / 0.20** |
+| GPU busy | 67 % | 93 % (now the limit: Solas + the 4K bench window + DWM) |
+
+1080p: game 2.33 → 1.61 cores, helper 0.37 → 0.11, 96.8 / 40.1 → 106.7 / 43.3 fps. Before 0.15.6
+GPU sharing was "black" in this modpack: Sodium's "no error" OpenGL context hid the driver refusing
+a memory size (HANDOFF, 0.15.6).
+
 ## 0.15.3: "Copies as sharp as they look" on the RTX 4060 (14 Oct, his game closed, his server running)
 
 A 3840 × 2160 in-game monitor on the CPU route (direct GPU sharing off, the owner's other
