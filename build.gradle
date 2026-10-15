@@ -105,6 +105,9 @@ loom {
             name "MP test sharer"
             source sourceSets.testmod
             runDir "run-alice"
+            // its own folder for LWJGL's unpacked natives: two players starting at once mustn't
+            // load a file the other is still writing (CI: "Can't load library liblwjgl_opengl.so")
+            vmArg "-Dorg.lwjgl.system.SharedLibraryExtractPath=" + file("run-alice/lwjgl-natives").absolutePath
             if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=sharer"
             if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
             // -PmpPort: a test server on another port (one is already running on 25565)
@@ -116,6 +119,9 @@ loom {
             name "MP test viewer"
             source sourceSets.testmod
             runDir "run-bob"
+            // its own folder for LWJGL's unpacked natives: two players starting at once mustn't
+            // load a file the other is still writing (CI: "Can't load library liblwjgl_opengl.so")
+            vmArg "-Dorg.lwjgl.system.SharedLibraryExtractPath=" + file("run-bob/lwjgl-natives").absolutePath
             if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=viewer"
             if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
             vmArg "-Dwindowscraft.update.test=true"
