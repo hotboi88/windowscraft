@@ -428,8 +428,11 @@ fn run(a: Args) -> windows::core::Result<()> {
     let timing = Arc::new(AtomicBool::new(false));
     let shrink = Arc::new(std::sync::atomic::AtomicU32::new(0));
     // --ext: a picture the game may still be copying is never written over; the game says
-    // "free <slot>" once it's done with one (until then the slot is skipped, or the frame dropped)
-    let free: Arc<[AtomicBool; SLOTS]> = Arc::new([AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true)]);
+    // "free <slot>" once it's done with one (until then the slot is skipped, or the frame dropped).
+    // New pictures start as the game's: it first checks they hold the opaque fill (memory taken
+    // at a wrong size reads zeros), then frees them — a captured frame copied in sooner could be
+    // see-through (a window partly off the screen) and fail that check
+    let free: Arc<[AtomicBool; SLOTS]> = Arc::new([AtomicBool::new(!a.ext), AtomicBool::new(!a.ext), AtomicBool::new(!a.ext)]);
     {
         let stop = stop.clone();
         let fps_now = fps_now.clone();
@@ -591,7 +594,7 @@ fn run(a: Args) -> windows::core::Result<()> {
                 let (s, h) = make_slots(&device, &ctx, want.Width, want.Height, nt_target)?;
                 slots = s;
                 for f in free.iter() {
-                    f.store(true, Ordering::SeqCst);
+                    f.store(!a.ext, Ordering::SeqCst); // (--ext: the game's until it has checked them)
                 }
                 if !say(&mut out, &format!("{slots_word} {} {} {} {} {}", want.Width, want.Height, h[0], h[1], h[2])) {
                     break;

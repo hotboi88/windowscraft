@@ -159,7 +159,9 @@ public final class ServerHub {
             // dev environment only: a fixed watch-only token for the automated latency probe
             String debug = FabricLoader.getInstance().isDevelopmentEnvironment() ? System.getProperty("windowscraft.relay.debugToken") : null;
             UUID debugViewer = UUID.randomUUID();
-            relay = new RelayServer(InetAddress.getByName("0.0.0.0"), relayPort,
+            // on the address the server itself listens on, when it's given one (server-ip)
+            String ip = server.getServerIp();
+            relay = new RelayServer(InetAddress.getByName(ip == null || ip.isBlank() ? "0.0.0.0" : ip), relayPort,
                     t -> debug != null && !debug.isBlank() && debug.equals(t) ? debugViewer : tokens.get(t),
                     (player, streamId) -> displays.values().stream().anyMatch(l -> l.owner.equals(player) && l.info.streamId().equals(streamId)));
             // someone's input over the relay: the same checks as onControl, then straight to the owner

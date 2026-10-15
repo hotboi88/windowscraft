@@ -210,6 +210,7 @@ final class SystemSampler {
                     "--query-gpu=utilization.gpu,utilization.encoder,utilization.decoder,memory.used,encoder.stats.sessionCount,encoder.stats.averageLatency,name",
                     "--format=csv,noheader,nounits", "-lms", "1000").redirectErrorStream(true).start();
             smi = p;
+            GameJob.add(p); // (left behind, it would print for ever)
             Thread t = new Thread(() -> {
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
@@ -234,6 +235,43 @@ final class SystemSampler {
             t.start();
         } catch (Exception e) {
             smi = null; // not an NVIDIA card (or no nvidia-smi): no GPU numbers
+        }
+    }
+
+    /** Windows: programs that end with this game, however it ends (closed, crashed or ended from Task Manager). */
+    static final class GameJob {
+        interface Kernel32 extends com.sun.jna.Library {
+            Kernel32 I = com.sun.jna.Native.load("kernel32", Kernel32.class);
+            com.sun.jna.Pointer CreateJobObjectW(com.sun.jna.Pointer attributes, com.sun.jna.WString name);
+            boolean SetInformationJobObject(com.sun.jna.Pointer job, int infoClass, com.sun.jna.Pointer info, int length);
+            boolean AssignProcessToJobObject(com.sun.jna.Pointer job, com.sun.jna.Pointer process);
+            com.sun.jna.Pointer OpenProcess(int access, boolean inherit, int pid);
+            boolean CloseHandle(com.sun.jna.Pointer handle);
+        }
+        private static com.sun.jna.Pointer job;
+
+        static synchronized void add(Process p) {
+            try {
+                if (com.sun.jna.Native.POINTER_SIZE != 8) return;
+                if (job == null) {
+                    com.sun.jna.Pointer j = Kernel32.I.CreateJobObjectW(null, null);
+                    if (j == null) return;
+                    // JOBOBJECT_EXTENDED_LIMIT_INFORMATION (144 bytes): LimitFlags = KILL_ON_JOB_CLOSE
+                    com.sun.jna.Memory info = new com.sun.jna.Memory(144);
+                    info.clear();
+                    info.setInt(16, 0x2000);
+                    if (!Kernel32.I.SetInformationJobObject(j, 9, info, 144)) {
+                        Kernel32.I.CloseHandle(j);
+                        return;
+                    }
+                    job = j; // (never closed by us: Windows closes it as the game ends, ending what's in it)
+                }
+                com.sun.jna.Pointer h = Kernel32.I.OpenProcess(0x0101, false, (int) p.pid()); // PROCESS_SET_QUOTA | PROCESS_TERMINATE
+                if (h == null) return;
+                Kernel32.I.AssignProcessToJobObject(job, h);
+                Kernel32.I.CloseHandle(h);
+            } catch (Throwable t) { // (no job: it's ended when measuring stops, as before)
+            }
         }
     }
 }

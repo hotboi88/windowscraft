@@ -533,7 +533,8 @@ public final class DisplayManager {
         }
         // performance settings: nothing on screen → (almost) no captures for your wall; small on
         // screen → at most 15 a second. The stream to other players is never slowed down.
-        boolean cpuStreamNeedsFrames = s.publisher != null && s.publisher.streaming() && !s.publisher.gpuActive();
+        // (paused, nobody watching: no stream needs them)
+        boolean cpuStreamNeedsFrames = s.publisher != null && s.publisher.streaming() && !s.publisher.gpuActive() && !s.publisher.paused();
         boolean hidden = dev.windowscraft.config.ClientSettings.offscreenPause() && !s.seenRecently();
         boolean far = s.viewPx() < dev.windowscraft.render.DisplayRenderer.FAR_PX
                 && s.displays.stream().allMatch(d -> ClientSettings.on(ClientSettings.Auto.DISTANCE_LIMIT, d));
@@ -549,7 +550,7 @@ public final class DisplayManager {
         // others has its own capture; when it encodes these very pictures, they stay full size)
         Display seated = dev.windowscraft.monitor.InGameMonitors.seated(), flat = dev.windowscraft.client.DeskView.showing();
         // (a stream that isn't on the GPU path encodes these very pictures — or will, starting up)
-        boolean full = s.publisher != null && !s.publisher.gpuActive() || seated != null && s.displays.contains(seated) || flat != null && s.displays.contains(flat)
+        boolean full = s.publisher != null && !s.publisher.gpuActive() && !s.publisher.paused() || seated != null && s.displays.contains(seated) || flat != null && s.displays.contains(flat)
                 || !s.displays.stream().allMatch(d -> ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN, d));
         if (full || s.seenRecently()) // (out of view: as it was — the size it looked last)
             s.session.setShrink(s.copySize.update(s.session.fullHeight(), s.viewPx(), full, System.nanoTime()));

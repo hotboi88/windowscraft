@@ -265,6 +265,8 @@ public final class StreamPublisher {
     public boolean gpuActive() { return gpuActive; }
     /** Is anyone able to watch it (the server's relay takes this stream)? */
     public boolean streaming() { return running && anyRelayOpen(); }
+    /** Nobody's watching: nothing is encoded or sent until someone does. */
+    public boolean paused() { return running && idle(); }
     /** While GPU capture runs, your own wall shows this preview instead of a separate CPU capture. */
     public dev.windowscraft.capture.FrameSource previewSource() {
         return gpuActive && System.nanoTime() - lastPreviewNanos < 2_000_000_000L ? previewSource : null;

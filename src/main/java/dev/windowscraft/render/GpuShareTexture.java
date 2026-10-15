@@ -60,6 +60,8 @@ public final class GpuShareTexture extends AbstractTexture {
             register(s);
             for (long f : copyFences) if (f != 0) GL32.glDeleteSync(f);
             java.util.Arrays.fill(copyFences, 0L);
+            // (the helper keeps new pictures to its opaque fill until they're checked: now it may write them)
+            for (int i = 0; i < 3; i++) share.free(i);
         }
         // pictures whose copy has finished on the graphics card go back to the helper
         for (int i = 0; i < copyFences.length; i++) {

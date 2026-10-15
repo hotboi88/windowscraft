@@ -183,7 +183,9 @@ public final class GpuShare {
 
     /** Pictures are arriving (one in the last 2 s, or the window just isn't changing but nothing failed). */
     public boolean delivering() {
-        return failure == null && frameSeq > 0 && process != null && process.isAlive();
+        // (new pictures count as soon as they're announced: the helper only writes into them once
+        // the game has checked them and given them back — waiting for a frame first would wait for ever)
+        return failure == null && (frameSeq > 0 || slots != null) && process != null && process.isAlive();
     }
 
     public long millisSinceFrame() { return (System.nanoTime() - lastFrameNanos) / 1_000_000; }
