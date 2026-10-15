@@ -1,4 +1,12 @@
-WindowsCraft 0.15.10 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.11 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.11: watching someone far away (about 100 ms, going up and down) no longer smears
+the picture: when a piece of it is lost on the way, the screen holds its last picture for a
+moment instead (at most a second; the sound goes on), and lost pieces are waited for a little
+longer, so it happens much less (on a simulated bad line: 35 smeared pictures in 40 s before,
+none now, and smoother too). A window you share no longer freezes while you or a friend use it.
+Screens sit flush on their blocks, and a gaming monitor's picture now fills its whole screen
+(16:9) instead of leaving dark bars beside it.
 
 New in 0.15.10: WindowsCraft keeps to its own monitors. It no longer changes how Windows starts
 Task Manager (that affected your desk too), friends' controllers work only at your in-game

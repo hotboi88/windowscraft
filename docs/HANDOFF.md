@@ -99,6 +99,54 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.11 (15 Oct): a friend 100 ms away (the owner's girlfriend: ~100 ms that goes up and down); screens flush
+
+New dev tool: `relay.NetSim` — a bad line between the relay and its viewers, both ways, on the
+server: `SERVER_EXTRA="-Dwindowscraft.exp.netsim=rtt=100,jitter=60,loss=0.5,spike=250,every=12,len=2"
+tools/bench/run.sh …` (FIFO queues with a wandering delay, spikes, loss; input lines over TCP are
+late, never lost; unit-tested). Found and fixed with it (the owner, watching Bob's window: "some
+kind of extreme distortion on the bottom half"):
+- **Smeared pictures.** A piece given up on ("lost for good") — or a catch-up skip — handed the
+  decoder a picture with a hole; FFmpeg concealed it and the picture smeared until the next
+  keyframe ("PES packet size mismatch", "corrupt input packet" in the viewer's FFmpeg log, also
+  without NetSim whenever the viewer had to catch up). `StreamSubscriber.FREEZE_ON_LOSS` is now on
+  by default: video held (last good picture) until the next keyframe, sound goes on
+  (`-Dwindowscraft.freezeOnLoss=false`: as before).
+- **Giving up too soon.** `UdpReceiver.latencyMs`: 2.5 round trips + 70 ms → 3 + 120 (min 160, max
+  1200): on a 100 ms line that swings, resent pieces were still on their way. Spiky line
+  (rtt=100,jitter=30,loss=1,spike=250), same run, old rule vs new: damaged pictures shown 35 → 0,
+  pieces given up 2 → 0, pictures/s 28 → 43–45, captured → decoded median 245 → 182–195 ms
+  (`-Dwindowscraft.exp.oldGiveUp=true` compares).
+- **Shared windows froze while anyone used them.** `ScreenControl.ensureParked` moved a shared
+  window 300 px below the monitor while it was used (Chrome's hover/scroll); a window off every
+  monitor isn't drawn: its capture got 0 pictures/s (measured: 49/s on screen, 0 parked, 48 back),
+  so the wall and the stream froze — the viewer's FFmpeg then found no data ("could not find codec
+  parameters"), restarted every 15 s ("Accept timed out"). And it moved a window of the owner's
+  desk. Off now (`-Dwindowscraft.parkSharedWindows=true`: on). A friend sitting at a shared window
+  over a steady 100 ms line: 40 pictures/s, clicks 70/70 at 67 ms median, nothing damaged.
+  (Whether Chromium apps still scroll for a friend while Minecraft covers them: not shown — a
+  quick test with posted wheel messages didn't scroll even uncovered.)
+Screens sit flush (the owner: "remove the gap from the block to the screen … without the block
+tearing into it", "the full monitor screen to cover the indentation and not pop outward"):
+- `DisplayRenderer.towardCamera`: the picture is pulled toward your eye by 1.5 of your screen's
+  pixels as they span along the surface from where you are (`pixelAngle` from the FOV and the
+  framebuffer's height each frame), at most 0.25 + 0.02·d — ~0.007 of a block at 3 blocks straight
+  on (was ~0.08: 0.004 + 0.012·d + (1/32)/facing). Measured in his modpack with Solas (testmod
+  `ScreenTour`, `-Dwindowscraft.tour=NAME`: a wall and a gaming monitor block sharing the bench
+  window, 10 spots, the game's own screenshots): with only depth precision ("small") or no pull
+  the picture vanished entirely seen steeply from 26 blocks (Solas's TAA jitter); the pixel-sized
+  pull keeps it there and is a hair everywhere else. `-Dwindowscraft.exp.pull=full|small|off|pixel`.
+- Gaming monitor blocks: the screen area is 16:9 now — 128 px fronts (made from the 16 px ones:
+  screen 112 × 63 texels = 14 × 7.875 model px, the bezel under it thinner, its mark kept); the
+  picture's area `WallRect.M_BOTTOM` 6 → 5.125 / 16, `MonitorPose.SCREEN_B` −3 → −3.875 / 16. Before,
+  a 16:9 picture on the 2:1 area left dark bars beside it.
+Measured over the simulated line before the fixes (in-game monitor, the stream at the bench's
+30 fps default): steady 100 ms: captured → decoded 129 / 149 / 179 ms (median / P95 / max), clicks
+on the monitor 59 / 68 / 70 ms; swinging (±30 ms each way, 0.5 % loss): 140 / 273 / 359 ms, longest
+pause 253 ms, clicks 62 / 82 / 89; spikes (+250 ms for 2 s every ~12 s, 1 % loss): 145 / 440 / 648
+ms, longest pause 610 ms, clicks 61 / 163 / 199. In-game monitors stream at the owner's own
+setting (60 on his PC); the bench sharer has no settings file (30).
+
 ## 0.15.10 (15 Oct): nothing outside WindowsCraft's own monitors (the owner's rule)
 
 The owner: "everything WindowsCraft does should only apply to WindowsCraft monitors — not my main

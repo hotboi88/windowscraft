@@ -144,6 +144,20 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## A friend 100 ms away (15 Oct, 0.15.11, relay.NetSim on the server, 1080p60 window, one PC)
+
+Spiky line (rtt=100, ±15 ms each way, 1 % loss, +250 ms for 2 s every ~12 s), the same run, before / after:
+
+| | 0.15.10 rule | 0.15.11 |
+|---|---|---|
+| damaged (smeared) pictures shown in 40 s | 35 | 0 |
+| pieces given up on / catch-up skips | 2 / 1 | 0 / 0 |
+| pictures/s at the viewer | 28 | 43–45 |
+| captured → decoded, median / P95 | 245 / 533 ms | 182–195 / 474–545 ms |
+
+A friend sitting at a shared window over a steady 100 ms line (no parking): 40 pictures/s,
+captured → decoded 133 / 250 ms, clicks 70/70 at 67 / 77 ms. Parked windows got 0 pictures/s.
+
 ## A friend's game controller (15 Oct, 0.15.9, ViGEmBus 1.21.442, one PC)
 
 | | median | P95 | max |
