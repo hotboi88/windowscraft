@@ -99,6 +99,38 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.10 (15 Oct): nothing outside WindowsCraft's own monitors (the owner's rule)
+
+The owner: "everything WindowsCraft does should only apply to WindowsCraft monitors — not my main
+desktop, not a real monitor of my physical setup". Swept for Windows-wide changes; what changed:
+- Task Manager's "Run as invoker" layer is no longer set while monitors are on (it changed Task
+  Manager on the desk too; Windows 11 ignores it for administrators anyway). One left by an older
+  version is still put back (`taskmgr_normal_rights` only restores). Self-test: "…how Windows
+  starts Task Manager is left alone".
+- Friends' game controllers only at your in-game monitors (`handleGuest`: `!monitor` → ignored),
+  not at a shared window of your desk; their input to monitors stays on the guest lane.
+- SDL's background-events hint (`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1`) is set in wc-vdisplay's
+  own environment, so only what WindowsCraft starts on an in-game monitor (`launch`, Sandboxie's
+  launcher) inherits it. Measured (tools/bench/padmonitor.py: the same SDL stand-in, a front
+  window in front): started on a WindowsCraft monitor 8/8 controller presses, on the desk 0/8.
+  Games started from a monitor's own Start menu or from Steam come from Explorer/Steam: not covered.
+Still Windows-wide, on purpose, and only while it matters:
+- the taskbar settings while in-game monitors exist (a taskbar per display, each with its own
+  windows — Windows has no per-display switch; it's what keeps monitor apps off your own taskbar;
+  it would put a taskbar on a second physical screen too);
+- your pointer speed / acceleration neutral only while you look around with Alt at a monitor;
+- a friend's virtual controller is visible to every game on the PC while they sit at a monitor
+  (Windows has no per-window controllers); it exists only then.
+- Sandboxie force rules (Own copies of apps): while you sit at / point at a monitor, apps started
+  then are boxed even if started elsewhere — to tighten when the owner sets Sandboxie up (not
+  installed on his PC).
+Controller bench at an in-game monitor (`BENCH_INPUT=1 VIEWER_EXTRA=-Dwindowscraft.bench.pad=true
+tools/bench/run.sh monitor 1080 60 40 NAME` — a shared window no longer takes controllers):
+70/70, 2.7 / 8.1 / 36.8 ms (median / P95 / max).
+Seen: an app started on a monitor through a launcher stub (the venv's python.exe → python.exe)
+wasn't closed when the test monitor was removed (its window is the child's; `owned()` has the
+stub's pid). Games that start through a launcher could stay open after their monitor goes.
+
 ## 0.15.9 (15 Oct): friends' game controllers (ViGEmBus)
 
 Someone sitting at one of your screens (allowed to use it) with a game controller gets a
@@ -120,7 +152,8 @@ play while you play Minecraft. Without ViGEmBus nothing changes (wc-input logs i
   nothing for 3 s → let go of (still plugged in).
 - Measured (one PC): helper → XInput 1.0 ms median (1.9 max); controller plugged in 37 ms after
   the first message; the friend's game → XInput on yours 2.0 / 3.3 / 4.5 ms (median / P95 / max,
-  70 of 70 presses, `BENCH_INPUT=1 VIEWER_EXTRA=-Dwindowscraft.bench.pad=true`, timed by
+  70 of 70 presses, `BENCH_INPUT=1 VIEWER_EXTRA=-Dwindowscraft.bench.pad=true` (a shared window then; since
+  0.15.10 run it with `monitor`), timed by
   `tools/bench/padcheck.py watch` + `match`). Through GLFW with a controller plugged in on the
   viewer's side (`padcheck.py loop` plugs one in through wc-input's slot 99, `-Dwindowscraft.bench.pad=glfw`
   reads it with GLFW each frame): 39 of 39 presses, physical press → XInput on the owner's side 7.9 ms

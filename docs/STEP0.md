@@ -154,7 +154,9 @@ WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
 Which games see it while another window is in front (stand-in games, tools/bench/padapis.py):
 XInput 8/8 (1.0 ms) · Windows.Gaming.Input 0/8 · SDL 2 as shipped 0/8 · SDL with background events
-allowed 8/8 (1.6 ms); each 3/3 in front.
+allowed 8/8 (1.6 ms); each 3/3 in front. Since 0.15.10 WindowsCraft passes that to what it starts on an
+in-game monitor only: the SDL stand-in started there 8/8, the same started on the desk 0/8. At an
+in-game monitor (the only place controllers work since 0.15.10): 70/70, 2.7 / 8.1 / 36.8 ms.
 
 A controller of their own appears 37 ms after their first message; let go of after 3 s without a
 message; unplugged when they go. Over the internet: plus their one-way delay.

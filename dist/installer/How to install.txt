@@ -1,4 +1,10 @@
-WindowsCraft 0.15.9 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.10 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.10: WindowsCraft keeps to its own monitors. It no longer changes how Windows starts
+Task Manager (that affected your desk too), friends' controllers work only at your in-game
+monitors (not at a window of your desk you share), and games WindowsCraft starts on an in-game
+monitor can take a friend's controller even while you play Minecraft in front (SDL games ignore
+it by default); the same game on your desk isn't changed.
 
 New in 0.15.9: friends can play controller games on your screens while you play Minecraft. When
 someone you allowed sits at one of your screens with a game controller, it shows up on your PC as
