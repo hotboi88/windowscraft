@@ -123,6 +123,7 @@ public final class BenchTest implements ClientModInitializer {
 
     /** The viewers' game folders, next to the sharer's (run-bob; "run-bob,run-carol" for two; tools/prodclient's copies have their own). */
     private static final String VIEWER_DIR = System.getProperty("windowscraft.bench.viewerDir", "run-bob");
+    private static final String PAD = System.getProperty("windowscraft.bench.pad", "");
     private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input") || "1".equals(System.getProperty("windowscraft.bench.input")); // (run.sh passes BENCH_INPUT=1)
     private boolean allowed, seated;
     private Display monitorWall;
@@ -154,6 +155,24 @@ public final class BenchTest implements ClientModInitializer {
                 seated = true;
                 log("sitting at the shared screen, using it");
             }
+        }
+        if (seated && ctrl != null && PAD.equals("glfw")) {
+            // the real way (-Dwindowscraft.bench.pad=glfw): the first controller GLFW finds, read each
+            // frame as when you sit at someone's screen (tools/bench/padcheck.py loop plugs one in and times it)
+            dev.windowscraft.client.GuestPad.testSeat = ctrl;
+            // (and the heartbeat a seated player sends: still sitting there)
+            if (tick % 20 == 0) dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_POINT, 0.5, 0.5, 1, 0);
+            return;
+        }
+        if (seated && ctrl != null && PAD.equals("true")) {
+            // a game controller instead (-Dwindowscraft.bench.pad=true): A pressed for half a second
+            // each second, the left stick going round (tools/bench/padcheck.py times A reaching XInput)
+            boolean a = (tick / 10) % 2 == 1;
+            double t = tick * 0.1;
+            var p = new dev.windowscraft.net.Payloads.GamePad(a ? 0x1000 : 0, 0, 0, (float) Math.cos(t), (float) Math.sin(t), 0, 0);
+            if (tick % 10 == 0) log("pad sent A=" + (a ? 1 : 0) + " " + System.nanoTime());
+            dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_PAD, p.x(), p.y(), p.a(), p.f());
+            return;
         }
         if (seated && ctrl != null) {
             // the messages sitting at it sends (the network, server and host parts are what's timed):
