@@ -133,7 +133,7 @@ public final class Share {
     /** For the report: how this share gets to your wall and to the stream, and how fast. */
     public String describe() {
         String wall = gpuFeeding ? "direct GPU sharing" : fromPreview ? "stream preview (through the CPU)" : "CPU capture (" + session.producerName()
-                + (session.shrink() > 0 ? ", " + session.outputWidth() + " × " + session.outputHeight() + " of " + session.fullWidth() + " × " + session.fullHeight() : "") + ")";
+                + (session.outputHeight() > 0 && session.outputHeight() < session.fullHeight() ? ", " + session.outputWidth() + " × " + session.outputHeight() + " of " + session.fullWidth() + " × " + session.fullHeight() : "") + ")";
         String stream = publisher == null ? "not streamed" : publisher.status() + (publisher.gpuActive() ? " [GPU capture+encode]" : " [CPU frames]");
         return String.format(java.util.Locale.ROOT, "'%s' (%s): wall via %s; capture %.0f pictures/s, %.1f ms each; helper fps %d; "
                         + "on screen %s, %.0f px tall; stream: %s",
@@ -143,7 +143,8 @@ public final class Share {
 
     /** Your wall's copy is this size, of the picture's full size (null: full size). */
     public int[] smallerCopy() {
-        if (gpuFeeding || fromPreview || session.shrink() == 0 || session.fullHeight() == 0) return null;
+        // (what the wall has now: a still screen gets its smaller copy with its next change)
+        if (gpuFeeding || fromPreview || session.outputHeight() <= 0 || session.outputHeight() >= session.fullHeight()) return null;
         return new int[]{session.outputWidth(), session.outputHeight(), session.fullWidth(), session.fullHeight()};
     }
 

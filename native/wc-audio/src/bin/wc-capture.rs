@@ -25,7 +25,8 @@
 //!   the app's content (default).
 //!   stdin lines: "fps <n>" changes the frame rate on the fly; "shrink <n>" (--cpu only) halves
 //!   the picture n times (0-3) on the graphics card before it's read back — a wall that looks
-//!   small on the player's screen doesn't need every pixel copied; "timing 1" (measurements only)
+//!   small on the player's screen doesn't need every pixel copied (fewer halvings come at once,
+//!   from the last picture, even while the window doesn't change); "timing 1" (measurements only)
 //!   adds when each picture was captured to its "frame" line: "frame <slot> <time>", in 100 ns
 //!   units of the system's performance counter (Java's System.nanoTime() / 100 on Windows).
 //!
@@ -506,6 +507,7 @@ fn run(a: Args) -> windows::core::Result<()> {
     let mut generation = 0u32;
     let mut shrinker: Option<Shrinker> = None;
     let mut shrink_broken = false;
+    let mut slot_level = 0u32; // the halvings of the picture now in the slots
     while !stop.load(Ordering::SeqCst) {
         if gone.load(Ordering::SeqCst) {
             say(&mut out, "gone");
@@ -514,6 +516,31 @@ fn run(a: Args) -> windows::core::Result<()> {
         let mut frame = match pool.TryGetNextFrame() {
             Ok(f) => f,
             Err(_) => {
+                // a still picture (no new frames come) copied smaller than now wanted — the player
+                // came closer: the sharper copy at once, from the last picture kept on the card
+                if let (Some(c), Some(sh)) = (&mut cpu, &shrinker) {
+                    let want = shrink_for(sh.w, sh.h, shrink.load(Ordering::SeqCst));
+                    if want < slot_level {
+                        let size = SizeInt32 { Width: (sh.w >> want).max(1) as i32, Height: (sh.h >> want).max(1) as i32 };
+                        generation += 1;
+                        *c = CpuSlots::new(&device, a.cpu.as_ref().unwrap(), generation, size.Width, size.Height)?;
+                        if !say(&mut out, &format!("cpuslots {} {} {} {} {}", size.Width, size.Height, c.name, sh.w, sh.h)) {
+                            break;
+                        }
+                        slot_size = size;
+                        slot_level = want;
+                        match c.copy(&ctx, &sh.tex, want, None, next_slot) {
+                            Ok(()) => {
+                                if !say(&mut out, &format!("frame {next_slot}")) {
+                                    break;
+                                }
+                                next_slot = (next_slot + 1) % SLOTS;
+                            }
+                            Err(e) => eprintln!("info=read-back failed: {e}"),
+                        }
+                        continue;
+                    }
+                }
                 std::thread::sleep(Duration::from_millis(2));
                 continue;
             }
@@ -610,6 +637,7 @@ fn run(a: Args) -> windows::core::Result<()> {
                 eprintln!("info=read-back failed: {e}");
                 continue;
             }
+            slot_level = level;
         } else {
             unsafe {
                 ctx.CopySubresourceRegion(&slots[next_slot], 0, 0, 0, 0, &tex, 0, Some(&region));
