@@ -55,6 +55,9 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
 - Natives: native/wc-audio (Rust, target x86_64-pc-windows-gnu from Linux; on Windows the
   normal toolchain works). After rebuilding, copy wc-vdisplay.exe / wc-selftest.exe /
   wc-input.exe / wc-capture.exe into src/main/resources/windowscraft/natives (NOT wc-audio.exe).
+  On Windows with the MSVC toolchain, build with `RUSTFLAGS="-C target-feature=+crt-static"`
+  (else the helper needs VCRUNTIME140.dll, which not every PC has); wc-capture.exe since 0.15.3
+  is built that way (`--target-dir target-static`).
 - Mod: `gradle build` → build/libs/windowscraft-<ver>+mc1.21.1.jar (version in gradle.properties).
 - Package: zip of dist/installer/*, the jar, and a "Windows self-test" folder (wc-selftest.exe,
   wc-input.exe, wc-vdisplay.exe, dist/selftest/Run self-test.bat) → dist/WindowsCraft-<ver>.zip.
@@ -94,6 +97,21 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 "rewind" issue); extra render frame; A/V sync off 100–350 ms; 10 Mb/s cap and periodic IDR
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
+
+## 0.15.3 (14 Oct, branch `next-0.15.3`): Automatic / Advanced settings, copies as sharp as they look
+
+docs/SETTINGS.md "Built (0.15.3)" has the model (`ClientSettings.Auto`, `on(Auto)`,
+`on(Auto, Display)`, `Display.overrides`), the UI and the old-file migration. First new Automatic
+decision: `display.CopySize` + wc-capture `shrink <n>` (CPU route only; GPU mipmaps before the
+read-back). Measured (docs/STEP0.md, "0.15.3"): a 4K in-game monitor across the room 21 → 30
+pictures/s, 1 % lows 40 → 81 fps, game CPU 2.2 → 0.5 cores. The owner's own settings file had
+off-screen pause and the distance limit off: he opens in Advanced with those two Off. Bench:
+`-Dwindowscraft.bench.far=N` (a phase N blocks away), `-Dwindowscraft.bench.noSit=true`.
+Next for the CPU route at full size (sitting at a 4K monitor): the game copies each picture twice
+(helper memory → frame, frame → GPU buffer, 16–27 ms each under load); a frame that borrows the
+helper's memory would save one, but needs the mapping kept until every borrowed frame is back
+(an unmapped read crashes the game) — only worth it if direct GPU sharing stays unavailable on
+his PC (its v4 re-test runs when he plays 0.15.2+).
 
 ## 0.15.2 (14 Oct; on main, on the owner's server since 13:04, his PC when his game closes)
 

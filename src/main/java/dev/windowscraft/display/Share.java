@@ -32,6 +32,8 @@ public final class Share {
     /** What the GPU helper was last told (the performance settings lower it). */
     int gpuSentFps;
     private volatile boolean gpuFeeding;
+    /** "As sharp as it looks": how many times your wall's copy is halved. */
+    final CopySize copySize = new CopySize();
     private final DisplayTexture texture;
     private long lastPollFrame = -1;
     private Identifier lastPolled;
@@ -130,12 +132,19 @@ public final class Share {
 
     /** For the report: how this share gets to your wall and to the stream, and how fast. */
     public String describe() {
-        String wall = gpuFeeding ? "direct GPU sharing" : fromPreview ? "stream preview (through the CPU)" : "CPU capture (" + session.producerName() + ")";
+        String wall = gpuFeeding ? "direct GPU sharing" : fromPreview ? "stream preview (through the CPU)" : "CPU capture (" + session.producerName()
+                + (session.shrink() > 0 ? ", " + session.outputWidth() + " × " + session.outputHeight() + " of " + session.fullWidth() + " × " + session.fullHeight() : "") + ")";
         String stream = publisher == null ? "not streamed" : publisher.status() + (publisher.gpuActive() ? " [GPU capture+encode]" : " [CPU frames]");
         return String.format(java.util.Locale.ROOT, "'%s' (%s): wall via %s; capture %.0f pictures/s, %.1f ms each; helper fps %d; "
                         + "on screen %s, %.0f px tall; stream: %s",
                 source.title(), source.kind(), wall, session.measuredFps(), session.avgCaptureMs(), gpu == null ? 0 : gpuSentFps,
                 seenRecently() ? "yes" : "no", viewPx, stream);
+    }
+
+    /** Your wall's copy is this size, of the picture's full size (null: full size). */
+    public int[] smallerCopy() {
+        if (gpuFeeding || fromPreview || session.shrink() == 0 || session.fullHeight() == 0) return null;
+        return new int[]{session.outputWidth(), session.outputHeight(), session.fullWidth(), session.fullHeight()};
     }
 
     /** Is your wall being fed by direct GPU sharing right now? */

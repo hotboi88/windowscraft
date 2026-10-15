@@ -141,7 +141,7 @@ public final class DisplayRenderer {
             if (seen && px > lookedPx && dev.windowscraft.monitor.InGameMonitors.isOn(d)) { lookedPx = px; looked = d; }
             if (pauseHidden && !seen) continue; // off-screen pause: no work at all for a wall you can't see
             long tu = System.nanoTime();
-            boolean upload = !limitFar || px >= FAR_PX || due(d.id, now);
+            boolean upload = !limitFar || px >= FAR_PX || due(d.id, now) || !dev.windowscraft.config.ClientSettings.on(dev.windowscraft.config.ClientSettings.Auto.DISTANCE_LIMIT, d);
             Identifier tex = d.pollTexture(frame, upload);
             if (upload) { statUploads++; long du = System.nanoTime() - tu; statUploadNanos += du; UPLOAD.record(du); }
             if (tex != null && dev.windowscraft.client.DeskView.covers(d)) {

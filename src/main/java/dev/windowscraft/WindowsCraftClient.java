@@ -101,7 +101,7 @@ public final class WindowsCraftClient implements ClientModInitializer {
             DisplayManager.get().onJoin(mc);
             if (dev.windowscraft.render.GpuCrashGuard.consumeTripped() && mc.player != null) {
                 mc.player.sendMessage(Text.literal("WindowsCraft: the game closed unexpectedly while \"Direct GPU sharing\" was starting, "
-                        + "so it has been turned off. Everything else works as before.").formatted(Formatting.YELLOW), false);
+                        + "so it's off with this graphics driver (it's tried again after a driver update). Everything else works as before.").formatted(Formatting.YELLOW), false);
             }
         }));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> mc.execute(() -> {

@@ -144,6 +144,28 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## 0.15.3: "Copies as sharp as they look" on the RTX 4060 (14 Oct, his game closed, his server running)
+
+A 3840 × 2160 in-game monitor on the CPU route (direct GPU sharing off, the owner's other
+performance settings: off-screen pause and distance limit off), the bench window at 60/s on it,
+game window 1600 × 900, 30 s per phase (`tools/bench/monitor.sh` with `BW_W=3840 BW_H=2160`,
+`-Dwindowscraft.bench.monitorSize=3840x2160 -Dwindowscraft.bench.far=24 -Dwindowscraft.bench.noSit=true`):
+
+| standing 24 blocks away (wall 250 px tall on screen) | setting off | on (copy 960 × 540) |
+|---|---|---|
+| pictures on the wall | 21/s | **30/s** (all the helper sends) |
+| copy out of the helper / into the GPU buffer, median | 26 / 16 ms | **0.4 / 0.3 ms** |
+| captured by Windows → copied out, median / P95 | 72 / 100 ms | **20 / 41 ms** |
+| copied out → on the wall, median | 41 ms | **5 ms** |
+| game fps, average / 1 % low | 114 / 39.8 | **119 / 80.9** |
+| game CPU / helper CPU | 2.21 / 0.94 cores | **0.53 / 0.16** |
+| GPU busy | 54 % | **42 %** |
+
+Standing 9 blocks away (wall 680 px tall) it stays at full size in both (1080 isn't twice 680):
+20–31 pictures/s, 16–27 ms per copy (two runs of the same thing; the copies compete for memory —
+a single 4K copy alone takes ~5 ms on this PC, 7 GB/s). Sitting at it (full size by design) is
+unchanged: the fix for that is direct GPU sharing working (no copies through the CPU).
+
 ## 0.15.2 on the RTX 4060 (14 Oct, the owner's game open in the background)
 
 One-PC bench, a shared window at 1080p, viewer lip sync off (latency only). Captured → decoded

@@ -34,6 +34,15 @@ public final class FallbackProducer implements FrameProducer {
         if (wgc != null && !usingGdi) wgc.setFps(fps);
     }
 
+    /** Halve the pictures n times before they're copied (Graphics Capture only; GDI ignores it). */
+    public void setShrink(int n) {
+        if (wgc != null && !usingGdi) wgc.setShrink(n);
+    }
+
+    /** The picture's own size before any halving (0: not known). */
+    public int fullWidth() { return wgc != null && !usingGdi ? wgc.fullWidth() : 0; }
+    public int fullHeight() { return wgc != null && !usingGdi ? wgc.fullHeight() : 0; }
+
     @Override
     public Frame grab(FramePool pool, CaptureSettings settings) throws SourceGoneException {
         if (!usingGdi && wgc.failed()) {

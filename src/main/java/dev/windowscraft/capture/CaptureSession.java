@@ -91,6 +91,10 @@ public final class CaptureSession implements FrameSource {
                 if (producer instanceof FallbackProducer fp) { // the helper takes no more pictures than we use
                     int want = external || gpuRest ? 1 : cap > 0 ? Math.min(cap, s.fps()) : s.fps();
                     if (want != helperFps) { fp.setFps(want); helperFps = want; }
+                    int sh = shrink;
+                    if (sh != helperShrink) { fp.setShrink(sh); helperShrink = sh; }
+                    fullW = fp.fullWidth();
+                    fullH = fp.fullHeight();
                     wgcActive = !fp.usingGdi();
                 }
                 Frame f = producer.grab(pool, s);
@@ -213,7 +217,16 @@ public final class CaptureSession implements FrameSource {
     public boolean isEnded() { return state == State.ENDED; }
     public double measuredFps() { return measuredFps; }
     private volatile String producerName = "?";
-    private int helperFps = -1;
+    private int helperFps = -1, helperShrink;
+    /** "As sharp as it looks": the pictures halved this many times (by the helper, on the graphics card). */
+    private volatile int shrink;
+    private volatile int fullW, fullH;
+
+    public void setShrink(int n) { shrink = n; }
+    public int shrink() { return shrink; }
+    /** The picture's own size before any halving (0: not known, or a capture that can't halve). */
+    public int fullWidth() { return fullW; }
+    public int fullHeight() { return fullH; }
     private volatile boolean wgcActive;
 
     /** Is the wall fed by Windows Graphics Capture (fast, no delay) right now? */

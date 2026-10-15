@@ -38,6 +38,9 @@ public final class WgcProducer implements FrameProducer {
     private WinNT.HANDLE mapping;
     private Pointer view;
     private int w, h;
+    /** The picture's own size, before the helper halves it ("shrink"). */
+    private volatile int fullW, fullH;
+    private volatile int shrink;
     private volatile int latestSlot = -1;
     private volatile long arrived;
     private long taken;
@@ -107,8 +110,10 @@ public final class WgcProducer implements FrameProducer {
         try (BufferedReader r = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.US_ASCII))) {
             for (String line; (line = r.readLine()) != null; ) {
                 String[] p = line.trim().split(" ");
-                if (p[0].equals("cpuslots") && p.length == 4) {
+                if (p[0].equals("cpuslots") && p.length >= 4) {
                     remap(Integer.parseInt(p[1]), Integer.parseInt(p[2]), p[3]);
+                    fullW = p.length >= 6 ? Integer.parseInt(p[4]) : Integer.parseInt(p[1]);
+                    fullH = p.length >= 6 ? Integer.parseInt(p[5]) : Integer.parseInt(p[2]);
                 } else if (p[0].equals("frame") && p.length >= 2) {
                     latestCaptured = p.length >= 3 ? dev.windowscraft.measure.Measure.helperNanos(p[2]) : 0;
                     latestSlot = Integer.parseInt(p[1]);
@@ -165,6 +170,21 @@ public final class WgcProducer implements FrameProducer {
         } catch (IOException ignored) {
         }
     }
+
+    /** Halve the pictures n times (0-3) on the graphics card before they're copied out. */
+    public void setShrink(int n) {
+        if (n == shrink) return;
+        shrink = n;
+        try {
+            control.write(("shrink " + n + "\n").getBytes(StandardCharsets.US_ASCII));
+            control.flush();
+        } catch (IOException ignored) {
+        }
+    }
+
+    /** The picture's own height before any halving (0: no picture yet). */
+    public int fullHeight() { return fullH; }
+    public int fullWidth() { return fullW; }
 
     @Override
     public synchronized Frame grab(FramePool pool, CaptureSettings settings) throws SourceGoneException {

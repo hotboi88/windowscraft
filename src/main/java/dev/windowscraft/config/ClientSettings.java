@@ -12,13 +12,37 @@ import net.fabricmc.loader.api.FabricLoader;
 /**
  * The options you picked last time: share-dialog defaults, and how you like to hear other
  * people's screens (3D from the wall, or direct).
+ *
+ * <p>The performance settings are Automatic (WindowsCraft decides) or Advanced (your own pick for
+ * the ones you set; the rest stay Automatic). A screen can have its own pick too, which comes
+ * first: the screen's own > yours in Advanced > Automatic ({@link #on(Auto, Display)}).
  */
 public final class ClientSettings {
+    /** The settings that can be Automatic; the key is how they're saved. */
+    public enum Auto {
+        GPU_SHARING("gpuSharing"),
+        OFFSCREEN_PAUSE("offscreenPause"),
+        DISTANCE_LIMIT("distanceFpsLimit"),
+        /** Copy your own screens for your walls only as sharp as they look from where you are. */
+        SHARP_AS_SEEN("sharpAsSeen");
+
+        public final String key;
+
+        Auto(String key) { this.key = key; }
+
+        static Auto of(String key) {
+            for (Auto a : values()) if (a.key.equals(key)) return a;
+            return null;
+        }
+    }
+
+    private static boolean perfAdvanced;
+    /** Your picks in Advanced (absent: Automatic for that one). */
+    private static final java.util.EnumMap<Auto, Boolean> picks = new java.util.EnumMap<>(Auto.class);
     private static CaptureSettings current;
     private static boolean remoteDirect;
     private static double ownVolume = 1.0;
     private static boolean screensWithoutShaders = true;
-    private static boolean gpuSharing = true;
     private static double pointerSpeed = 1.0;
     /** Your upload for screens, shared among the ones people are watching (kbit/s). */
     private static int uploadKbps = 10_000;
@@ -28,7 +52,7 @@ public final class ClientSettings {
     private static double seatZoom = -1, watchZoom = -1;
     /** Programs you picked to always run normally (never as a monitor's own copy). */
     private static java.util.List<String> isoPrograms = new java.util.ArrayList<>();
-    private static boolean offscreenPause = true, distanceFpsLimit = true, lightMipmaps = false; // (every picture sharp, from up close or far)
+    private static boolean lightMipmaps = false; // (every picture sharp, from up close or far)
     private static int tabletW = 1920, tabletH = 1080; // (wide, like a monitor)
 
     private static Path file() {
@@ -47,11 +71,8 @@ public final class ClientSettings {
                     remoteDirect = o.has("remoteDirect") && o.get("remoteDirect").getAsBoolean();
                     if (o.has("ownVolume")) ownVolume = o.get("ownVolume").getAsDouble();
                     if (o.has("screensWithoutShaders")) screensWithoutShaders = o.get("screensWithoutShaders").getAsBoolean();
-                    // a new key for the new way of sharing (OpenGL external memory): on unless it was turned off
-                    if (o.has("gpuSharingExt")) gpuSharing = o.get("gpuSharingExt").getAsBoolean();
                     if (o.has("pointerSpeed")) pointerSpeed = o.get("pointerSpeed").getAsDouble();
-                    if (o.has("offscreenPause")) offscreenPause = o.get("offscreenPause").getAsBoolean();
-                    if (o.has("distanceFpsLimit")) distanceFpsLimit = o.get("distanceFpsLimit").getAsBoolean();
+                    readPerf(o);
                     if (o.has("deskView")) deskView = o.get("deskView").getAsBoolean();
                     if (o.has("seatZoom")) seatZoom = o.get("seatZoom").getAsDouble();
                     if (o.has("isoPrograms")) { isoPrograms = new java.util.ArrayList<>(); for (var e : o.getAsJsonArray("isoPrograms")) isoPrograms.add(e.getAsString()); }
@@ -106,16 +127,70 @@ public final class ClientSettings {
         set(current);
     }
 
-    /** Direct GPU sharing for your own walls (Windows; opt-in; switched off automatically after a crash). */
-    public static boolean gpuSharing() {
-        get();
-        return gpuSharing;
+    /**
+     * Direct GPU sharing for your own walls (Windows). Automatic: on, wherever this PC's check
+     * says it works (GpuInterop: the safety test, the in-game check, never again with a driver it
+     * closed the game with).
+     */
+    public static boolean gpuSharing() { return on(Auto.GPU_SHARING); }
+
+    // ---- Automatic / Advanced ----
+
+    /** What Automatic picks (all on for now; GPU sharing then still needs this PC's check). */
+    public static boolean automatic(Auto a) {
+        return true;
     }
 
-    public static void setGpuSharing(boolean on) {
+    /** What's in effect for all your screens. */
+    public static boolean on(Auto a) {
         get();
-        gpuSharing = on;
+        Boolean p = perfAdvanced ? picks.get(a) : null;
+        return p != null ? p : automatic(a);
+    }
+
+    /** What's in effect for this screen: its own pick, if it has one; otherwise like all screens. */
+    public static boolean on(Auto a, dev.windowscraft.display.Display d) {
+        String v = d == null ? null : d.overrides.get(a.key);
+        return v != null ? Boolean.parseBoolean(v) : on(a);
+    }
+
+    /** Performance settings: true = Advanced (your picks count), false = Automatic. */
+    public static boolean perfAdvanced() { get(); return perfAdvanced; }
+    public static void setPerfAdvanced(boolean v) { get(); perfAdvanced = v; set(current); }
+    /** Your pick in Advanced, or null (Automatic). */
+    public static Boolean pick(Auto a) { get(); return picks.get(a); }
+    public static void setPick(Auto a, Boolean v) {
+        get();
+        if (v == null) picks.remove(a);
+        else picks.put(a, v);
         set(current);
+    }
+
+    private static void readPerf(JsonObject o) {
+        picks.clear();
+        if (o.has("perf")) {
+            JsonObject p = o.getAsJsonObject("perf");
+            perfAdvanced = p.has("mode") && p.get("mode").getAsString().equals("advanced");
+            if (p.has("picks")) for (var e : p.getAsJsonObject("picks").entrySet()) {
+                Auto a = Auto.of(e.getKey());
+                if (a != null) picks.put(a, e.getValue().getAsBoolean());
+            }
+            return;
+        }
+        // from before Automatic: a setting you'd turned off stays off (Advanced, for that one)
+        if (o.has("gpuSharingExt") && !o.get("gpuSharingExt").getAsBoolean()) picks.put(Auto.GPU_SHARING, false);
+        if (o.has("offscreenPause") && !o.get("offscreenPause").getAsBoolean()) picks.put(Auto.OFFSCREEN_PAUSE, false);
+        if (o.has("distanceFpsLimit") && !o.get("distanceFpsLimit").getAsBoolean()) picks.put(Auto.DISTANCE_LIMIT, false);
+        perfAdvanced = !picks.isEmpty();
+    }
+
+    private static JsonObject writePerf() {
+        JsonObject p = new JsonObject();
+        p.addProperty("mode", perfAdvanced ? "advanced" : "auto");
+        JsonObject k = new JsonObject();
+        picks.forEach((a, v) -> k.addProperty(a.key, v));
+        p.add("picks", k);
+        return p;
     }
 
     /** How fast the screen's pointer moves with the mouse (theater mode), 0.25–3. */
@@ -131,9 +206,9 @@ public final class ClientSettings {
     }
 
     /** Off-screen pause: no per-frame work for a wall that isn't on your screen. */
-    public static boolean offscreenPause() { get(); return offscreenPause; }
+    public static boolean offscreenPause() { return on(Auto.OFFSCREEN_PAUSE); }
     /** Distance frame-rate limit: walls that look small (far away) update at most 15 times a second. */
-    public static boolean distanceFpsLimit() { get(); return distanceFpsLimit; }
+    public static boolean distanceFpsLimit() { return on(Auto.DISTANCE_LIMIT); }
     /** Fewer mipmap updates during video: the smaller copies used from a distance are redone 5 times a second, not every frame. */
     public static boolean lightMipmaps() { get(); return lightMipmaps; }
     public static int uploadKbps() { get(); return uploadKbps; }
@@ -151,8 +226,6 @@ public final class ClientSettings {
     }
     public static void setUploadKbps(int v) { get(); uploadKbps = Math.max(1000, v); set(current); }
 
-    public static void setOffscreenPause(boolean v) { get(); offscreenPause = v; set(current); }
-    public static void setDistanceFpsLimit(boolean v) { get(); distanceFpsLimit = v; set(current); }
     public static void setLightMipmaps(boolean v) { get(); lightMipmaps = v; set(current); }
 
     /** The size your tablet's monitor last had (picked in the U menu). */
@@ -171,10 +244,12 @@ public final class ClientSettings {
         o.addProperty("remoteDirect", remoteDirect);
         o.addProperty("ownVolume", ownVolume);
         o.addProperty("screensWithoutShaders", screensWithoutShaders);
-        o.addProperty("gpuSharingExt", gpuSharing);
+        o.add("perf", writePerf());
+        // (what's in effect, under the old keys: an older WindowsCraft reads these)
+        o.addProperty("gpuSharingExt", on(Auto.GPU_SHARING));
         o.addProperty("pointerSpeed", pointerSpeed);
-        o.addProperty("offscreenPause", offscreenPause);
-        o.addProperty("distanceFpsLimit", distanceFpsLimit);
+        o.addProperty("offscreenPause", on(Auto.OFFSCREEN_PAUSE));
+        o.addProperty("distanceFpsLimit", on(Auto.DISTANCE_LIMIT));
         o.addProperty("fewerMipmaps", lightMipmaps);
         o.addProperty("uploadKbps", uploadKbps);
         o.addProperty("deskView", deskView);

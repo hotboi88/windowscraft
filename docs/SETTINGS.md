@@ -1,8 +1,40 @@
-# Settings: Automatic, Advanced, and per-screen overrides (proposal, 14 Oct 2026)
+# Settings: Automatic, Advanced, and per-screen overrides (14 Oct 2026)
 
 The owner asked to keep future customization in mind: **Automatic** and **Advanced** settings,
 with per-monitor overrides where useful. This is the plan, so that each change on the way fits
 it. Nothing here removes or moves an existing setting (VISION: preserve the established UI).
+
+## Built (0.15.3)
+
+- **Model** (`config.ClientSettings`): `Auto` lists the settings that can be Automatic
+  (`gpuSharing`, `offscreenPause`, `distanceFpsLimit`, `sharpAsSeen`). The Performance section is
+  Automatic or Advanced (`perfAdvanced`); in Advanced each setting is Automatic, On or Off (your
+  pick, `picks`). Switching to Automatic keeps your picks (ignored until you switch back).
+  `ClientSettings.on(Auto)` is what's in effect for all screens; `on(Auto, Display)` for one
+  screen: its own pick (`Display.overrides`, key → "true"/"false", saved in displays.json) > yours
+  in Advanced > Automatic. Every feature reads one of those two.
+- **Old settings files:** a performance setting turned off (`gpuSharingExt`, `offscreenPause`,
+  `distanceFpsLimit` false) becomes that setting's Advanced pick (Off), and the section opens in
+  Advanced; otherwise Automatic. Saved as `"perf": {"mode", "picks"}`, plus the old keys with
+  what's in effect (an older WindowsCraft still reads them).
+- **GPU sharing after a crash** no longer turns the setting off: GpuInterop never tries it again
+  with the graphics driver it closed the game with (`crashedBefore`), and does after a driver
+  update.
+- **UI:** ⚙ Settings → Performance: "Automatic | Advanced" next to the heading. Automatic: each
+  row shows On/Off (nothing to click) and a "Now: …" line saying what it's doing (screens out of
+  view, far away, smaller copies). Advanced: "Automatic | On | Off" per row. A screen's Picture
+  page, "ON YOUR OWN WALL": "Copy as sharp as it looks" (Like all screens | Always full size) and
+  "Distance frame-rate limit" (Like all screens | Never here).
+- **As sharp as it looks** (`display.CopySize`, wc-capture `shrink <n>`): on the CPU route your
+  wall's copy of a screen is halved 0–3 times on the graphics card (D3D11 mipmaps,
+  GenerateMips) before it's read back. Halved only while the smaller copy still has twice the
+  pixels the wall takes on your screen (`Share.viewPx`); back to sharper at once below 1.4×;
+  smaller again after 2 s. Full size while you sit at it or watch it flat (desk view), while the
+  stream encodes these same pictures (no hardware encoder), or with the setting off. The stream
+  to others has its own capture (FFmpeg's gfxcapture) and never changes. Direct GPU sharing
+  doesn't need it (no copies through the CPU).
+- Not yet: per-screen picks for other people's screens (RemoteOptionsScreen), Automatic upload,
+  mipmaps and sound reserve.
 
 ## Principles
 
@@ -33,7 +65,7 @@ it. Nothing here removes or moves an existing setting (VISION: preserve the esta
 | Upload for screens (kbit/s) | stored, not shown | measured: what the connection to the server carries |
 | Fewer mipmap updates | stored, not shown | on during video on big walls, off for text |
 | **Lip sync vs. quickest picture** | new | in sync while you just watch a screen with sound playing (pictures wait for the sound); quickest while you (or a guest) use it |
-| **Own wall's capture size** | new | the size the wall is on your screen (a 4K monitor across the room doesn't need 4K copies; full size when you sit down) |
+| **Own wall's capture size** | built: "Copies as sharp as they look" | the size the wall is on your screen (a 4K monitor across the room doesn't need 4K copies; full size when you sit down) |
 | **Sound reserve** | new (dev switches today) | starts small, grows after a late arrival (the viewer's reserve already grows) |
 
 Bold rows are where Step 0 found the trade-offs: lip sync is ~0.3 s while the picture takes the

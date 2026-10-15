@@ -267,6 +267,80 @@ public final class HubScreen extends Screen {
         return choiceRow(g, mx, my, x, y, w, label, explain, new String[]{"On", "Off"}, on ? 0 : 1, i -> set.accept(i == 0));
     }
 
+    /**
+     * A setting with its choices on the right (or under its name, when both don't fit) and what
+     * it does underneath, the whole width. Returns the next y.
+     */
+    private int pickRow(DrawContext g, int mx, int my, int x, int y, int w, String label, String explain, String[] opts, int sel, IntConsumer set) {
+        int segTotal = segOptionWidth(opts) * opts.length + 4;
+        boolean below = textRenderer.getWidth(label) + segTotal + 16 > w;
+        UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, label, w - 8), x + 4, y + 4, UiKit.TEXT);
+        if (below) y += 14;
+        if (opts.length > 0) segmented(g, mx, my, below ? x + 4 : x + w - segTotal, y, opts, sel, set);
+        y += 18;
+        if (explain != null && !explain.isEmpty()) y = wrap(g, explain, x + 4, y, w - 8, UiKit.TEXT_MUTED);
+        return y + 6;
+    }
+
+    /** A performance setting: in Automatic, what it's doing (nothing to click); in Advanced, your pick. */
+    private int perfRow(DrawContext g, int mx, int my, int x, int y, int w, ClientSettings.Auto a, String label, String explain, String now) {
+        String tail = now != null ? " " + now : "";
+        if (ClientSettings.perfAdvanced()) {
+            Boolean p = ClientSettings.pick(a);
+            String auto = p == null ? " Automatic: " + (ClientSettings.automatic(a) ? "on." : "off.") : "";
+            return pickRow(g, mx, my, x, y, w, label, explain + auto + tail, new String[]{"Automatic", "On", "Off"}, p == null ? 0 : p ? 1 : 2,
+                    i -> ClientSettings.setPick(a, i == 0 ? null : i == 1));
+        }
+        // (plain words, not a box: nothing to click here)
+        String state = ClientSettings.on(a) ? "On" : "Off";
+        int sw = textRenderer.getWidth(state);
+        UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, label, w - sw - 16), x + 4, y + 4, UiKit.TEXT);
+        UiKit.text(g, textRenderer, state, x + w - sw - 4, y + 4, UiKit.TEXT_2);
+        return wrap(g, explain + tail, x + 4, y + 18, w - 8, UiKit.TEXT_MUTED) + 6;
+    }
+
+    /** One of this screen's own picks: "Like all screens" or its own. */
+    private int overrideRow(DrawContext g, int mx, int my, int x, int y, int w, Display d, ClientSettings.Auto a, String label, String own,
+                            String explain) {
+        boolean mine = d.overrides.containsKey(a.key);
+        return pickRow(g, mx, my, x, y, w, label, explain, new String[]{"Like all screens", own}, mine ? 1 : 0, i -> {
+            if (i == 1) d.overrides.put(a.key, "false");
+            else d.overrides.remove(a.key);
+            DisplayManager.get().save();
+        });
+    }
+
+    private static String plural(long n, String one, String many) { return n + " " + (n == 1 ? one : many); }
+
+    /** Off-screen pause, now: which of your screens rest because you can't see them. */
+    private static String pauseNow() {
+        var live = DisplayManager.get().liveShares();
+        if (live.isEmpty()) return null;
+        long resting = live.stream().filter(s -> !s.seenRecently()).count();
+        return resting == 0 ? "Now: every screen you share is in view." : "Now: " + plural(resting, "screen is", "screens are") + " out of view, resting.";
+    }
+
+    /** Distance frame-rate limit, now: which of your screens look small enough to be slowed down. */
+    private static String farNow() {
+        var live = DisplayManager.get().liveShares();
+        if (live.isEmpty()) return null;
+        long far = live.stream().filter(s -> s.seenRecently() && s.viewPx() < dev.windowscraft.render.DisplayRenderer.FAR_PX).count();
+        return far == 0 ? "Now: none of your screens is that far away." : "Now: " + plural(far, "screen is", "screens are") + " far enough away for it.";
+    }
+
+    /** As sharp as it looks, now: the screens your walls get a smaller copy of. */
+    private static String sharpNow() {
+        var live = DisplayManager.get().liveShares();
+        if (live.isEmpty()) return null;
+        List<String> small = new ArrayList<>();
+        for (var s : live) {
+            int[] c = s.smallerCopy();
+            if (c != null) small.add(s.source().title() + " at " + c[0] + " × " + c[1] + " (of " + c[2] + " × " + c[3] + ")");
+        }
+        if (small.isEmpty()) return "Now: every screen at full size.";
+        return "Now: " + String.join("; ", small.subList(0, Math.min(2, small.size()))) + (small.size() > 2 ? " and " + (small.size() - 2) + " more." : ".");
+    }
+
     private int heading(DrawContext g, String s, int x, int y) {
         UiKit.textScaled(g, textRenderer, s, x, y, 0.75f, UiKit.TEXT_MUTED);
         return y + 13;
@@ -854,6 +928,19 @@ public final class HubScreen extends Screen {
                     "On: you hear it in the game, from the wall, like everyone else. Off: you hear it straight from your PC.", s.hearInGame(),
                     v -> dm.updateSettings(d, new CaptureSettings(s.maxHeight(), s.fps(), false, s.audio(), s.fit(), v)));
         }
+        if (!d.tablet) {
+            y = heading(g, "ON YOUR OWN WALL", x, y + 2);
+            boolean sharp = ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN);
+            int[] c = d.share() == null ? null : d.share().smallerCopy();
+            y = overrideRow(g, mx, my, x, y, w, d, ClientSettings.Auto.SHARP_AS_SEEN, "Copy as sharp as it looks", "Always full size",
+                    (sharp ? "Like all screens: a smaller copy for your wall while it looks small from where you are."
+                            : "Like all screens: full size (Settings → Performance).")
+                            + (c != null ? " Now: " + c[0] + " × " + c[1] + " of its " + c[2] + " × " + c[3] + "." : ""));
+            boolean limit = ClientSettings.distanceFpsLimit();
+            y = overrideRow(g, mx, my, x, y, w, d, ClientSettings.Auto.DISTANCE_LIMIT, "Distance frame-rate limit", "Never here",
+                    limit ? "Like all screens: at most 15 pictures a second while it's far away. \"Never here\": every picture, from anywhere (a screen you watch from afar)."
+                            : "Like all screens: off (Settings → Performance).");
+        }
         return y;
     }
 
@@ -893,23 +980,33 @@ public final class HubScreen extends Screen {
         y = wrap(g, "For walls showing a window. At an in-game monitor your mouse is your real mouse, at your PC's own speed; "
                 + "looking around with Alt uses your Minecraft mouse sensitivity.", x + 4, y, w - 8, UiKit.TEXT_MUTED) + 10;
 
-        // ---- performance ----
-        y = heading(g, "PERFORMANCE", x, y);
+        // ---- performance: Automatic (decided for you, and it says what) or Advanced (your picks) ----
+        String[] modes = {"Automatic", "Advanced"};
+        boolean adv = ClientSettings.perfAdvanced();
+        heading(g, "PERFORMANCE", x, y + 4);
+        segmented(g, mx, my, x + w - (segOptionWidth(modes) * modes.length + 4), y, modes, adv ? 1 : 0, i -> ClientSettings.setPerfAdvanced(i == 1));
+        y = wrap(g, adv ? "Your own pick for each of these; one left on Automatic is still decided for you. A screen can have its own picks too (its Picture page)."
+                        : "WindowsCraft picks these for you and says here what it's doing. Advanced: pick them yourself.",
+                x + 4, y + 20, w - 8, UiKit.TEXT_MUTED) + 8;
         if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
             boolean on = ClientSettings.gpuSharing();
             Boolean works = dev.windowscraft.render.GpuInterop.state();
-            String state = !on ? "Off — your wall reads the window with Graphics Capture instead."
+            String state = !on ? "Now: off — your wall reads the window with Graphics Capture instead."
                     : works == Boolean.FALSE ? "Not available on this PC: " + dev.windowscraft.render.GpuInterop.reason()
                     : works == null ? "Checking (safely, outside the game) that your graphics driver can do this…"
-                    : "Running: your wall reads the picture straight from graphics memory.";
-            y = toggleRow(g, mx, my, x, y, w, "Direct GPU sharing",
-                    "Your own walls take the picture straight from graphics memory, with no copies through the CPU. " + state,
-                    on, ClientSettings::setGpuSharing);
+                    : "Now: running — your wall reads the picture straight from graphics memory.";
+            y = perfRow(g, mx, my, x, y, w, ClientSettings.Auto.GPU_SHARING, "Direct GPU sharing",
+                    "Your own walls take the picture straight from graphics memory, with no copies through the CPU.", state);
         }
-        y = toggleRow(g, mx, my, x, y, w, "Off-screen pause", "Skip the per-frame work whenever a wall isn't actually on your screen.",
-                ClientSettings.offscreenPause(), ClientSettings::setOffscreenPause);
-        y = toggleRow(g, mx, my, x, y, w, "Distance frame-rate limit", "Slow the picture down when you're far away (at most 15 pictures a second).",
-                ClientSettings.distanceFpsLimit(), ClientSettings::setDistanceFpsLimit);
+        y = perfRow(g, mx, my, x, y, w, ClientSettings.Auto.OFFSCREEN_PAUSE, "Off-screen pause",
+                "Skip the per-frame work whenever a wall isn't actually on your screen.", ClientSettings.offscreenPause() ? pauseNow() : null);
+        y = perfRow(g, mx, my, x, y, w, ClientSettings.Auto.DISTANCE_LIMIT, "Distance frame-rate limit",
+                "Slow the picture down when you're far away (at most 15 pictures a second).", ClientSettings.distanceFpsLimit() ? farNow() : null);
+        y = perfRow(g, mx, my, x, y, w, ClientSettings.Auto.SHARP_AS_SEEN, "Copies as sharp as they look",
+                "While one of your screens looks small from where you are, your wall gets a smaller copy of it: a 4K screen across the room "
+                        + "doesn't need 4K copies. Full size as you come closer or sit down; what other people see never changes. "
+                        + "(Not needed with direct GPU sharing running.)",
+                ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN) ? sharpNow() : null);
         y = toggleRow(g, mx, my, x, y, w, "Shader pack on screens",
                 "Off: screens keep their true colours and stay sharp, untouched by your shader pack's lighting, fog and blur. "
                         + (dev.windowscraft.render.ShaderCompat.shaderPackInUse() ? "" : "(No shader pack is on right now.)"),

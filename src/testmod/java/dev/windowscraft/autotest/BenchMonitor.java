@@ -24,7 +24,9 @@ import org.lwjgl.glfw.GLFW;
  * Dev-only Step 0 benchmark of your own in-game monitor (singleplayer, real helper, real driver):
  * a 16×9 wall turned into an in-game monitor, the bench window (tools/bench) moved onto it, then
  * measured while standing in front of it and while sitting at it. -Dwindowscraft.bench.monitor=true,
- * {@code windowscraft.bench.seconds} per phase (default 45), {@code .name}.
+ * {@code windowscraft.bench.seconds} per phase (default 45), {@code .name}; {@code .far=N}: also
+ * measured standing N blocks from the wall (a screen across the room); {@code .noSit=true}: never
+ * sits down (sitting takes the PC's mouse for a minute).
  */
 public final class BenchMonitor implements ClientModInitializer {
     private int tick = -1, stage, ground;
@@ -35,7 +37,7 @@ public final class BenchMonitor implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        if (!Boolean.getBoolean("windowscraft.bench.monitor")) return;
+        if (!Boolean.getBoolean("windowscraft.bench.monitor") || Boolean.getBoolean("windowscraft.uishots")) return; // (its world, UiShots' run)
         seconds = Integer.getInteger("windowscraft.bench.seconds", 45);
         name = System.getProperty("windowscraft.bench.name", "monitor");
         dev.windowscraft.client.BusyGuard.enabled = false;
@@ -56,7 +58,7 @@ public final class BenchMonitor implements ClientModInitializer {
                 var sw = mc.getServer().getOverworld();
                 ground = sw.getTopY(Heightmap.Type.MOTION_BLOCKING, 0, 0) - 1;
                 mc.getServer().execute(() -> {
-                    for (BlockPos q : BlockPos.iterate(-10, ground + 1, -12, 10, ground + 12, 2)) sw.setBlockState(q, Blocks.AIR.getDefaultState());
+                    for (BlockPos q : BlockPos.iterate(-10, ground + 1, -12, 10, ground + 12, 40)) sw.setBlockState(q, Blocks.AIR.getDefaultState());
                     for (int x = -8; x <= 7; x++) for (int y = 1; y <= 9; y++) sw.setBlockState(new BlockPos(x, ground + y, -10), Blocks.BLACK_CONCRETE.getDefaultState());
                     sw.setTimeOfDay(6000);
                 });
@@ -109,9 +111,27 @@ public final class BenchMonitor implements ClientModInitializer {
             case 5 -> {
                 if (now < phaseEnd) return;
                 stop();
-                dev.windowscraft.client.TheaterMode.toggle(mc); // sit down at it
-                log("sat down: seated " + (InGameMonitors.seated() != null));
-                next();
+                int far = Integer.getInteger("windowscraft.bench.far", 0);
+                if (far > 0) { // step back across the room
+                    look(mc, 0.0, ground + 1, -10.0 + far, new Vec3d(0.0, ground + 5.5, -9.5));
+                    log("stepped back: " + far + " blocks from the wall");
+                    stage = 20;
+                    tick = 0;
+                    return;
+                }
+                sitDown(mc);
+            }
+            case 20 -> {
+                if (tick < 20 * 10) return;
+                start(mc, name + "-far");
+                stage = 21;
+                tick = 0;
+            }
+            case 21 -> {
+                if (now < phaseEnd) return;
+                stop();
+                look(mc, 0.0, ground + 1, -1.0, new Vec3d(0.0, ground + 5.5, -9.5));
+                sitDown(mc);
             }
             case 6 -> {
                 if (tick < 20 * 10) return;
@@ -137,6 +157,19 @@ public final class BenchMonitor implements ClientModInitializer {
             }
             default -> { }
         }
+    }
+
+    private void sitDown(MinecraftClient mc) {
+        if (Boolean.getBoolean("windowscraft.bench.noSit")) {
+            log("not sitting down (noSit)");
+            stage = 8;
+            tick = 0;
+            return;
+        }
+        dev.windowscraft.client.TheaterMode.toggle(mc); // sit down at it
+        log("sat down: seated " + (InGameMonitors.seated() != null));
+        stage = 6;
+        tick = 0;
     }
 
     private void start(MinecraftClient mc, String phase) {

@@ -1,5 +1,12 @@
 WindowsCraft 0.15.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
+New in 0.15.3: Settings -> Performance is Automatic (WindowsCraft decides, and says what it's
+doing right now) or Advanced (pick each setting yourself); settings you had turned off stay off.
+Each of your screens can have its own picks on its Picture page. New and on by Automatic: your
+own walls get a smaller copy of a big screen while it looks small from where you are (a 4K
+in-game monitor across the room was copied in full 20 times a second; now it keeps up and the
+game runs smoother). Full size as you come closer or sit down; what others see never changes.
+
 New in 0.15.2: someone else's screen shows each change the moment it arrives (the last change
 before a screen went still could wait for the next one), its pictures are coloured by the
 graphics card (less work for the PC watching), and a movie on it plays with its sound in step

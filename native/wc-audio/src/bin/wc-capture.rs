@@ -17,12 +17,15 @@
 //!   --cpu <name>: instead of shared textures, copy each new picture into shared memory that
 //!   Minecraft reads (for PCs where OpenGL can't open Direct3D textures). Frames only arrive when
 //!   the window actually changes, so a still window costs nothing.
-//!     stdout: cpuslots <w> <h> <mapping name>   (3 slots of w*h*4 bytes after a 64-byte header;
-//!             header = one u64 sequence number per slot, written after the slot's pixels)
+//!     stdout: cpuslots <w> <h> <mapping name> <full w> <full h>   (3 slots of w*h*4 bytes after
+//!             a 64-byte header; header = one u64 sequence number per slot, written after the
+//!             slot's pixels; the full size is the picture's before any "shrink")
 //!             frame <slot>
 //!   --box full|client: the whole window as you see it on the desktop (title bar too), or only
 //!   the app's content (default).
-//!   stdin lines: "fps <n>" changes the frame rate on the fly; "timing 1" (measurements only)
+//!   stdin lines: "fps <n>" changes the frame rate on the fly; "shrink <n>" (--cpu only) halves
+//!   the picture n times (0-3) on the graphics card before it's read back — a wall that looks
+//!   small on the player's screen doesn't need every pixel copied; "timing 1" (measurements only)
 //!   adds when each picture was captured to its "frame" line: "frame <slot> <time>", in 100 ns
 //!   units of the system's performance counter (Java's System.nanoTime() / 100 on Windows).
 //!
@@ -294,9 +297,9 @@ impl CpuSlots {
         Ok(CpuSlots { name, mapping, view, staging: t.unwrap(), w, h, seq: 0 })
     }
 
-    fn copy(&mut self, ctx: &ID3D11DeviceContext, src: &ID3D11Texture2D, region: &D3D11_BOX, slot: usize) -> windows::core::Result<()> {
+    fn copy(&mut self, ctx: &ID3D11DeviceContext, src: &ID3D11Texture2D, sub: u32, region: Option<&D3D11_BOX>, slot: usize) -> windows::core::Result<()> {
         unsafe {
-            ctx.CopySubresourceRegion(&self.staging, 0, 0, 0, 0, src, 0, Some(region));
+            ctx.CopySubresourceRegion(&self.staging, 0, 0, 0, 0, src, sub, region.map(|r| r as *const D3D11_BOX));
             let mut m = D3D11_MAPPED_SUBRESOURCE::default();
             ctx.Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
             let base = self.view.Value as *mut u8;
@@ -314,6 +317,50 @@ impl CpuSlots {
         }
         Ok(())
     }
+}
+
+/// "shrink": the picture's own copy with smaller versions of itself (mip levels), made by the
+/// graphics card in a fraction of a millisecond; level n is the picture halved n times.
+struct Shrinker {
+    tex: ID3D11Texture2D,
+    srv: ID3D11ShaderResourceView,
+    w: u32,
+    h: u32,
+    levels: u32,
+}
+
+const MAX_SHRINK: u32 = 3;
+
+impl Shrinker {
+    fn new(device: &ID3D11Device, w: u32, h: u32, levels: u32) -> windows::core::Result<Shrinker> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: levels + 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+        };
+        let mut t = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut t))? };
+        let tex = t.unwrap();
+        let mut v = None;
+        unsafe { device.CreateShaderResourceView(&tex, None, Some(&mut v))? };
+        Ok(Shrinker { tex, srv: v.unwrap(), w, h, levels })
+    }
+}
+
+/// How many halvings are possible for a picture this size (each side stays at least 16 pixels).
+fn shrink_for(w: u32, h: u32, wanted: u32) -> u32 {
+    let mut n = wanted.min(MAX_SHRINK);
+    while n > 0 && ((w >> n) < 16 || (h >> n) < 16) {
+        n -= 1;
+    }
+    n
 }
 
 impl Drop for CpuSlots {
@@ -368,6 +415,7 @@ fn run(a: Args) -> windows::core::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let fps_now = Arc::new(std::sync::atomic::AtomicU32::new(a.fps.max(1)));
     let timing = Arc::new(AtomicBool::new(false));
+    let shrink = Arc::new(std::sync::atomic::AtomicU32::new(0));
     // --ext: a picture the game may still be copying is never written over; the game says
     // "free <slot>" once it's done with one (until then the slot is skipped, or the frame dropped)
     let free: Arc<[AtomicBool; SLOTS]> = Arc::new([AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true)]);
@@ -376,6 +424,7 @@ fn run(a: Args) -> windows::core::Result<()> {
         let fps_now = fps_now.clone();
         let free = free.clone();
         let timing = timing.clone();
+        let shrink = shrink.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
             let stdin = io::stdin();
@@ -390,6 +439,10 @@ fn run(a: Args) -> windows::core::Result<()> {
                 } else if let Some(v) = line.trim().strip_prefix("fps ") {
                     if let Ok(n) = v.trim().parse::<u32>() {
                         fps_now.store(n.clamp(1, 240), Ordering::SeqCst);
+                    }
+                } else if let Some(v) = line.trim().strip_prefix("shrink ") {
+                    if let Ok(n) = v.trim().parse::<u32>() {
+                        shrink.store(n.min(MAX_SHRINK), Ordering::SeqCst);
                     }
                 } else if let Some(v) = line.trim().strip_prefix("timing ") {
                     timing.store(v.trim() == "1", Ordering::SeqCst);
@@ -437,7 +490,7 @@ fn run(a: Args) -> windows::core::Result<()> {
     let mut cpu: Option<CpuSlots> = None;
     if let Some(name) = &a.cpu {
         let c = CpuSlots::new(&device, name, 0, slot_size.Width, slot_size.Height)?;
-        if !say(&mut out, &format!("cpuslots {} {} {}", slot_size.Width, slot_size.Height, c.name)) {
+        if !say(&mut out, &format!("cpuslots {} {} {} {} {}", slot_size.Width, slot_size.Height, c.name, slot_size.Width, slot_size.Height)) {
             return Ok(());
         }
         cpu = Some(c);
@@ -451,6 +504,8 @@ fn run(a: Args) -> windows::core::Result<()> {
     let mut last = Instant::now() - Duration::from_secs(1);
     let mut next_slot = 0usize;
     let mut generation = 0u32;
+    let mut shrinker: Option<Shrinker> = None;
+    let mut shrink_broken = false;
     while !stop.load(Ordering::SeqCst) {
         if gone.load(Ordering::SeqCst) {
             say(&mut out, "gone");
@@ -484,13 +539,15 @@ fn run(a: Args) -> windows::core::Result<()> {
         }
         last = Instant::now();
         let (bl, bt, br, bb) = pick_box(size);
-        let want = SizeInt32 { Width: (br - bl) as i32, Height: (bb - bt) as i32 };
+        let (fw, fh) = (br - bl, bb - bt);
+        let level = if cpu.is_some() && !shrink_broken { shrink_for(fw, fh, shrink.load(Ordering::SeqCst)) } else { 0 };
+        let want = SizeInt32 { Width: (fw >> level).max(1) as i32, Height: (fh >> level).max(1) as i32 };
         if slot_size.Width != want.Width || slot_size.Height != want.Height {
             slot_size = want;
             if let Some(c) = &mut cpu {
                 generation += 1;
                 *c = CpuSlots::new(&device, a.cpu.as_ref().unwrap(), generation, want.Width, want.Height)?;
-                if !say(&mut out, &format!("cpuslots {} {} {}", want.Width, want.Height, c.name)) {
+                if !say(&mut out, &format!("cpuslots {} {} {} {} {}", want.Width, want.Height, c.name, fw, fh)) {
                     break;
                 }
             } else {
@@ -526,7 +583,30 @@ fn run(a: Args) -> windows::core::Result<()> {
         let tex: ID3D11Texture2D = unsafe { frame.Surface()?.cast::<IDirect3DDxgiInterfaceAccess>()?.GetInterface()? };
         let region = D3D11_BOX { left: bl, top: bt, front: 0, right: br, bottom: bb, back: 1 };
         if let Some(c) = &mut cpu {
-            if let Err(e) = c.copy(&ctx, &tex, &region, next_slot) {
+            let copied = if level > 0 {
+                if !shrinker.as_ref().is_some_and(|s| s.w == fw && s.h == fh && s.levels == level) {
+                    shrinker = None;
+                    match Shrinker::new(&device, fw, fh, level) {
+                        Ok(s) => shrinker = Some(s),
+                        Err(e) => {
+                            // this graphics card can't make the smaller copies: full size from now on
+                            eprintln!("info=can't shrink here ({e}); full size");
+                            shrink_broken = true;
+                            continue;
+                        }
+                    }
+                }
+                let s = shrinker.as_ref().unwrap();
+                unsafe {
+                    ctx.CopySubresourceRegion(&s.tex, 0, 0, 0, 0, &tex, 0, Some(&region));
+                    ctx.GenerateMips(&s.srv);
+                }
+                c.copy(&ctx, &s.tex, level, None, next_slot)
+            } else {
+                shrinker = None;
+                c.copy(&ctx, &tex, 0, Some(&region), next_slot)
+            };
+            if let Err(e) = copied {
                 eprintln!("info=read-back failed: {e}");
                 continue;
             }

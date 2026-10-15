@@ -120,7 +120,9 @@ public final class Report {
         }
         b.append("Direct GPU sharing: setting ").append(dev.windowscraft.config.ClientSettings.gpuSharing())
                 .append(", state ").append(dev.windowscraft.render.GpuInterop.state()).append(" — ").append(dev.windowscraft.render.GpuInterop.reason()).append('\n');
-        b.append("Performance settings: off-screen pause ").append(dev.windowscraft.config.ClientSettings.offscreenPause())
+        b.append("Performance settings (").append(dev.windowscraft.config.ClientSettings.perfAdvanced() ? "Advanced" : "Automatic")
+                .append("): off-screen pause ").append(dev.windowscraft.config.ClientSettings.offscreenPause())
+                .append(", as sharp as it looks ").append(dev.windowscraft.config.ClientSettings.on(dev.windowscraft.config.ClientSettings.Auto.SHARP_AS_SEEN))
                 .append(", distance limit ").append(dev.windowscraft.config.ClientSettings.distanceFpsLimit())
                 .append(", fewer mipmaps ").append(dev.windowscraft.config.ClientSettings.lightMipmaps()).append('\n');
         b.append(dev.windowscraft.render.DisplayRenderer.stats()).append('\n');

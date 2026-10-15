@@ -340,7 +340,16 @@ public final class AutoTest implements ClientModInitializer {
                 check(DisplayManager.get().liveShares().size() == before - 1, "stopping a share from the hub");
                 mc.setScreen(dev.windowscraft.ui.HubScreen.settings());
             }
-            case 952 -> shot(mc, "12b_hub_settings");
+            case 952 -> {
+                shot(mc, "12b_hub_settings");
+                dev.windowscraft.config.ClientSettings.setPerfAdvanced(true);
+            }
+            case 956 -> {
+                shot(mc, "12c_hub_settings_advanced");
+                check(dev.windowscraft.config.ClientSettings.on(dev.windowscraft.config.ClientSettings.Auto.SHARP_AS_SEEN),
+                        "Advanced with nothing picked: as Automatic");
+                dev.windowscraft.config.ClientSettings.setPerfAdvanced(false);
+            }
             case 960 -> {
                 mc.currentScreen.close();
                 look(mc, 0.5, ground + 1, 0.5, 180, 0);

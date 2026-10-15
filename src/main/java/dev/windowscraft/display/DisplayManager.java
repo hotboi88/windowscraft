@@ -5,6 +5,7 @@ import dev.windowscraft.capture.CaptureSession;
 import dev.windowscraft.capture.CaptureSettings;
 import dev.windowscraft.capture.SourceInfo;
 import dev.windowscraft.client.ClientNet;
+import dev.windowscraft.config.ClientSettings;
 import dev.windowscraft.stream.StreamPublisher;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -528,7 +529,8 @@ public final class DisplayManager {
         // screen → at most 15 a second. The stream to other players is never slowed down.
         boolean cpuStreamNeedsFrames = s.publisher != null && s.publisher.streaming() && !s.publisher.gpuActive();
         boolean hidden = dev.windowscraft.config.ClientSettings.offscreenPause() && !s.seenRecently();
-        boolean far = dev.windowscraft.config.ClientSettings.distanceFpsLimit() && s.viewPx() < dev.windowscraft.render.DisplayRenderer.FAR_PX;
+        boolean far = s.viewPx() < dev.windowscraft.render.DisplayRenderer.FAR_PX
+                && s.displays.stream().allMatch(d -> ClientSettings.on(ClientSettings.Auto.DISTANCE_LIMIT, d));
         int wallFps = hidden ? 2 : far ? Math.min(fps, 15) : fps;
         if (s.gpu != null && wallFps != s.gpuSentFps) {
             s.gpu.setFps(wallFps);
@@ -537,6 +539,13 @@ public final class DisplayManager {
         // the CPU capture can rest unless a CPU stream pipeline needs its frames
         s.session.setGpuRest((s.gpuFeeding() || hidden) && !cpuStreamNeedsFrames);
         s.session.setFpsCap(far && !cpuStreamNeedsFrames ? 15 : 0);
+        // as sharp as it looks: your wall's copy no bigger than the wall looks (the stream to
+        // others has its own capture; when it encodes these very pictures, they stay full size)
+        Display seated = dev.windowscraft.monitor.InGameMonitors.seated(), flat = dev.windowscraft.client.DeskView.showing();
+        boolean full = cpuStreamNeedsFrames || seated != null && s.displays.contains(seated) || flat != null && s.displays.contains(flat)
+                || !s.displays.stream().allMatch(d -> ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN, d));
+        if (full || s.seenRecently()) // (out of view: as it was — the size it looked last)
+            s.session.setShrink(s.copySize.update(s.session.fullHeight(), s.viewPx(), full, System.nanoTime()));
     }
 
     /** Render thread: free textures of shares that ended since last frame. */

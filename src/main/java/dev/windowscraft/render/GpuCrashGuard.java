@@ -43,7 +43,8 @@ public final class GpuCrashGuard {
                 String key = Files.readString(marker()).trim();
                 if (!key.isEmpty()) Files.writeString(crashedFile(), key + "\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
                 Files.deleteIfExists(marker());
-                ClientSettings.setGpuSharing(false);
+                // (not the setting: GpuInterop never tries it again with this driver — crashedBefore —
+                // and does once the driver is updated)
                 trippedThisLaunch = true;
                 WindowsCraftClient.LOGGER.warn("The game closed unexpectedly while direct GPU sharing was starting last time; it is now off");
             }
