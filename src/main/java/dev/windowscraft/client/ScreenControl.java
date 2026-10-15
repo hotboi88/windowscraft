@@ -833,7 +833,7 @@ public final class ScreenControl {
         }
     }
 
-    // ---- while you use a shared window, it sits just off your monitor --------------------------
+    // ---- (up to 0.15.10) while you use a shared window, it sits just off your monitor -----------
     // Chrome-based apps (Brave, Chrome, Discord…) only scroll and keep a hover on their pages when
     // nothing covers that spot of the monitor (Minecraft does). So only while you're using the
     // window (pointing with Alt, sitting at it, or someone you allowed is), it moves just off your
@@ -842,8 +842,16 @@ public final class ScreenControl {
     private static final Map<Long, Long> PARKED = new HashMap<>(); // window → last time it was used
     private static final long PARK_IDLE_NANOS = 2_500_000_000L;
 
+    /**
+     * Off since 0.15.11 ({@code -Dwindowscraft.parkSharedWindows=true}: on): a window moved off
+     * every monitor isn't drawn any more — its capture got no new pictures (measured: 49/s on the
+     * screen, 0 parked), so the wall and the stream froze for as long as anyone used it; and it
+     * moved a window of your own desk, which WindowsCraft mustn't (only its own monitors).
+     */
+    private static final boolean PARK = Boolean.getBoolean("windowscraft.parkSharedWindows");
+
     private static void ensureParked(Display d) {
-        if (d == null || d.share() == null) return;
+        if (!PARK || d == null || d.share() == null) return;
         SourceInfo s = d.share().source();
         if (s.kind() != SourceInfo.Kind.WINDOW || s.handle() == 0 || !dev.windowscraft.capture.win.WinOps.available()) return;
         if (!MinecraftClient.getInstance().isWindowFocused()) return;
