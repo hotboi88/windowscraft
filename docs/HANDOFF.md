@@ -130,6 +130,12 @@ play while you play Minecraft. Without ViGEmBus nothing changes (wc-input logs i
   Before, after such a hitch their keys (and now controller) went nowhere until they got up and
   sat down again (found by the controller bench: the viewer stalled 6 s while loading). Older
   owners ignore a.
+- Which games, while another window is in front (tools/bench/padapis.py with stand-in games:
+  tools/bench/padgame, sdlgame.py): **XInput** (most PC games) 8/8, 1.0 ms; **Windows.Gaming.Input**
+  0/8 (Windows gives it to the app in front only — no way around); **SDL 2 as shipped** 0/8 (its
+  default); **SDL with SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1** 8/8, 1.6 ms — WindowsCraft could set
+  that for what it starts on a monitor, or (the owner's OK: every app) in the user's environment.
+  In front, each stand-in got 3/3. DirectInput and GameInput not tried.
 - Limits: Windows shows every controller to every game — two friends in two different controller
   games at once can both reach a game that listens to all controllers (idea: Sandboxie's
   ClosedFilePath per monitor box for the other controllers' devices — untried). Keyboard-and-mouse

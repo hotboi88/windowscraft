@@ -19,3 +19,4 @@ logs/
 run-prod/
 run-prod-*/
 run-prodserver/
+tools/bench/padgame/target/

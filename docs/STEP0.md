@@ -152,6 +152,10 @@ WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 | friend's game sends → XInput on the owner's PC (70 presses) | 2.0 ms | 3.3 ms | 4.5 ms |
 | friend's controller pressed → XInput on the owner's PC (via GLFW each frame, 39 presses) | 7.9 ms | | 354 ms (first) |
 
+Which games see it while another window is in front (stand-in games, tools/bench/padapis.py):
+XInput 8/8 (1.0 ms) · Windows.Gaming.Input 0/8 · SDL 2 as shipped 0/8 · SDL with background events
+allowed 8/8 (1.6 ms); each 3/3 in front.
+
 A controller of their own appears 37 ms after their first message; let go of after 3 s without a
 message; unplugged when they go. Over the internet: plus their one-way delay.
 
