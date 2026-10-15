@@ -98,6 +98,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.5 (14 Oct): guests' input on in-game monitors handled the moment it arrives
+
+`ScreenControl` "guest lane" (one thread, "WindowsCraft guest input"): input over the relay to one
+of your in-game monitors is handled there at once — not queued for the game thread's next frame,
+and the window look-up under a click (`lookUpNow`, up to 150 ms) no longer stalls your game.
+Each guest has their own input slot in wc-input, so nothing touches your own mouse/keyboard.
+What the lane needs from the game (which walls are in-game monitors, who may use them) is copied
+each tick (`refreshRoutes`; an unknown wall is looked up on the game thread, at most 10×/s). A
+monitor's guest list only changes on the lane (`dropGuest` forwards; the tick's idle check is
+re-checked there). Shared windows (one input for you and them) stay on the game thread. The
+server's way of passing input (no relay) goes through the lane too, for monitors.
+`-Dwindowscraft.guestLane=false` = before. Measured (two-player bench, in-game monitor, the
+sharer's game at 30 fps): click → app 20.7 / 33.1 / 37.1 ms (median / P95 / max) → 2.7 / 6.1 /
+16.6 ms. CI doesn't cover it (no in-game monitors in the two-player test; the Windows game test
+has no guests): `BENCH_INPUT=1 SHARER_EXTRA="-Dwindowscraft.bench.gameFps=30" tools/bench/run.sh
+monitor 1080 60 40 NAME`.
+
 ## 0.15.4 (14 Oct): fix for 0.15.3's stream restarts
 
 0.15.3's smaller wall copies reached `StreamPublisher.onFrame`, which takes the CPU capture's

@@ -365,25 +365,74 @@ public final class ScreenControl {
 
     private static final class Guest {
         final String name;
-        boolean seated;
+        volatile boolean seated;
         /** Their own pointer on an in-game monitor (0..1), the window under it, and where their press went. */
-        double x = 0.5, y = 0.5;
+        volatile double x = 0.5, y = 0.5;
         volatile WinGeom.At under;
         WinGeom.At pressedAt;
         int buttons;
         long lookedUp;
-        long seen = System.nanoTime();
-        long active = System.nanoTime();
+        volatile long seen = System.nanoTime();
+        volatile long active = System.nanoTime();
         /** Their own input in the helper (target window, held keys and buttons): never shared with anyone's. */
-        final int slot = ++slots;
+        final int slot = SLOTS.incrementAndGet();
         long target;
         Guest(String name) { this.name = name; }
         void send(String cmd) { InputBridge.send("slot " + slot + " " + cmd); }
     }
 
     /** Per wall of yours: the allowed players using it right now. */
-    private static final Map<UUID, Map<UUID, Guest>> GUESTS = new HashMap<>();
-    private static final Map<UUID, Long> ANNOUNCED = new HashMap<>();
+    private static final Map<UUID, Map<UUID, Guest>> GUESTS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<UUID, Long> ANNOUNCED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The guest lane: someone's input to one of your in-game monitors is handled here the moment
+     * it arrives — not when your game gets round to its next frame (VISION 3), and finding the
+     * window under their click never holds up your game. Each guest has their own input slot in
+     * the helper, so nothing here touches your own mouse and keyboard; a shared window (one input
+     * for you and them) stays on the game thread. What the lane needs to know from the game —
+     * which of your walls are in-game monitors, and who may use them — is copied for it each tick
+     * ({@link #refreshRoutes}).
+     */
+    private static volatile Thread laneThread;
+    /** {@code -Dwindowscraft.guestLane=false}: everyone's input on the game thread, as before 0.15.5. */
+    private static final boolean LANE_ON = !"false".equals(System.getProperty("windowscraft.guestLane"));
+    private static final java.util.concurrent.ExecutorService LANE = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "WindowsCraft guest input");
+        t.setDaemon(true);
+        laneThread = t;
+        return t;
+    });
+
+    /** One of your walls someone may use: is it an in-game monitor, and who may (id → name). */
+    private record Route(Display d, boolean monitor, Map<UUID, String> allowed) {}
+
+    private static volatile Map<UUID, Route> routes = Map.of();
+    private static volatile long lookedNow;
+
+    /** Game thread: what the lane knows about your walls (each tick, and when it asks). */
+    private static void refreshRoutes() {
+        Map<UUID, Route> m = new HashMap<>();
+        for (Display d : DisplayManager.get().all())
+            if (controllable(d)) m.put(d.id, new Route(d, dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source()), Map.copyOf(d.controllers)));
+        routes = Map.copyOf(m);
+    }
+
+    /** Lane: the route to that wall; one it doesn't know yet (just turned on, just allowed) is looked up on the game thread. */
+    private static Route route(MinecraftClient mc, UUID display) {
+        Route r = routes.get(display);
+        if (r != null) return r;
+        long now = System.nanoTime();
+        if (now - lookedNow < 100_000_000L) return null; // (at most ten look-ups a second: unknown walls aren't worth more)
+        lookedNow = now;
+        try {
+            mc.submit(ScreenControl::refreshRoutes).get(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+        }
+        return routes.get(display);
+    }
+
+    private static boolean onLane() { return Thread.currentThread() == laneThread; }
 
     private static boolean guestActive(Display d) {
         Map<UUID, Guest> g = GUESTS.get(d.id);
@@ -406,7 +455,7 @@ public final class ScreenControl {
             "someone's input: handled → handed to Windows (helper)");
 
     private static final dev.windowscraft.measure.Measure.Metric RELAY_WAIT = dev.windowscraft.measure.Measure.ms("input.host_wait_relay",
-            "someone's input over the relay: arrived at your game → handled on your game thread");
+            "someone's input over the relay: arrived at your game → handled (in-game monitors: on the guest lane, at once; windows: on your game thread)");
 
     /**
      * Someone's input that came over the relay ({@code C <from> <displayId> <op> <x> <y> <a> <f>};
@@ -427,10 +476,33 @@ public final class ScreenControl {
                     Integer.parseInt(p[6]), Float.parseFloat(p[7]));
             long arrived = System.nanoTime();
             MinecraftClient mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                RELAY_WAIT.since(arrived);
-                var entry = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getPlayerListEntry(from);
-                fromGuest(mc, new Payloads.ControlFrom(from, entry == null ? "someone" : entry.getProfile().getName(), c));
+            if (!LANE_ON) {
+                mc.execute(() -> {
+                    RELAY_WAIT.since(arrived);
+                    var entry = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getPlayerListEntry(from);
+                    fromGuest(mc, new Payloads.ControlFrom(from, entry == null ? "someone" : entry.getProfile().getName(), c));
+                });
+                return;
+            }
+            LANE.execute(() -> {
+                Route r = route(mc, display);
+                if (r != null && r.monitor()) { // an in-game monitor: right here, right now
+                    RELAY_WAIT.since(arrived);
+                    String name = r.allowed().get(from);
+                    if (name == null) return; // (not someone you allowed)
+                    long t0 = dev.windowscraft.measure.Measure.ON ? System.nanoTime() : 0;
+                    try {
+                        handleGuest(mc, r.d(), from, name, c, true);
+                    } finally {
+                        GUEST_APPLY.since(t0);
+                    }
+                    return;
+                }
+                mc.execute(() -> { // a shared window (your own input goes to it too): the game thread's
+                    RELAY_WAIT.since(arrived);
+                    var entry = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getPlayerListEntry(from);
+                    fromGuest(mc, new Payloads.ControlFrom(from, entry == null ? "someone" : entry.getProfile().getName(), c));
+                });
             });
         } catch (RuntimeException ignored) {
             // (a malformed line: dropped)
@@ -451,28 +523,40 @@ public final class ScreenControl {
         Payloads.Control c = m.c();
         Display d = DisplayManager.get().byId(c.displayId());
         if (d == null || !controllable(d) || !d.controllers.containsKey(m.from())) return;
-        Map<UUID, Guest> guests = GUESTS.computeIfAbsent(d.id, k -> new HashMap<>());
-        Guest g = guests.get(m.from());
-        if (c.op() == Payloads.OP_UNPOINT || c.op() == Payloads.OP_STAND) {
-            if (g == null) return;
-            if (c.op() == Payloads.OP_STAND || !g.seated) dropGuest(d, m.from());
+        boolean monitor = dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source());
+        if (monitor && LANE_ON) { // (the lane does monitors: one order for all their input)
+            LANE.execute(() -> handleGuest(mc, d, m.from(), m.fromName(), c, true));
             return;
         }
-        if (g == null) guests.put(m.from(), g = new Guest(m.fromName()));
+        handleGuest(mc, d, m.from(), m.fromName(), c, monitor);
+    }
+
+    /** Someone's input to your wall, checked: on the lane for an in-game monitor, else on the game thread. */
+    private static void handleGuest(MinecraftClient mc, Display d, UUID from, String fromName, Payloads.Control c, boolean monitor) {
+        Map<UUID, Guest> guests = GUESTS.computeIfAbsent(d.id, k -> new java.util.concurrent.ConcurrentHashMap<>());
+        Guest g = guests.get(from);
+        if (c.op() == Payloads.OP_UNPOINT || c.op() == Payloads.OP_STAND) {
+            if (g == null) return;
+            if (c.op() == Payloads.OP_STAND || !g.seated) dropGuest(d, from);
+            return;
+        }
+        if (g == null) guests.put(from, g = new Guest(fromName));
         // "… is using your screen" only once they really do something with it (a click, a key,
         // sitting down) — never for just looking at it or pointing past it
         boolean doing = c.op() == Payloads.OP_BUTTON_DOWN || c.op() == Payloads.OP_WHEEL || c.op() == Payloads.OP_SIT || c.op() == Payloads.OP_KEY_DOWN;
         if (doing) {
-            Long last = ANNOUNCED.get(m.from());
-            if (mc.player != null && (last == null || System.nanoTime() - last > 60_000_000_000L)) {
-                ANNOUNCED.put(m.from(), System.nanoTime());
-                mc.player.sendMessage(Text.literal(m.fromName() + " is using your screen").formatted(Formatting.GRAY), true);
+            Long last = ANNOUNCED.get(from);
+            if (last == null || System.nanoTime() - last > 60_000_000_000L) {
+                ANNOUNCED.put(from, System.nanoTime());
+                mc.execute(() -> { // (the chat is the game thread's)
+                    if (mc.player != null) mc.player.sendMessage(Text.literal(fromName + " is using your screen").formatted(Formatting.GRAY), true);
+                });
             }
         }
         g.seen = System.nanoTime();
         if (c.op() != Payloads.OP_POINT && c.op() != Payloads.OP_KEY_DOWN && c.op() != Payloads.OP_KEY_UP) g.active = g.seen;
         double x = Math.max(0, Math.min(1, c.x())), y = Math.max(0, Math.min(1, c.y()));
-        if (dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source())) {
+        if (monitor) {
             guestOnMonitor(d, g, c, x, y);
             return;
         }
@@ -597,7 +681,7 @@ public final class ScreenControl {
     }
 
     /** Numbers for guests' own input slots in the helper. */
-    private static int slots;
+    private static final java.util.concurrent.atomic.AtomicInteger SLOTS = new java.util.concurrent.atomic.AtomicInteger();
 
     /** That guest's input goes to that window from now on (their own; nobody else's changes). */
     private static void guestAim(Guest g, long hwnd) {
@@ -611,6 +695,10 @@ public final class ScreenControl {
 
     /** That player stopped using your wall (or isn't allowed any more): let go of anything they held. */
     public static void dropGuest(Display d, UUID player) {
+        if (LANE_ON && !onLane() && dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share() == null ? null : d.share().source())) {
+            LANE.execute(() -> dropGuest(d, player));
+            return;
+        }
         Map<UUID, Guest> guests = GUESTS.get(d.id);
         Guest g = guests == null ? null : guests.remove(player);
         if (g == null) return;
@@ -646,13 +734,23 @@ public final class ScreenControl {
             Map<UUID, Guest> guests = GUESTS.get(id);
             if (guests == null) continue;
             for (UUID who : new java.util.ArrayList<>(guests.keySet())) {
-                boolean gone = d == null || !controllable(d) || !d.controllers.containsKey(who) || now - guests.get(who).seen > 3_000_000_000L;
-                if (gone) {
-                    if (d != null) dropGuest(d, who);
-                    else guests.remove(who);
-                }
+                Guest g = guests.get(who);
+                if (g == null) continue; // (the lane let them go meanwhile)
+                boolean gone = d == null || !controllable(d) || !d.controllers.containsKey(who) || now - g.seen > 3_000_000_000L;
+                if (!gone) continue;
+                if (d == null) guests.remove(who);
+                else if (LANE_ON && d.share() != null && dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source())) {
+                    // the lane decides again with what it knows then (their input may have just come in)
+                    LANE.execute(() -> {
+                        Guest x = guests.get(who);
+                        Route r = routes.get(d.id);
+                        if (x != null && (r == null || !r.allowed().containsKey(who) || System.nanoTime() - x.seen > 3_000_000_000L)) dropGuest(d, who);
+                    });
+                } else dropGuest(d, who);
             }
-            if (guests.isEmpty()) GUESTS.remove(id);
+            // (an in-game monitor's list is the lane's: it removes it, so a guest it's adding right now isn't lost)
+            if (guests.isEmpty() && (!LANE_ON || d == null || d.share() == null || !dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(d.share().source())))
+                GUESTS.remove(id);
         }
     }
 
@@ -1059,6 +1157,7 @@ public final class ScreenControl {
 
     /** Client tick: people who stopped using your screens. */
     public static void tick(MinecraftClient mc) {
+        refreshRoutes();
         tickGuests();
         tickParking(mc);
     }
@@ -1067,6 +1166,7 @@ public final class ScreenControl {
         for (long h : PARKED.keySet()) dev.windowscraft.capture.win.WinOps.unpark(h);
         PARKED.clear();
         GUESTS.clear();
+        routes = Map.of();
         SENT_POINTER.clear();
         usingR = null;
         pointedRemote = null;

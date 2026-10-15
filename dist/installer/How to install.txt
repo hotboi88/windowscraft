@@ -1,5 +1,10 @@
 WindowsCraft 0.15.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
+New in 0.15.5: when someone you allowed uses one of your in-game monitors, their clicks and keys
+reach it the moment they arrive, instead of waiting for your game to draw its next frame (measured:
+a click took about 21 ms to reach the app with your game at 30 frames a second; now about 3 ms),
+and finding the window under their click never makes your game stutter.
+
 New in 0.15.4: fixes 0.15.3 restarting the stream of a screen you share every few seconds while
 your own wall of it looked small (the people watching saw it pause and fall behind). Sitting down
 at one of your screens brings its full-size picture back at once. The Windows self-test no longer
