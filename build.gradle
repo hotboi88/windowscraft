@@ -107,6 +107,7 @@ loom {
             runDir "run-alice"
             // its own folder for LWJGL's unpacked natives: two players starting at once mustn't
             // load a file the other is still writing (CI: "Can't load library liblwjgl_opengl.so")
+            file("run-alice/lwjgl-natives").mkdirs() // (the crash report's system details look it up before LWJGL makes it)
             vmArg "-Dorg.lwjgl.system.SharedLibraryExtractPath=" + file("run-alice/lwjgl-natives").absolutePath
             if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=sharer"
             if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
@@ -121,6 +122,7 @@ loom {
             runDir "run-bob"
             // its own folder for LWJGL's unpacked natives: two players starting at once mustn't
             // load a file the other is still writing (CI: "Can't load library liblwjgl_opengl.so")
+            file("run-bob/lwjgl-natives").mkdirs() // (the crash report's system details look it up before LWJGL makes it)
             vmArg "-Dorg.lwjgl.system.SharedLibraryExtractPath=" + file("run-bob/lwjgl-natives").absolutePath
             if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=viewer"
             if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
@@ -168,6 +170,9 @@ tasks.register("testmodJar", Jar) {
 tasks.register("remapTestmodJar", net.fabricmc.loom.task.RemapJarTask) {
     dependsOn tasks.testmodJar
     inputFile = tasks.testmodJar.archiveFile
+    // WindowsCraft's own classes too: calls through them to Minecraft's methods (a MonitorBlock's
+    // getDefaultState) are only renamed when the remapper can see what they inherit
+    classpath.from(sourceSets.main.output)
     archiveClassifier = "testmod"
     addNestedDependencies = false
 }

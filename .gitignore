@@ -16,3 +16,5 @@ run-mp-server/
 run-wintest/
 logs/
 run-prod/
+run-prod-*/
+run-prodserver/

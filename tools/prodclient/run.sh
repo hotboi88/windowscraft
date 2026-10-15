@@ -5,8 +5,10 @@
 # Offline, singleplayer, in its own folder: the instance's saves and settings are never touched.
 #   tools/prodclient/run.sh INSTANCE_DIR [-Dwindowscraft.… JVM args for the test mod]
 # e.g. the in-game monitor bench with the owner's mods:
-#   BW=1 tools/prodclient/run.sh /c/Users/Derek/Cobbleverse -Dwindowscraft.bench.monitor=true
-# RUN (default run-prod) is the copy; XMX (default 8G) its memory; BW=1 opens tools/bench's window.
+#   BW=1 tools/prodclient/run.sh ~/Cobbleverse -Dwindowscraft.bench.monitor=true
+# RUN (default run-prod) is the copy; XMX (default 8G) its memory; BW=1 opens tools/bench's window;
+# PLAYER (default WCTest) the offline name; SERVER=HOST:PORT joins that server (tools/prodclient/
+# server.sh) instead of opening the test world.
 set -eu
 cd "$(dirname "$0")/../.."
 SRC=$1
@@ -58,9 +60,14 @@ set +e
 cd "$RUN" # (some mods write next to wherever the game was started, not into its folder)
 # (the test mod's ProdStart opens the world once the game has finished loading: a modpack's own
 # loading screen and --quickPlaySingleplayer can wait on each other for ever)
-java -Xmx${XMX:-8G} -Xms3G -XX:+UseG1GC -XX:MaxGCPauseMillis=50 -Dwindowscraft.prod.world=bench "$@" \
+PLAYER=${PLAYER:-WCTest}
+UUID=$(python -c "import hashlib,sys,uuid; h=bytearray(hashlib.md5(('OfflinePlayer:'+sys.argv[1]).encode()).digest()); h[6]=h[6]&0x0f|0x30; h[8]=h[8]&0x3f|0x80; print(uuid.UUID(bytes=bytes(h)).hex)" "$PLAYER")
+START="-Dwindowscraft.prod.world=bench"
+[ -n "${SERVER:-}" ] && START="-Dwindowscraft.prod.server=$SERVER"
+java -Xmx${XMX:-8G} -Xms3G -XX:+UseG1GC -XX:MaxGCPauseMillis=50 $START "$@" \
+  -Dorg.lwjgl.system.SharedLibraryExtractPath="$GAMEDIR\\lwjgl-natives" \
   -cp "${CP:1}" net.fabricmc.loader.impl.launch.knot.KnotClient \
-  --username WCTest --uuid 00000000000040008000000000000001 --accessToken 0 --userType legacy \
+  --username "$PLAYER" --uuid "$UUID" --accessToken 0 --userType legacy \
   --version 1.21.1 --versionType release --gameDir "$GAMEDIR" \
   --assetsDir "$ASSETS" --assetIndex 1.21.1-17 \
   --width 1600 --height 900

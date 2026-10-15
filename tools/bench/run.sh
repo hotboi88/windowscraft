@@ -4,6 +4,8 @@
 # server on 25565/25585 can keep running.
 #   tools/bench/run.sh SOURCE HEIGHT FPS SECONDS [NAME]     SOURCE = pattern | window | idle
 # SHARER_EXTRA / VIEWER_EXTRA="-Dwindowscraft.exp.…" pass experiment switches to one player only;
+# BOB_DELAY=SECONDS (default 8): the viewer starts that long after the sharer (60+: the stream has
+# paused with nobody watching before the viewer arrives).
 # BENCH_INPUT=1: the viewer also uses the screen (pointer moves and clicks), to time the input path
 # (tools/bench/clicks.py: each click from the viewer's send to the bench window getting it).
 # SOURCE "monitor": the sharer turns on an in-game monitor and puts the bench window on it.
@@ -39,7 +41,7 @@ for i in $(seq 1 240); do grep -q "Done (" "$OUT/server-$NAME.log" 2>/dev/null &
 SHARER_ROLE=sharer; [ "$SRC" = idle ] && SHARER_ROLE=idle
 gradle runMpSharer -Pbench -PmpPort=$PORT -q -PwcArgs="-Dwindowscraft.bench.role=$SHARER_ROLE $COMMON ${SHARER_EXTRA:-}" > "$OUT/alice-$NAME.log" 2>&1 &
 ALICE=$!
-sleep 8
+sleep ${BOB_DELAY:-8}
 gradle runMpViewer -Pbench -PmpPort=$PORT -q -PwcArgs="-Dwindowscraft.bench.role=viewer $COMMON ${VIEWER_EXTRA:-}" > "$OUT/bob-$NAME.log" 2>&1 &
 BOB=$!
 wait $BOB

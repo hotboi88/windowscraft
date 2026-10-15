@@ -2,10 +2,11 @@
 # A copy of a modded server — its mods, config and libraries, never its world — on its own ports,
 # with offline logins and a flat test world, plus the test mod (it builds the test scene). For two
 # launcher-style clients (run.sh with SERVER=127.0.0.1:PORT) to test with the modpack both sides.
-#   tools/prodclient/server.sh SERVER_DIR        (PORT 25567, RELAY 25587, XMX 6G, RUN run-prodserver)
+#   tools/prodclient/server.sh SERVER_DIR [JVM args]   (PORT 25567, RELAY 25587, XMX 6G, RUN run-prodserver)
 set -eu
 cd "$(dirname "$0")/../.."
 SRC=$1
+shift
 RUN=${RUN:-run-prodserver}
 PORT=${PORT:-25567}
 RELAY=${RELAY:-25587}
@@ -29,4 +30,4 @@ sed -e "s/^server-port=.*/server-port=$PORT/" -e "s/^query.port=.*/query.port=$P
 printf 'server-ip=127.0.0.1\nlevel-type=minecraft\\:flat\n' >> "$RUN/server.properties"
 echo "{\"relayPort\": $RELAY, \"relayEnabled\": true}" > "$RUN/config/windowscraft-server.json"
 cd "$RUN" # (mods write next to wherever the server was started)
-exec java -Xmx${XMX:-6G} -Dwindowscraft.autotest.server=true -jar fabric-server-launch.jar nogui
+exec java -Xmx${XMX:-6G} -Dwindowscraft.autotest.server=true "$@" -jar fabric-server-launch.jar nogui

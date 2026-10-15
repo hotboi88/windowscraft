@@ -61,8 +61,9 @@ public final class BenchTest implements ClientModInitializer {
             mc.options.getMaxFps().setValue(Integer.getInteger("windowscraft.bench.gameFps", 260));
             mc.options.getEnableVsync().setValue(false);
             mc.options.getViewDistance().setValue(8);
-            if (role.equals("sharer")) goLive(mc);
         }
+        // the sharer goes live once its wall is there (a big modpack sends the world over slowly: look again each second)
+        if (role.equals("sharer") && !live && tick >= 40 && tick % 20 == 0 && tick <= 20 * 120) live = goLive(mc, tick == 20 * 120);
         if (role.equals("viewer") && tick > 40 && tick % 20 == 0 && !dev.windowscraft.client.TheaterMode.active()) faceTheWall(mc);
         if (monitorWall != null && dev.windowscraft.monitor.InGameMonitors.monitorOf(monitorWall) != null) {
             var mon = dev.windowscraft.monitor.InGameMonitors.monitorOf(monitorWall);
@@ -113,13 +114,15 @@ public final class BenchTest implements ClientModInitializer {
         }
         // the sharer stays until the viewer is done (or 10 minutes)
         if (role.equals("sharer") && measureUntil < 0 && measureFrom > 0
-                && (new java.io.File(mc.runDirectory.getParentFile(), "run-bob/bench-viewer-done").exists() || tick > 20 * 600)) {
+                && (new java.io.File(mc.runDirectory.getParentFile(), VIEWER_DIR + "/bench-viewer-done").exists() || tick > 20 * 600)) {
             log("BENCH SHARER DONE");
             mc.scheduleStop();
             measureFrom = -1;
         }
     }
 
+    /** The viewer's game folder, next to the sharer's (run-bob; tools/prodclient's copies have their own). */
+    private static final String VIEWER_DIR = System.getProperty("windowscraft.bench.viewerDir", "run-bob");
     private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input") || "1".equals(System.getProperty("windowscraft.bench.input")); // (run.sh passes BENCH_INPUT=1)
     private boolean allowed, seated;
     private Display monitorWall;
@@ -128,7 +131,7 @@ public final class BenchTest implements ClientModInitializer {
     /** Input benchmark: the viewer asks to use the screen, the sharer allows it, the viewer sits and uses it. */
     private void input(MinecraftClient mc) {
         if (role.equals("sharer")) {
-            java.io.File wants = new java.io.File(mc.runDirectory.getParentFile(), "run-bob/bench-wants-control");
+            java.io.File wants = new java.io.File(mc.runDirectory.getParentFile(), VIEWER_DIR + "/bench-wants-control");
             if (!allowed && wants.exists() && mc.getNetworkHandler() != null && !DisplayManager.get().all().isEmpty()) {
                 for (var e : mc.getNetworkHandler().getPlayerList()) {
                     if (e.getProfile().getId().equals(mc.player.getUuid())) continue;
@@ -166,11 +169,17 @@ public final class BenchTest implements ClientModInitializer {
         }
     }
 
-    private void goLive(MinecraftClient mc) {
+    private boolean live;
+
+    /** True once it went live (or failed for good); false = no wall yet, try again. */
+    private boolean goLive(MinecraftClient mc, boolean last) {
         String dim = mc.world.getRegistryKey().getValue().toString();
         int g = AutoTestServerGround.ground(mc);
         WallRect rect = WallDetector.detect(mc.world, new BlockPos(0, g + 2, -8), Direction.SOUTH, p -> false);
-        if (rect == null) { log("BENCH FAILED: no wall"); return; }
+        if (rect == null) {
+            if (last) log("BENCH FAILED: no wall");
+            return last;
+        }
         Display d = DisplayManager.get().create(dim, rect);
         if (source.equals("monitor")) {
             d.monitorW = height * 16 / 9;
@@ -178,15 +187,16 @@ public final class BenchTest implements ClientModInitializer {
             dev.windowscraft.monitor.InGameMonitors.turnOn(mc, dim, rect, d);
             monitorWall = d;
             log("turning on an in-game monitor (" + d.monitorW + "x" + d.monitorH + ")");
-            return;
+            return true;
         }
         SourceInfo src = SourceInfo.testPattern();
         if (source.equals("window")) {
             src = CaptureBackends.get().listWindows().stream().filter(s -> s.title().equals("WindowsCraft bench window")).findFirst().orElse(null);
-            if (src == null) { log("BENCH FAILED: the bench window isn't open (tools/bench)"); return; }
+            if (src == null) { log("BENCH FAILED: the bench window isn't open (tools/bench)"); return true; }
         }
         DisplayManager.get().start(d, src, new CaptureSettings(height, fps, true, source.equals("pattern")));
         log("went live: " + src.title() + " at " + height + "p" + fps);
+        return true;
     }
 
     /** Look straight at the middle of the 7×4 wall. */
