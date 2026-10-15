@@ -132,6 +132,21 @@ loom {
             programArgs "--quickPlayMultiplayer", "127.0.0.1:" + (project.findProperty("mpPort") ?: "25565"), "--username", "Bob", "--width", "1280", "--height", "720"
             if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
         }
+        // a second viewer (the benchmark with two people watching: tools/bench/run.sh VIEWERS=2)
+        mpViewer2 {
+            client()
+            name "MP test viewer 2"
+            source sourceSets.testmod
+            runDir "run-carol"
+            // its own folder for LWJGL's unpacked natives: two players starting at once mustn't
+            // load a file the other is still writing (CI: "Can't load library liblwjgl_opengl.so")
+            file("run-carol/lwjgl-natives").mkdirs() // (the crash report's system details look it up before LWJGL makes it)
+            vmArg "-Dorg.lwjgl.system.SharedLibraryExtractPath=" + file("run-carol/lwjgl-natives").absolutePath
+            if (!project.hasProperty("bench")) vmArg "-Dwindowscraft.autotest.role=viewer"
+            if (project.hasProperty("wcArgs")) project.property("wcArgs").toString().split(" ").each { if (it) vmArg it }
+            programArgs "--quickPlayMultiplayer", "127.0.0.1:" + (project.findProperty("mpPort") ?: "25565"), "--username", "Carol", "--width", "1280", "--height", "720"
+            if (project.hasProperty("xdisplay")) { environmentVariable "DISPLAY", project.property("xdisplay"); environmentVariable "LIBGL_ALWAYS_SOFTWARE", "1" }
+        }
         // Step 0: your own in-game monitor, measured standing and seated (tools/bench/monitor.sh)
         benchMonitor {
             client()

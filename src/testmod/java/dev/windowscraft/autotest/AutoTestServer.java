@@ -52,6 +52,7 @@ public final class AutoTestServer implements ModInitializer {
         ServerWorld w = server.getOverworld();
         String name = p.getGameProfile().getName();
         if (name.equals("Alice")) p.teleport(w, 6.5, ground + 1, -4.5, 110f, 0f);   // off to the side, out of Bob's view
+        else if (name.equals("Carol")) p.teleport(w, 2.5, ground + 1, -1.5, 180f, -4f); // a second viewer, right of Bob
         else p.teleport(w, -1.5, ground + 1, -1.5, 180f, -4f);                    // Bob: in front of the screen, slightly left
         LOG.info("[mp-test] placed {}", name);
     }

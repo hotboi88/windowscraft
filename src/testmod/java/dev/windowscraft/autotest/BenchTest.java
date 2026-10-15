@@ -114,14 +114,14 @@ public final class BenchTest implements ClientModInitializer {
         }
         // the sharer stays until the viewer is done (or 10 minutes)
         if (role.equals("sharer") && measureUntil < 0 && measureFrom > 0
-                && (new java.io.File(mc.runDirectory.getParentFile(), VIEWER_DIR + "/bench-viewer-done").exists() || tick > 20 * 600)) {
+                && (java.util.Arrays.stream(VIEWER_DIR.split(",")).allMatch(v -> new java.io.File(mc.runDirectory.getParentFile(), v + "/bench-viewer-done").exists()) || tick > 20 * 600)) {
             log("BENCH SHARER DONE");
             mc.scheduleStop();
             measureFrom = -1;
         }
     }
 
-    /** The viewer's game folder, next to the sharer's (run-bob; tools/prodclient's copies have their own). */
+    /** The viewers' game folders, next to the sharer's (run-bob; "run-bob,run-carol" for two; tools/prodclient's copies have their own). */
     private static final String VIEWER_DIR = System.getProperty("windowscraft.bench.viewerDir", "run-bob");
     private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input") || "1".equals(System.getProperty("windowscraft.bench.input")); // (run.sh passes BENCH_INPUT=1)
     private boolean allowed, seated;
@@ -131,7 +131,7 @@ public final class BenchTest implements ClientModInitializer {
     /** Input benchmark: the viewer asks to use the screen, the sharer allows it, the viewer sits and uses it. */
     private void input(MinecraftClient mc) {
         if (role.equals("sharer")) {
-            java.io.File wants = new java.io.File(mc.runDirectory.getParentFile(), VIEWER_DIR + "/bench-wants-control");
+            java.io.File wants = new java.io.File(mc.runDirectory.getParentFile(), VIEWER_DIR.split(",")[0] + "/bench-wants-control");
             if (!allowed && wants.exists() && mc.getNetworkHandler() != null && !DisplayManager.get().all().isEmpty()) {
                 for (var e : mc.getNetworkHandler().getPlayerList()) {
                     if (e.getProfile().getId().equals(mc.player.getUuid())) continue;

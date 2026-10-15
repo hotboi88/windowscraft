@@ -144,6 +144,20 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## Two people watching (15 Oct, 0.15.8, dev bench `VIEWERS=2`, 1080p60 window, one PC)
+
+| | one viewer | two viewers |
+|---|---|---|
+| sharer: game fps (average / 1 % low) | 119.2 / 87.2 | 118.9 / 80.3 |
+| sharer: helpers (capture + encode) | 0.23 cores, encoder 12 % | 0.23 cores, encoder 11 % (one encode) |
+| server relay: wait before sending on / CPU | 0.03 ms / 0.09 cores | 0.04 ms / 0.11 cores |
+| viewers: pictures decoded | 53.6/s | 53/s and 54/s |
+| viewers: captured → decoded (median / P95) | 51.9 / 65.5 ms | 58.2 / 80.7 and 60.3 / 82.8 ms |
+
+The extra ~7 ms is already there when the picture reaches the relay (in_age 19.1 → 22.8 ms median),
+before it's copied to anyone: three games and a server on one PC compete for it. On separate PCs
+a second viewer costs the sharer nothing measurable; the relay's fan-out is negligible.
+
 ## Windows self-test on the owner's PC again (15 Oct, 0.15.7 → 0.15.8)
 
 | | 13 Oct | 15 Oct, 0.15.7 | after the fixes (0.15.8) |

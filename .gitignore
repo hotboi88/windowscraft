@@ -12,6 +12,7 @@ run-iris/
 run-bench/
 run-alice/
 run-bob/
+run-carol/
 run-mp-server/
 run-wintest/
 logs/
