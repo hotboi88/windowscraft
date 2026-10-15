@@ -14,8 +14,10 @@ import java.util.concurrent.locks.LockSupport;
  * drawn, as 40 black/white cells at the test pattern's spot) so a viewer can tell exactly how old
  * each picture is after GPU capture, encoding, the relay and decoding.
  *
- * <p>Run: {@code java tools/bench/BenchWindow.java [fps] [x y] [width height]} (title "WindowsCraft
- * bench window"; 1280×720 unless given — the strip scales with it, as the test pattern's does).
+ * <p>Run: {@code java tools/bench/BenchWindow.java [fps] [x y] [width height [resizeEvery]]} (title
+ * "WindowsCraft bench window"; 1280×720 unless given — the strip scales with it, as the test
+ * pattern's does). {@code resizeEvery} seconds: the window turns ¾ as big and back, again and again
+ * (a shared window being resized: new shared pictures each time).
  * Every mouse press it gets is printed ("pressed <System.nanoTime()>"): the input benchmark
  * matches them with the clicks the viewer sent (tools/bench/clicks.py).
  */
@@ -31,6 +33,7 @@ public final class BenchWindow {
             W = Integer.parseInt(args[3]);
             H = Integer.parseInt(args[4]);
         }
+        double resizeEvery = args.length > 5 ? Double.parseDouble(args[5]) : 0;
         double sx = W / (double) REF_W, sy = H / (double) REF_H;
         System.setProperty("sun.java2d.uiScale", "1"); // pixel for pixel, whatever Windows' scale
         // plain GDI drawing: Java's Direct3D pipeline stops presenting while the window is fully
@@ -59,12 +62,20 @@ public final class BenchWindow {
         BufferStrategy bs = c.getBufferStrategy();
         Font big = new Font(Font.MONOSPACED, Font.BOLD, (int) (64 * sy)), small = new Font(Font.SANS_SERIF, Font.PLAIN, (int) (22 * sy));
         long start = System.nanoTime(), interval = 1_000_000_000L / fps, frame = 0;
+        boolean shrunk = false;
         while (true) {
             long due = start + frame * interval;
             long wait = due - System.nanoTime();
             if (wait > 0) LockSupport.parkNanos(wait);
             frame++;
             double t = (System.nanoTime() - start) / 1e9;
+            if (resizeEvery > 0 && (int) (t / resizeEvery) % 2 == 1 != shrunk) {
+                shrunk = !shrunk;
+                c.setPreferredSize(new java.awt.Dimension(shrunk ? W * 3 / 4 : W, shrunk ? H * 3 / 4 : H));
+                f.pack();
+                System.out.println("resized " + (shrunk ? W * 3 / 4 + "x" + H * 3 / 4 : W + "x" + H));
+                System.out.flush();
+            }
             Graphics2D g = (Graphics2D) bs.getDrawGraphics();
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             // moving colour bands (the whole picture changes, like video)

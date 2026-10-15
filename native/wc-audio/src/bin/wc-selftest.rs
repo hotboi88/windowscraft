@@ -952,7 +952,8 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             rep.note(format!("couldn't start {exe}: {e}"));
         }
         let mut found = None;
-        wait_for(10000, || {
+        // (Task Manager's very first start on a PC can take more than 10 s)
+        wait_for(25000, || {
             found = top_windows().into_iter().find(|w| class_name(*w) == class && !before.contains(w) && unsafe { IsWindowVisible(*w) }.as_bool());
             found.is_some()
         });

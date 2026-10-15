@@ -6,7 +6,8 @@
 #   tools/prodclient/run.sh INSTANCE_DIR [-Dwindowscraft.… JVM args for the test mod]
 # e.g. the in-game monitor bench with the owner's mods:
 #   BW=1 tools/prodclient/run.sh ~/Cobbleverse -Dwindowscraft.bench.monitor=true
-# RUN (default run-prod) is the copy; XMX (default 8G) its memory; BW=1 opens tools/bench's window;
+# RUN (default run-prod) is the copy; XMX (default 8G) its memory; BW=1 opens tools/bench's window
+# (BW_W, BW_H its size; BW_RESIZE=S: ¾ as big and back every S seconds);
 # PLAYER (default WCTest) the offline name; SERVER=HOST:PORT joins that server (tools/prodclient/
 # server.sh) instead of opening the test world.
 set -eu
@@ -52,7 +53,7 @@ for j in build/prodclient/libs/*.jar "$LOOM/1.21.1/minecraft-client.jar" "$INTER
 GAMEDIR=$(cygpath -w "$(realpath "$RUN")") ASSETS=$(cygpath -w "$(realpath "$LOOM/assets")")
 BWPID=
 if [ "${BW:-0}" = 1 ]; then
-  java tools/bench/BenchWindow.java 60 80 80 ${BW_W:-1920} ${BW_H:-1080} > "$RUN/bench-window.log" 2>&1 &
+  java tools/bench/BenchWindow.java 60 80 80 ${BW_W:-1920} ${BW_H:-1080} ${BW_RESIZE:-} > "$RUN/bench-window.log" 2>&1 &
   BWPID=$!
   sleep 3
 fi
