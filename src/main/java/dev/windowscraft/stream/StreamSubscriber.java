@@ -163,8 +163,13 @@ public final class StreamSubscriber implements FrameSource {
     public int decodeHeight() { return height; }
     public long framesDecoded() { return framesDecoded; }
 
-    /** What a lost piece costs: false — a short glitch that heals by itself; true — the picture holds until the next keyframe. */
-    public static volatile boolean FREEZE_ON_LOSS = Boolean.parseBoolean(System.getProperty("windowscraft.freezeOnLoss", "false"));
+    /**
+     * What a lost piece costs: true — the picture holds until the next keyframe (at most a second;
+     * the sound goes on); false — the decoder plays on through the hole, the picture smeared and
+     * streaky until then. Held since 0.15.11: over a 100 ms line that loses a little (the owner
+     * watched a simulated one) the smearing was "a terrible effect", a short hold isn't.
+     */
+    public static volatile boolean FREEZE_ON_LOSS = Boolean.parseBoolean(System.getProperty("windowscraft.freezeOnLoss", "true"));
     private volatile boolean damaged;
     /** For tests and the report: pauses longer than a quarter second between pictures, and pictures shown with damage. */
     public volatile long stalls, stallMs, longestStallMs, damagedFrames;
@@ -518,8 +523,8 @@ public final class StreamSubscriber implements FrameSource {
                     if (lostUntilKey && c.keyframe()) lostUntilKey = false;
                     damaged = lostUntilKey;
                     if (lostUntilKey && !FREEZE_ON_LOSS) {
-                        // (play on through the damage: a glitch that heals by the next keyframe
-                        // rather than a frozen picture until then)
+                        // (-Dwindowscraft.freezeOnLoss=false: play on through the damage, a smeared
+                        // picture that heals by the next keyframe)
                     } else if (lostUntilKey) {
                         byte[] rest = TsSplitter.without(c.data(), splitter.videoPid());
                         if (rest.length > 0) {

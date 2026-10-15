@@ -104,12 +104,17 @@ public final class UdpReceiver implements AutoCloseable {
         if (rttMs >= 0 && (received & 63) == 0) RTT.record(Math.round(rttMs * 1e6));
     }
 
+    private static final boolean OLD_GIVE_UP = Boolean.getBoolean("windowscraft.exp.oldGiveUp");
+
     /** How long a gap may hold the stream up before it's skipped. */
     public long latencyMs() {
-        // time for a lost piece to be asked for and sent again — twice — before giving up on it
-        // (a piece given up on costs a frozen picture until the next keyframe: worth a little delay)
+        // time for a lost piece to be asked for and sent again — twice, on a line whose delay
+        // swings — before giving up on it (a piece given up on costs a held picture until the next
+        // keyframe: worth a little waiting; over a simulated 100 ms line that swings, 2.5 round
+        // trips + 70 ms gave up on pieces that were on their way)
         double r = rttMs < 0 ? 150 : rttMs;
-        return (long) Math.max(140, Math.min(1000, r * 2.5 + 70));
+        if (OLD_GIVE_UP) return (long) Math.max(140, Math.min(1000, r * 2.5 + 70)); // (dev: as up to 0.15.10, to compare)
+        return (long) Math.max(160, Math.min(1200, r * 3 + 120));
     }
 
     /** The stream, in order. Ends when this receiver is closed. */
