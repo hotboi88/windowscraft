@@ -237,6 +237,14 @@ public final class StreamPublisher {
 
     // capture thread: copy the newest frame for the encoder into a recycled buffer
     private void onFrame(Frame f) {
+        // the window's own size, also while your wall gets a smaller copy of it (as sharp as it
+        // looks): a smaller copy is no reason to rebuild the stream, and isn't for the encoder
+        int fw = session.fullWidth(), fh = session.fullHeight();
+        if (fh > 0 && f.height < fh) {
+            frameW = fw;
+            frameH = fh;
+            return;
+        }
         int size = f.byteSize();
         byte[] buf = spare.poll();
         if (buf == null || buf.length != size) buf = new byte[size];

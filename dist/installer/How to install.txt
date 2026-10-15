@@ -1,5 +1,11 @@
 WindowsCraft 0.15.2 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
 
+New in 0.15.4: fixes 0.15.3 restarting the stream of a screen you share every few seconds while
+your own wall of it looked small (the people watching saw it pause and fall behind). Sitting down
+at one of your screens brings its full-size picture back at once. The Windows self-test no longer
+opens Task Manager on PCs where Windows starts it as administrator (it then stayed in front and
+spoiled the tests after it).
+
 New in 0.15.3: Settings -> Performance is Automatic (WindowsCraft decides, and says what it's
 doing right now) or Advanced (pick each setting yourself); settings you had turned off stay off.
 Each of your screens can have its own picks on its Picture page. New and on by Automatic: your

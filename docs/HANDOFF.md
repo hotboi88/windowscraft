@@ -98,6 +98,20 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.4 (14 Oct): fix for 0.15.3's stream restarts
+
+0.15.3's smaller wall copies reached `StreamPublisher.onFrame`, which takes the CPU capture's
+picture size as the window's size: on the GPU path (NVENC, the owner's PC) every shrink/grow
+read as "window resized" and restarted the stream (two-player bench: 14–16 restarts in 40 s,
+viewer captured→decoded 315 ms median, > 2 s P95). Now onFrame takes the window's size from the
+session's full size and never hands a smaller copy to the encoder, and any stream not on the GPU
+path keeps the copies full size. Same bench after: 0 restarts, 54–63 ms. CI can't see this (no
+hardware encoder: CI streams always take the CPU path) — the local two-player bench does
+(`BENCH_INPUT=1 tools/bench/run.sh window|monitor 1080 60 40 NAME`; "window resized" in
+alice-NAME.log). Also: the bench's input mode never ran (`BENCH_INPUT=1` reached Java as "1");
+`clicks.py` now times each click from the viewer's send to the bench window getting it; the
+self-test skips Task Manager where Windows starts it as administrator (`taskmgr_elevates`).
+
 ## 0.15.3 (14 Oct, branch `next-0.15.3`): Automatic / Advanced settings, copies as sharp as they look
 
 docs/SETTINGS.md "Built (0.15.3)" has the model (`ClientSettings.Auto`, `on(Auto)`,

@@ -4,7 +4,9 @@
 # server on 25565/25585 can keep running.
 #   tools/bench/run.sh SOURCE HEIGHT FPS SECONDS [NAME]     SOURCE = pattern | window | idle
 # SHARER_EXTRA / VIEWER_EXTRA="-Dwindowscraft.exp.…" pass experiment switches to one player only;
-# BENCH_INPUT=1: the viewer also uses the screen (pointer moves and clicks), to time the input path.
+# BENCH_INPUT=1: the viewer also uses the screen (pointer moves and clicks), to time the input path
+# (tools/bench/clicks.py: each click from the viewer's send to the bench window getting it).
+# SOURCE "monitor": the sharer turns on an in-game monitor and puts the bench window on it.
 # "window" opens tools/bench/BenchWindow.java (GPU capture path); "idle" = nobody shares (the mod's
 # cost while nothing is on). Reports end up in $OUT (default build/bench).
 set -u
@@ -27,7 +29,7 @@ for d in run-alice run-bob; do [ -f $d/options.txt ] || cp tools/movie/options.t
 ROLE_SRC=$SRC; [ "$SRC" = idle ] && ROLE_SRC=pattern
 COMMON="-Dwindowscraft.bench.input=${BENCH_INPUT:-0} -Dwindowscraft.bench.source=$ROLE_SRC -Dwindowscraft.bench.height=$H -Dwindowscraft.bench.fps=$F -Dwindowscraft.bench.seconds=$S -Dwindowscraft.bench.warmup=$WARM -Dwindowscraft.bench.name=$NAME -Dwindowscraft.bench.gameFps=$GAMEFPS"
 BW=
-if [ "$SRC" = window ]; then
+if [ "$SRC" = window ] || [ "$SRC" = monitor ]; then
   java tools/bench/BenchWindow.java "$F" 0 0 $((H * 16 / 9)) "$H" > "$OUT/window-$NAME.log" 2>&1 &
   BW=$!
   sleep 4
@@ -50,3 +52,4 @@ for d in run-alice run-bob run-mp-server; do cp $d/windowscraft/measurements/mea
 echo "== $NAME"
 grep -ah "\[bench" "$OUT/alice-$NAME.log" "$OUT/bob-$NAME.log" | sed 's/.*\[bench/[bench/' | tail -12
 ls "$OUT" | grep "$NAME" | grep measure
+[ "${BENCH_INPUT:-0}" = 1 ] && [ -n "$BW" ] && python tools/bench/clicks.py "$OUT/bob-$NAME.log" "$OUT/window-$NAME.log"

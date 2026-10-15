@@ -16,6 +16,8 @@ import java.util.concurrent.locks.LockSupport;
  *
  * <p>Run: {@code java tools/bench/BenchWindow.java [fps] [x y] [width height]} (title "WindowsCraft
  * bench window"; 1280×720 unless given — the strip scales with it, as the test pattern's does).
+ * Every mouse press it gets is printed ("pressed <System.nanoTime()>"): the input benchmark
+ * matches them with the clicks the viewer sent (tools/bench/clicks.py).
  */
 public final class BenchWindow {
     // the test pattern's timing strip (TestPatternProducer.TIMING_*), on a 1280×720 picture
@@ -41,6 +43,12 @@ public final class BenchWindow {
         c.setPreferredSize(new java.awt.Dimension(W, H));
         c.setIgnoreRepaint(true);
         f.add(c);
+        c.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                System.out.println("pressed " + System.nanoTime());
+                System.out.flush();
+            }
+        });
         f.pack();
         f.setLocation(x, y);
         f.setVisible(true);

@@ -384,6 +384,12 @@ public final class DisplayManager {
         if (world == null || mc.player == null) return;
         tickLocalSound(mc);
         if (tickCounter % 1200 == 0) dev.windowscraft.audio.AudioCapture.restoreLeftovers(); // once a minute
+        // sitting down at one of your screens: its full-size copy now, not at the next check
+        Display seatedNow = dev.windowscraft.monitor.InGameMonitors.seated(), flatNow = dev.windowscraft.client.DeskView.showing();
+        if (seatedNow != null || flatNow != null)
+            for (Share s : shares)
+                if (s.session.shrink() > 0 && (s.displays.contains(seatedNow) || s.displays.contains(flatNow)))
+                    s.session.setShrink(s.copySize.update(s.session.fullHeight(), s.viewPx(), true, System.nanoTime()));
         if (++tickCounter % 10 != 0) return; // twice a second is plenty
         String dim = world.getRegistryKey().getValue().toString();
         Vec3d eye = mc.player.getEyePos();
@@ -542,7 +548,8 @@ public final class DisplayManager {
         // as sharp as it looks: your wall's copy no bigger than the wall looks (the stream to
         // others has its own capture; when it encodes these very pictures, they stay full size)
         Display seated = dev.windowscraft.monitor.InGameMonitors.seated(), flat = dev.windowscraft.client.DeskView.showing();
-        boolean full = cpuStreamNeedsFrames || seated != null && s.displays.contains(seated) || flat != null && s.displays.contains(flat)
+        // (a stream that isn't on the GPU path encodes these very pictures — or will, starting up)
+        boolean full = s.publisher != null && !s.publisher.gpuActive() || seated != null && s.displays.contains(seated) || flat != null && s.displays.contains(flat)
                 || !s.displays.stream().allMatch(d -> ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN, d));
         if (full || s.seenRecently()) // (out of view: as it was — the size it looked last)
             s.session.setShrink(s.copySize.update(s.session.fullHeight(), s.viewPx(), full, System.nanoTime()));

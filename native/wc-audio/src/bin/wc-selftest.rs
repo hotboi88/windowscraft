@@ -933,7 +933,16 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         let _ = SetCursorPos((ra.left + ra.right) / 2, (ra.top + ra.bottom) / 2);
     }
     sleep(200);
+    let admin_taskmgr = taskmgr_elevates();
+    if admin_taskmgr {
+        // (it would open on your desk as administrator, where nothing of ours may move, close or
+        // type into it — and stay in front, spoiling the checks after it)
+        rep.note("Task Manager: not tried — on this PC Windows starts it as administrator (an administrator account with the usual UAC setting; Windows 11 ignores \"Run as invoker\" for it), so it opens on your desk and can't be moved");
+    }
     for (what, class, exe, arg) in [("File Explorer", "CabinetWClass", "explorer.exe", "C:\\Windows"), ("Task Manager", "TaskManagerWindow", "taskmgr.exe", "")] {
+        if class == "TaskManagerWindow" && admin_taskmgr {
+            continue;
+        }
         let before: Vec<HWND> = top_windows().into_iter().filter(|w| class_name(*w) == class).collect();
         let mut c = Command::new(exe);
         if !arg.is_empty() {
@@ -2043,6 +2052,25 @@ fn stress(dir: &std::path::Path, n: u32, with_b: bool, pause: u64) {
     HELPER_LOG.lock().unwrap().clear();
 }
 
+
+/// Does Windows start Task Manager as administrator here? An administrator account whose programs
+/// run with UAC's limited rights (the usual home PC): Task Manager asks to be elevated itself
+/// (silently, with the default UAC setting). Our normal-rights programs can't move, close or type
+/// into an elevated window.
+fn taskmgr_elevates() -> bool {
+    use windows::Win32::Security::{GetTokenInformation, TokenElevationType, TokenElevationTypeLimited, TOKEN_ELEVATION_TYPE, TOKEN_QUERY};
+    unsafe {
+        let mut tok = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok).is_err() {
+            return false;
+        }
+        let mut t = TOKEN_ELEVATION_TYPE(0);
+        let mut len = 0u32;
+        let ok = GetTokenInformation(tok, TokenElevationType, Some(&mut t as *mut _ as *mut _), std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32, &mut len).is_ok();
+        let _ = CloseHandle(tok);
+        ok && t == TokenElevationTypeLimited
+    }
+}
 
 /// What Windows is told about how to start Task Manager (the "Run as invoker" setting), if anything.
 fn layer_of_taskmgr() -> Option<String> {

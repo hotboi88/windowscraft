@@ -22,7 +22,7 @@ import net.minecraft.util.math.Direction;
  * and players, the sharer streams one screen at fixed settings and the viewer watches it from in
  * front of the wall; both measure for a fixed time and quit. Properties:
  * {@code windowscraft.bench.role} sharer|viewer|idle, {@code .source} pattern|window (the bench
- * window from tools/bench), {@code .height}, {@code .fps}, {@code .seconds}, {@code .warmup},
+ * window from tools/bench)|monitor (an in-game monitor with the bench window on it), {@code .height}, {@code .fps}, {@code .seconds}, {@code .warmup},
  * {@code .name} (in the report's file name). "idle" measures a player with the mod and nothing on.
  */
 public final class BenchTest implements ClientModInitializer {
@@ -64,6 +64,15 @@ public final class BenchTest implements ClientModInitializer {
             if (role.equals("sharer")) goLive(mc);
         }
         if (role.equals("viewer") && tick > 40 && tick % 20 == 0 && !dev.windowscraft.client.TheaterMode.active()) faceTheWall(mc);
+        if (monitorWall != null && dev.windowscraft.monitor.InGameMonitors.monitorOf(monitorWall) != null) {
+            var mon = dev.windowscraft.monitor.InGameMonitors.monitorOf(monitorWall);
+            var w = com.sun.jna.platform.win32.User32.INSTANCE.FindWindow(null, "WindowsCraft bench window");
+            if (w != null) {
+                com.sun.jna.platform.win32.User32.INSTANCE.SetWindowPos(w, null, mon.left(), mon.top(), 0, 0, 0x0001 | 0x0040); // SWP_NOSIZE | SWP_SHOWWINDOW
+                log("in-game monitor " + mon + " on; moved the bench window onto it");
+            } else log("BENCH FAILED: the bench window isn't open (tools/bench)");
+            monitorWall = null;
+        }
         if (INPUT) input(mc);
         long now = System.nanoTime();
         if (tick == 60) {
@@ -111,8 +120,9 @@ public final class BenchTest implements ClientModInitializer {
         }
     }
 
-    private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input");
+    private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input") || "1".equals(System.getProperty("windowscraft.bench.input")); // (run.sh passes BENCH_INPUT=1)
     private boolean allowed, seated;
+    private Display monitorWall;
     private RemoteDisplays.Remote ctrl;
 
     /** Input benchmark: the viewer asks to use the screen, the sharer allows it, the viewer sits and uses it. */
@@ -148,7 +158,10 @@ public final class BenchTest implements ClientModInitializer {
             double a = tick * 0.15;
             for (int k = 0; k < 3; k++)
                 dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_MOVE, 0.5 + 0.3 * Math.cos(a + k * 0.05), 0.5 + 0.3 * Math.sin(a + k * 0.05), 0, 0);
-            if (tick % 20 == 0) dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_BUTTON_DOWN, 0.5, 0.5, 0, 0);
+            if (tick % 20 == 0) {
+                log("click sent " + System.nanoTime()); // (tools/bench/clicks.py matches it with the window's "pressed")
+                dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_BUTTON_DOWN, 0.5, 0.5, 0, 0);
+            }
             if (tick % 20 == 2) dev.windowscraft.client.ClientNet.control(ctrl.id, dev.windowscraft.net.Payloads.OP_BUTTON_UP, 0.5, 0.5, 0, 0);
         }
     }
@@ -159,6 +172,14 @@ public final class BenchTest implements ClientModInitializer {
         WallRect rect = WallDetector.detect(mc.world, new BlockPos(0, g + 2, -8), Direction.SOUTH, p -> false);
         if (rect == null) { log("BENCH FAILED: no wall"); return; }
         Display d = DisplayManager.get().create(dim, rect);
+        if (source.equals("monitor")) {
+            d.monitorW = height * 16 / 9;
+            d.monitorH = height;
+            dev.windowscraft.monitor.InGameMonitors.turnOn(mc, dim, rect, d);
+            monitorWall = d;
+            log("turning on an in-game monitor (" + d.monitorW + "x" + d.monitorH + ")");
+            return;
+        }
         SourceInfo src = SourceInfo.testPattern();
         if (source.equals("window")) {
             src = CaptureBackends.get().listWindows().stream().filter(s -> s.title().equals("WindowsCraft bench window")).findFirst().orElse(null);
