@@ -1913,6 +1913,33 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let on_a = wait_for(3000, || on(wa, &ra));
     rep.check("…and opens on monitor A", on_a, format!("at {} (A {})", wa.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
     rep.check("…looking like itself: no Sandboxie [#] marker in its title", wa.map_or(false, |w| !title(w).contains("[#]")), format!("title {:?}", wa.map(title)));
+    // (browsers built on Chromium open the sign-ins they saved on your desk only through their own
+    //  elevation service, run in the box as SYSTEM: every one this PC has, in every box)
+    let elevation: Vec<String> = Command::new("reg").args(["query", "HKLM\\SYSTEM\\CurrentControlSet\\Services", "/s", "/f", "elevation_service.exe", "/d"]).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().strip_prefix("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\").map(|n| n.to_string())).collect())
+        .unwrap_or_default();
+    let shared_has = |key: &str| -> Vec<String> {
+        let b = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Sandboxie.ini")).unwrap_or_default();
+        let t = if b.len() > 2 && b[0] == 0xFF { String::from_utf16_lossy(&b[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()) } else { String::from_utf8_lossy(&b).into_owned() };
+        let mut inside = false;
+        let mut out = Vec::new();
+        for l in t.lines().map(|l| l.trim()) {
+            if l.starts_with('[') {
+                inside = l.eq_ignore_ascii_case("[Template_WCShared]");
+            } else if inside {
+                if let Some((k, v)) = l.split_once('=') {
+                    if k.trim().eq_ignore_ascii_case(key) {
+                        out.push(v.trim().to_string());
+                    }
+                }
+            }
+        }
+        out
+    };
+    let as_system = shared_has("RunServiceAsSystem");
+    rep.check("every Chromium browser's elevation service runs in the boxes as SYSTEM (so a boxed browser opens your desk's sign-ins)",
+        elevation.iter().all(|e| as_system.iter().any(|x| x.eq_ignore_ascii_case(e)) && shared_has("SandboxService").iter().any(|x| x.eq_ignore_ascii_case(e))),
+        format!("on this PC: {elevation:?} · in the boxes: {as_system:?}"));
     // 3. exceptions stay out, while sitting there
     let wx = start(&app("wcapp_x"));
     let wh = start(&app("wcapp_h"));

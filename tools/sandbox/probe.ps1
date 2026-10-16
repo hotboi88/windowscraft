@@ -337,6 +337,72 @@ Note "rules removed through the interface: result $r in $([int]((Get-Date)-$t0).
 $z = StartGui "C:\wcforce\wcapp_a.exe" "wc-force-after"
 Check "with the rules removed, nothing is boxed any more" ($z -eq "") "box '$z'"
 
+# ---- 11. a boxed browser starts signed in like your desk ("Logins follow my desk")
+#          Browsers built on Chromium lock their saved logins with a key only their own "elevation
+#          service" opens (app-bound encryption). In a box that service runs inside it: as the box's
+#          user it can't open the key; run there as SYSTEM (as Sandboxie's own
+#          Template_Chromium_Elevation does, for the services WindowsCraft finds) it can.
+Section '11. a boxed browser starts signed in like your desk'
+& "$dir\Start.exe" /terminate_all | Out-Null
+$elev = @(Get-ChildItem HKLM:\SYSTEM\CurrentControlSet\Services | ForEach-Object {
+    $ip = (Get-ItemProperty $_.PSPath -Name ImagePath -ErrorAction SilentlyContinue).ImagePath
+    if ("$ip" -match '(?i)\\elevation_service\.exe') { $_.PSChildName } })
+Note "Chromium elevation services on this PC: $($elev -join ', ')"
+foreach ($b in "WCAbOff", "WCAbOn") {
+    foreach ($k in @(@("Enabled", "y"), @("BorderColor", "#000000,off,0"), @("BoxNameTitle", "-"), @("AutoDelete", "n"), @("ConfigLevel", "10"))) { & $ini set $b $k[0] $k[1] | Out-Null }
+}
+& $ini set WCAbOn OpenSamEndpoint y | Out-Null
+foreach ($e in $elev) { & $ini append WCAbOn SandboxService $e | Out-Null; & $ini append WCAbOn RunServiceAsSystem $e | Out-Null }
+& "$dir\Start.exe" /reload | Out-Null
+Start-Sleep 2
+function WinsOf($proc) { Procs $proc | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Title = $_.MainWindowTitle; Hwnd = $_.Hwnd; Box = (BoxOf $_.Id) } } }
+function WaitWin($proc, $box, $pattern, $sec) {
+    $t = (Get-Date).AddSeconds($sec)
+    while ((Get-Date) -lt $t) { $w = WinsOf $proc | Where-Object { $_.Box -eq $box -and $_.Title -match $pattern }; if ($w) { return $w }; Start-Sleep 1 }
+    return $null
+}
+# closed the way you'd close it (so it saves its cookies), then whatever's left of it ended
+function CloseAll($proc) {
+    foreach ($w in WinsOf $proc) { [Wins]::Close($w.Hwnd) }
+    $t = (Get-Date).AddSeconds(20); while ((Get-Date) -lt $t -and (Get-Process $proc -ErrorAction SilentlyContinue)) { Start-Sleep 1 }
+    Get-Process $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep 2
+}
+$chrome = @("C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+$browsers = @(
+    @{ n = "Chrome"; exe = $chrome; proc = "chrome"; state = "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State" },
+    @{ n = "Edge"; exe = $edge; proc = "msedge"; state = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Local State" })
+$bflags = "--no-first-run --no-default-browser-check --disable-features=msEdgeWelcomePage,msEdgeStartupBoost"
+foreach ($br in $browsers) {
+    if (-not $br.exe) { Note "$($br.n): not installed here"; continue }
+    CloseAll $br.proc
+    Start-Process $br.exe -ArgumentList "$bflags http://127.0.0.1:$port/?login=desk"
+    $null = WaitWin $br.proc "" "login=desk" 30
+    Start-Process $br.exe -ArgumentList "http://127.0.0.1:$port/?deskcheck=1"
+    $d = WaitWin $br.proc "" "wclogin=desk\].*deskcheck" 30
+    CloseAll $br.proc
+    $ab = $false
+    try { $ab = [bool]((Get-Content $br.state -Raw | ConvertFrom-Json).os_crypt.app_bound_encrypted_key) } catch {}
+    Note "$($br.n): desk signed in: $([bool]$d) · its saved logins locked with an app-bound key: $ab"
+    $res = @{}
+    foreach ($b in "WCAbOff", "WCAbOn") {
+        & "$dir\Start.exe" /box:$b delete_sandbox_silent | Out-Null   # (starts from your desk's)
+        Start-Sleep 1
+        & "$dir\Start.exe" /box:$b /silent $br.exe $bflags.Split(' ') "http://127.0.0.1:$port/?box=$b"
+        $w = WaitWin $br.proc $b "box=$b" 40
+        $res[$b] = "$($w | Select-Object -First 1 | ForEach-Object Title)"
+        & "$dir\Start.exe" /box:$b /terminate | Out-Null
+        Start-Sleep 2
+    }
+    Note "$($br.n) in a plain box: '$($res.WCAbOff)'"
+    if ($d) {
+        Check "a boxed $($br.n) starts signed in like your desk (its elevation service run in the box as SYSTEM)" ($res.WCAbOn -match 'wclogin=desk') "'$($res.WCAbOn)' · plain box: '$($res.WCAbOff)'"
+    } else {
+        Note "($($br.n): the desk didn't sign in here, nothing to compare: '$($res.WCAbOn)')"
+    }
+}
+foreach ($b in "WCAbOff", "WCAbOn") { & "$dir\Start.exe" /box:$b delete_sandbox_silent | Out-Null }
+
 # ---- 9. the installer: its signature and fingerprint (to check downloads against)
 Section '9. the installer: its signature and fingerprint (to c'
 $sig = Get-AuthenticodeSignature $inst.FullName

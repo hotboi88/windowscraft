@@ -3800,7 +3800,65 @@ fn shared_settings() -> Vec<(String, String)> {
     for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
     }
+    // a boxed browser can open your desk's sign-ins: see chromium_elevation_services
+    let elev = chromium_elevation_services();
+    if !elev.is_empty() {
+        s.push(("OpenSamEndpoint".into(), "y".into()));
+        s.extend(elev.iter().map(|e| ("SandboxService".to_string(), e.clone())));
+        s.extend(elev.iter().map(|e| ("RunServiceAsSystem".to_string(), e.clone())));
+        s.push(("UseChromeSecurePreferencesHack".into(), "n".into()));
+    }
     s
+}
+
+/// Browsers built on Chromium (Chrome, Edge, Brave, Vivaldi, Opera, …) lock the sign-ins they save
+/// with a key only their own "elevation service" can open (app-bound encryption). In a box, that
+/// service runs inside it — and as the box's user it can't open the key: the box saw your desk's
+/// sign-ins and couldn't read one of them. Run in the box as SYSTEM, it can (what Sandboxie's own
+/// Template_Chromium_Elevation does for the browsers it names). Found by its program, whichever
+/// browser installed it; looked for once per helper run.
+fn chromium_elevation_services() -> Vec<String> {
+    static FOUND: OnceLock<Vec<String>> = OnceLock::new();
+    FOUND.get_or_init(|| {
+        let mut out = Vec::new();
+        unsafe {
+            let base = wide("SYSTEM\\CurrentControlSet\\Services");
+            let mut key = HKEY::default();
+            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(base.as_ptr()), None, KEY_READ, &mut key) != ERROR_SUCCESS {
+                return out;
+            }
+            let mut i = 0;
+            loop {
+                let mut name = [0u16; 256];
+                let mut len = name.len() as u32;
+                if RegEnumKeyExW(key, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None) != ERROR_SUCCESS {
+                    break;
+                }
+                i += 1;
+                let mut sub = HKEY::default();
+                if RegOpenKeyExW(key, PCWSTR(name.as_ptr()), None, KEY_READ, &mut sub) != ERROR_SUCCESS {
+                    continue;
+                }
+                let v = wide("ImagePath");
+                let mut buf = [0u16; 1024];
+                let mut size = (buf.len() * 2) as u32;
+                let image = if RegQueryValueExW(sub, PCWSTR(v.as_ptr()), None, None, Some(buf.as_mut_ptr() as *mut u8), Some(&mut size)) == ERROR_SUCCESS {
+                    from_wide(&buf).to_ascii_lowercase()
+                } else {
+                    String::new()
+                };
+                let _ = RegCloseKey(sub);
+                if image.contains("\\elevation_service.exe") {
+                    out.push(from_wide(&name));
+                }
+            }
+            let _ = RegCloseKey(key);
+        }
+        if !out.is_empty() {
+            eprintln!("info=own copies: browsers' sign-ins open in a box through {}", out.join(", "));
+        }
+        out
+    }).clone()
 }
 
 /// Your own folders (Desktop, Documents, Downloads, Pictures, Music, Videos) as your desk's, for a
