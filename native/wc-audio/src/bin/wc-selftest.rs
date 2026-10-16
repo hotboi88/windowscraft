@@ -1889,7 +1889,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     rep.check("sitting at monitor B: the rule moved to B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {rules:?}"));
     let wb = start(&app("wcapp_b"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
-    rep.check("…an app started at B runs in B's box, on B", wb.is_some() && inb.contains(&wb.map_or(0, pid)) && !ina.contains(&wb.map_or(0, pid)) && on(wb, &rb),
+    // (the helper moves it there as it shows, as on A: give the move a moment to land)
+    let on_b = wait_for(3000, || on(wb, &rb));
+    rep.check("…an app started at B runs in B's box, on B", wb.is_some() && inb.contains(&wb.map_or(0, pid)) && !ina.contains(&wb.map_or(0, pid)) && on_b,
         format!("window {:?} at {} · A's box {ina:?} · B's box {inb:?}", wb.map(pid), wb.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
     rep.check("…and A's app is still A's, on A", wa.map_or(false, |w| ina.contains(&pid(w)) && !inb.contains(&pid(w))) && on(wa, &ra), format!("A's box {ina:?}"));
     // 5. own copies off everywhere: no rule even while sitting
