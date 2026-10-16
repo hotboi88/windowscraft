@@ -117,6 +117,8 @@ public final class StreamPublisher {
     private volatile int level;
     private volatile String levelWhy = "";
     private volatile long levelSince = System.nanoTime();
+    /** The stream is 30 pictures a second or fewer at 720 lines or fewer before any lowering ("i have it at 720p30"). */
+    private volatile boolean lightAlready;
     private volatile boolean triedUp; // a step back up already failed: stay down for this share
     private volatile int videoSkips; // CPU path: the encoder couldn't take the frames in time
     private static final int MAX_LEVEL = 4;
@@ -452,6 +454,8 @@ public final class StreamPublisher {
             eh = Math.max(16, eh & ~15);
         }
         CaptureSettings ps = settings;
+        // (already 30 pictures a second at most 720 lines: lowering it would only blur it, see below)
+        lightAlready = ps.fps() <= 30 && eh <= 720;
         int fps = level >= 1 ? Math.min(ps.fps(), 30) : ps.fps();
         if (level >= 2 && eh > 720) { // 720p
             double k = 720.0 / eh;
@@ -734,7 +738,7 @@ public final class StreamPublisher {
                 // work — fewer bits per picture barely do, they only blur it: YouTube at 1.2 Mbit/s
                 // for a laptop, and each step restarts the stream, a gap in the sound for everyone.
                 // So for that no lower than step 2; its own light playback does the rest)
-                if (vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE && level >= 2) vt = 0;
+                if (vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE && (level >= 2 || lightAlready)) vt = 0;
                 if (vt != 0 && now - levelSince > gate && now - pipelineStart > 3_000_000_000L)
                     lower(vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE ? "a viewer's PC can't play it fast enough" : "it doesn't reach a viewer fast enough");
                 // a while without trouble: try one step better (once; if that fails it stays down)
