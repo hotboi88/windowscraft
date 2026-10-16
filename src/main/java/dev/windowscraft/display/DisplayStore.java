@@ -72,11 +72,6 @@ final class DisplayStore {
                 WallRect rect = WallRect.parse(o.get("face").getAsString(), pos(o.getAsJsonArray("min")), pos(o.getAsJsonArray("max")));
                 if (rect == null) continue;
                 Display d = new Display(UUID.fromString(o.get("id").getAsString()), o.get("dimension").getAsString(), rect);
-                if (o.has("last")) {
-                    JsonObject l = o.getAsJsonObject("last");
-                    d.lastSource = new SourceDescriptor(SourceInfo.Kind.valueOf(l.get("kind").getAsString()),
-                            l.get("title").getAsString(), l.get("exe").getAsString(), l.get("screen").getAsString());
-                }
                 if (o.has("settings")) {
                     JsonObject s = o.getAsJsonObject("settings");
                     d.lastSettings = new CaptureSettings(s.get("maxHeight").getAsInt(), s.get("fps").getAsInt(), s.get("cursor").getAsBoolean(),
@@ -96,6 +91,7 @@ final class DisplayStore {
                 } else {
                     d.picked.putAll(d.controllers); // (from before: the people you'd allowed)
                 }
+                if (o.has("name") && !o.get("name").getAsString().isBlank()) d.name = o.get("name").getAsString();
                 if (o.has("ownCopies")) d.ownCopies = o.get("ownCopies").getAsBoolean();
                 if (o.has("followDesk")) d.followDesk = o.get("followDesk").getAsBoolean();
                 if (o.has("overrides")) for (var e : o.getAsJsonObject("overrides").entrySet()) d.overrides.put(e.getKey(), e.getValue().getAsString());
@@ -123,14 +119,7 @@ final class DisplayStore {
             o.addProperty("face", d.rect.faceString());
             o.add("min", json(d.rect.min()));
             o.add("max", json(d.rect.max()));
-            if (d.lastSource != null) {
-                JsonObject l = new JsonObject();
-                l.addProperty("kind", d.lastSource.kind().name());
-                l.addProperty("title", d.lastSource.title());
-                l.addProperty("exe", d.lastSource.exeName());
-                l.addProperty("screen", d.lastSource.screenKey());
-                o.add("last", l);
-            }
+            // (what was shown on it isn't remembered: a screen keeps its name and settings, never the apps on it)
             if (d.lastSettings != null) {
                 JsonObject s = new JsonObject();
                 s.addProperty("maxHeight", d.lastSettings.maxHeight());
@@ -144,6 +133,7 @@ final class DisplayStore {
             o.addProperty("access", d.access);
             writePeople(o, "picked", d.picked);
             writePeople(o, "blocked", d.blocked);
+            if (d.name != null && !d.name.isBlank()) o.addProperty("name", d.name);
             if (!d.ownCopies) o.addProperty("ownCopies", false);
             if (!d.followDesk) o.addProperty("followDesk", false);
             if (!d.overrides.isEmpty()) {

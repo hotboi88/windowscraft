@@ -44,6 +44,8 @@ public final class ClientSettings {
     private static double ownVolume = 1.0;
     private static boolean screensWithoutShaders = false;
     private static double pointerSpeed = 1.0;
+    /** The WindowsCraft menu's own size, on top of Minecraft's GUI scale (0.6–2). */
+    private static double hubScale = 1.0;
     /** Your upload for screens, shared among the ones people are watching (kbit/s). */
     private static int uploadKbps = 10_000;
     /** Sitting at your own in-game monitor shows it flat on your screen, pixel for pixel. */
@@ -72,6 +74,7 @@ public final class ClientSettings {
                     if (o.has("ownVolume")) ownVolume = o.get("ownVolume").getAsDouble();
                     if (o.has("screensWithoutShaders")) screensWithoutShaders = o.get("screensWithoutShaders").getAsBoolean();
                     if (o.has("pointerSpeed")) pointerSpeed = o.get("pointerSpeed").getAsDouble();
+        if (o.has("hubScale")) hubScale = Math.max(0.6, Math.min(2, o.get("hubScale").getAsDouble()));
                     readPerf(o);
                     if (o.has("deskView")) deskView = o.get("deskView").getAsBoolean();
                     if (o.has("seatZoom")) seatZoom = o.get("seatZoom").getAsDouble();
@@ -217,6 +220,17 @@ public final class ClientSettings {
         return pointerSpeed;
     }
 
+    public static double hubScale() {
+        get();
+        return hubScale;
+    }
+
+    public static void setHubScale(double v) {
+        get();
+        hubScale = Math.max(0.6, Math.min(2, v));
+        set(current);
+    }
+
     public static void setPointerSpeed(double v) {
         get();
         pointerSpeed = Math.max(0.25, Math.min(3, v));
@@ -266,6 +280,7 @@ public final class ClientSettings {
         // (what's in effect, under the old keys: an older WindowsCraft reads these)
         o.addProperty("gpuSharingExt", on(Auto.GPU_SHARING));
         o.addProperty("pointerSpeed", pointerSpeed);
+        o.addProperty("hubScale", hubScale);
         o.addProperty("offscreenPause", on(Auto.OFFSCREEN_PAUSE));
         o.addProperty("distanceFpsLimit", on(Auto.DISTANCE_LIMIT));
         o.addProperty("fewerMipmaps", lightMipmaps);

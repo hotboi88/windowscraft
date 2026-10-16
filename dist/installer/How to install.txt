@@ -1,4 +1,7 @@
-WindowsCraft 0.15.26 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.27 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.27: name your screens (Rename, in a screen's menu); a screen is remembered by its name
+and settings, never by what was on it. Settings → Menu size makes the menu bigger or smaller.
 
 New in 0.15.26: a monitor's own copies start signed in like your desk every time ("Logins
 follow my desk"), and what you save there goes to your own Desktop, Documents and Downloads.

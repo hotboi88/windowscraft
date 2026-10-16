@@ -162,6 +162,13 @@ public final class InGameMonitors {
         return null;
     }
 
+    /** The name you gave the screen showing that monitor (null: none). */
+    private static String nameFor(String sourceId) {
+        for (Share s : DisplayManager.get().liveShares())
+            if (s.source().id().equals(sourceId)) for (Display d : s.displays()) if (d.name != null && !d.name.isBlank()) return d.name;
+        return null;
+    }
+
     public static String name(SourceInfo s) {
         Integer n = s == null ? null : NUMBER.get(s.id());
         return "In-game monitor" + (n == null ? "" : " " + n);
@@ -226,7 +233,7 @@ public final class InGameMonitors {
                     return;
                 }
                 int n = freeNumber();
-                SourceInfo src = sourceFor(m, n);
+                SourceInfo src = sourceFor(m, n, d.name);
                 LIVE.put(src.id(), m);
                 NUMBER.put(src.id(), n);
                 Sandbox.push(m, d);
@@ -294,9 +301,10 @@ public final class InGameMonitors {
         return n;
     }
 
-    static SourceInfo sourceFor(Mon m, int n) {
+    static SourceInfo sourceFor(Mon m, int n, String named) {
         String id = "vmon:" + m.index() + ":" + m.device();
-        String title = "In-game monitor " + n;
+        // (friends' games know an in-game monitor by this start: a name you gave it comes after it)
+        String title = named == null || named.isBlank() ? "In-game monitor " + n : "In-game monitor: " + named;
         String size = m.width() + "×" + m.height();
         if (backend() instanceof FakeMonitorBackend) {
             return new SourceInfo(SourceInfo.Kind.TEST, id, title, size, 0, m.left(), m.top(), m.width(), m.height(), "", false);
@@ -338,7 +346,7 @@ public final class InGameMonitors {
                 LIVE.put(e.getKey(), fresh);
                 if (seatedMon != null && seatedMon.index() == fresh.index()) seatedMon = fresh;
                 Sandbox.pushAll();
-                restartShares(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1)));
+                restartShares(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1), nameFor(e.getKey())));
                 if (fresh.width() != old.width() || fresh.height() != old.height()) keepOwnSize(b, mc, e.getKey(), fresh);
             }
         })).exceptionally(t -> null);

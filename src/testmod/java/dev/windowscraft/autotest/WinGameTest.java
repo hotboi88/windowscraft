@@ -481,10 +481,61 @@ public final class WinGameTest implements ClientModInitializer {
                 await("breaking a wall turns its monitor off", 30, () -> InGameMonitors.all().size() == before - 1);
             }
             case 19 -> {
+                // a screen renamed: remembered with its settings (never what was on it), shown in the menu
+                Display mb = at(mc, mon());
+                if (mb == null) {
+                    check(false, "the gaming monitor's screen is there to rename");
+                    stage = 22;
+                    return;
+                }
+                mb.name = "Movies";
+                DisplayManager.get().save();
+                String json = "";
+                try {
+                    json = java.nio.file.Files.readString(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("windowscraft").resolve("displays.json"));
+                } catch (Exception e) {
+                    log("couldn't read displays.json: " + e);
+                }
+                check(json.matches("(?s).*\"name\"\\s*:\\s*\"Movies\".*"), "a renamed screen's name is remembered with its settings");
+                check(!json.matches("(?s).*\"last\"\\s*:.*"), "…and what was shown on a screen isn't remembered");
+                mc.setScreen(new dev.windowscraft.ui.HubScreen(mb, -1));
+                stage++;
+                tick = 0;
+            }
+            case 20 -> {
+                if (tick < 30) return;
+                shot(mc, "7_menu_named");
+                // the menu's own size: 150 %
+                dev.windowscraft.config.ClientSettings.setHubScale(1.5);
+                mc.setScreen(new dev.windowscraft.ui.HubScreen(at(mc, mon()), -1));
+                stage++;
+                tick = 0;
+            }
+            case 21 -> {
+                if (tick < 30) return;
+                shot(mc, "8_menu_150");
+                mc.setScreen(dev.windowscraft.ui.HubScreen.settings());
+                stage = 2100;
+                tick = 0;
+            }
+            case 2100 -> {
+                if (tick < 30) return;
+                shot(mc, "9_settings_150");
+                dev.windowscraft.config.ClientSettings.setHubScale(1.0);
+                mc.setScreen(null);
+                Display mb = at(mc, mon());
+                if (mb != null) {
+                    mb.name = null;
+                    DisplayManager.get().save();
+                }
+                stage = 22;
+                tick = 0;
+            }
+            case 22 -> {
                 InGameMonitors.turnOffAll();
                 await("everything turns off", 30, () -> InGameMonitors.all().isEmpty());
             }
-            case 20 -> {
+            case 23 -> {
                 if (tick < 40) return;
                 shot(mc, "6_all_off");
                 finish(mc);

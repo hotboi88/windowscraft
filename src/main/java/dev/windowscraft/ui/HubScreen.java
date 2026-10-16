@@ -43,6 +43,15 @@ public final class HubScreen extends Screen {
     private int tab;
 
     private int px, py, pw, ph, side;
+    /** The menu's own size (Settings → Menu size) on top of Minecraft's GUI scale; everything is laid out in its units. */
+    private double k = 1;
+    // Renaming a screen: which one, and the name as typed so far
+    private Display renaming;
+    private String renameText = "";
+    // Menu size: dragging its slider (it's applied when you let go: the menu doesn't change size under your mouse)
+    private boolean scaleDrag;
+    private int scaleX, scaleW;
+    private double scalePending = -1;
     private final List<Hit> hits = new ArrayList<>();
     private int clipTop = Integer.MIN_VALUE, clipBottom = Integer.MAX_VALUE;
     private double sideScroll, scroll;
@@ -95,12 +104,23 @@ public final class HubScreen extends Screen {
 
     @Override
     protected void init() {
-        pw = Math.min(640, width - 16);
-        ph = Math.min(400, height - 12);
-        px = (width - pw) / 2;
-        py = (height - ph) / 2;
-        side = pw < 480 ? 124 : 160;
+        layout();
         refresh();
+    }
+
+    private void layout() {
+        k = ClientSettings.hubScale();
+        int vw = (int) (width / k), vh = (int) (height / k);
+        pw = Math.min(640, vw - 16);
+        ph = Math.min(400, vh - 12);
+        px = (vw - pw) / 2;
+        py = (vh - ph) / 2;
+        side = pw < 480 ? 124 : 160;
+    }
+
+    /** A clipped area, in the menu's units (Minecraft's own scissor doesn't follow the menu's size). */
+    private void scissor(DrawContext g, int x1, int y1, int x2, int y2) {
+        g.enableScissor((int) Math.floor(x1 * k), (int) Math.floor(y1 * k), (int) Math.ceil(x2 * k), (int) Math.ceil(y2 * k));
     }
 
     // ---- state -----------------------------------------------------------------------------
@@ -165,6 +185,7 @@ public final class HubScreen extends Screen {
 
     /** What a screen is called in the list. */
     static String nameOf(Display d) {
+        if (d.name != null && !d.name.isBlank()) return d.name;
         if (d.tablet) return "Your tablet";
         if (d.share() != null) return InGameMonitors.isInGameMonitor(d.share().source()) ? InGameMonitors.name(d.share().source()) : d.share().source().title();
         int n = 0;
@@ -349,8 +370,20 @@ public final class HubScreen extends Screen {
     // ---- rendering -------------------------------------------------------------------------
 
     @Override
-    public void render(DrawContext g, int mx, int my, float delta) {
-        super.render(g, mx, my, delta);
+    public void render(DrawContext g, int rmx, int rmy, float delta) {
+        super.render(g, rmx, rmy, delta);
+        layout();
+        int mx = (int) Math.floor(rmx / k), my = (int) Math.floor(rmy / k);
+        g.getMatrices().push();
+        g.getMatrices().scale((float) k, (float) k, 1);
+        try {
+            renderMenu(g, mx, my);
+        } finally {
+            g.getMatrices().pop();
+        }
+    }
+
+    private void renderMenu(DrawContext g, int mx, int my) {
         hits.clear();
         clipTop = Integer.MIN_VALUE;
         clipBottom = Integer.MAX_VALUE;
@@ -381,7 +414,7 @@ public final class HubScreen extends Screen {
         int top = py + 30, bottom = py + ph - 30;
         clipTop = top;
         clipBottom = bottom;
-        g.enableScissor(px, top, px + side, bottom);
+        scissor(g, px, top, px + side, bottom);
         int y = top - (int) sideScroll;
         y = heading(g, "MY SCREENS", x + 4, y + 2);
         List<Display> mine = DisplayManager.get().all();
@@ -444,7 +477,26 @@ public final class HubScreen extends Screen {
     private void renderScreen(DrawContext g, int mx, int my, int x, int w) {
         Display d = selected;
         boolean on = InGameMonitors.isOn(d);
-        UiKit.textScaled(g, textRenderer, UiKit.ellipsize(textRenderer, nameOf(d), (int) ((w - 24) / 1.3f)), x, py + 12, 1.3f, UiKit.TEXT);
+        if (renaming == d) {
+            // typing its new name: Enter keeps it, Esc doesn't; left empty, it's called what it was
+            int bw = Math.min(260, w - 120);
+            UiKit.round(g, x - 2, py + 7, bw, 18, 3, UiKit.INSET);
+            String caret = (System.currentTimeMillis() / 500) % 2 == 0 ? "_" : "";
+            String typed = renameText;
+            while (!typed.isEmpty() && textRenderer.getWidth(typed + "_") > bw - 10) typed = typed.substring(1);
+            UiKit.text(g, textRenderer, typed + caret, x + 3, py + 12, UiKit.TEXT);
+            int right = x + bw + 4;
+            int ok = button(g, mx, my, "Save", right + textRenderer.getWidth("Save") + 16, py + 8, 16, UiKit.ACCENT, UiKit.ACCENT_HOVER, this::finishRename);
+            button(g, mx, my, "Cancel", right + ok + 4 + textRenderer.getWidth("Cancel") + 16, py + 8, 16, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> renaming = null);
+        } else {
+            String title = UiKit.ellipsize(textRenderer, nameOf(d), (int) ((w - 90) / 1.3f));
+            UiKit.textScaled(g, textRenderer, title, x, py + 12, 1.3f, UiKit.TEXT);
+            int tx = x + (int) (textRenderer.getWidth(title) * 1.3f) + 8;
+            button(g, mx, my, "Rename", tx + textRenderer.getWidth("Rename") + 16, py + 10, 14, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> {
+                renaming = d;
+                renameText = d.name != null ? d.name : "";
+            });
+        }
         BlockPos c = BlockPos.ofFloored(d.rect.center());
         MonitorBackend.Mon m = InGameMonitors.monitorOf(d);
         String sub = d.tablet ? stateText(d) + (m != null ? " · " + m.width() + " × " + m.height() : "") + " · only you see it · right-click with it to hold it up"
@@ -510,7 +562,7 @@ public final class HubScreen extends Screen {
         int top = ty + 26, bottom = py + ph - 8;
         clipTop = top;
         clipBottom = bottom;
-        g.enableScissor(x - 2, top, x + w + 2, bottom);
+        scissor(g, x - 2, top, x + w + 2, bottom);
         int y0 = top - (int) scroll, y;
         if (tab == TAB_WINDOWS && on) y = renderWindows(g, mx, my, x, y0, w);
         else if (tab == TAB_PICTURE) y = renderPicture(g, mx, my, x, y0, w);
@@ -956,8 +1008,31 @@ public final class HubScreen extends Screen {
         int top = py + 44, bottom = py + ph - 8;
         clipTop = top;
         clipBottom = bottom;
-        g.enableScissor(x - 2, top, x + w + 2, bottom);
+        scissor(g, x - 2, top, x + w + 2, bottom);
         int y0 = top - (int) scroll, y = y0;
+
+        // ---- the menu's own size ----
+        y = heading(g, "MENU SIZE", x, y);
+        double hs = scalePending > 0 ? scalePending : ClientSettings.hubScale(), hmin = 0.6, hmax = 2;
+        if (scaleDrag) {
+            double hf = Math.max(0, Math.min(1, (mx - scaleX) / (double) scaleW));
+            double nv = Math.round((hmin + hf * (hmax - hmin)) * 20) / 20.0;
+            if (Math.abs(nv - 1) < 0.04) nv = 1; // (snaps to Minecraft's own size)
+            scalePending = hs = nv;
+        }
+        scaleX = x + 4;
+        scaleW = Math.min(200, w - 170);
+        int sty = y + 6;
+        double shf = (hs - hmin) / (hmax - hmin);
+        UiKit.round(g, scaleX, sty, scaleW, 4, 2, UiKit.INSET);
+        UiKit.round(g, scaleX, sty, (int) Math.max(4, scaleW * shf), 4, 2, UiKit.ACCENT);
+        boolean shov = scaleDrag || hover(mx, my, scaleX - 4, y, scaleW + 8, 16);
+        UiKit.round(g, scaleX + (int) (scaleW * shf) - 4, sty - 4, 8, 12, 2, shov ? UiKit.ACCENT_HOVER : UiKit.ACCENT);
+        hit(scaleX - 4, y, scaleW + 8, 16, () -> scaleDrag = true);
+        String sval = Math.round(hs * 100) + "%" + (hs == 1.0 ? " — Minecraft's GUI scale" : scaleDrag ? " — let go to apply" : "");
+        UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, sval, w - scaleW - 16), scaleX + scaleW + 10, sty - 2, UiKit.TEXT_2);
+        y += 20;
+        y = wrap(g, "How big this menu is, on top of Minecraft's own GUI scale.", x + 4, y, w - 8, UiKit.TEXT_MUTED) + 10;
 
         // ---- pointer speed ----
         y = heading(g, "POINTER SPEED (SITTING AT A SCREEN)", x, y);
@@ -1110,7 +1185,8 @@ public final class HubScreen extends Screen {
     // ---- input -------------------------------------------------------------------------------
 
     @Override
-    public boolean mouseClicked(double mx, double my, int button) {
+    public boolean mouseClicked(double rmx, double rmy, int button) {
+        double mx = rmx / k, my = rmy / k;
         if (button == 0) {
             for (int i = hits.size() - 1; i >= 0; i--) {
                 Hit h = hits.get(i);
@@ -1125,7 +1201,7 @@ public final class HubScreen extends Screen {
                 return true;
             }
         }
-        return super.mouseClicked(mx, my, button);
+        return super.mouseClicked(rmx, rmy, button);
     }
 
     private final VolumeSlider volSlider = new VolumeSlider();
@@ -1139,19 +1215,57 @@ public final class HubScreen extends Screen {
     @Override
     public boolean mouseReleased(double mx, double my, int button) {
         speedDrag = false;
+        if (scaleDrag) {
+            scaleDrag = false;
+            if (scalePending > 0) ClientSettings.setHubScale(scalePending);
+            scalePending = -1;
+            layout();
+        }
         volSlider.stopDrag();
         return super.mouseReleased(mx, my, button);
     }
 
     @Override
-    public boolean mouseScrolled(double mx, double my, double h, double v) {
+    public boolean mouseScrolled(double rmx, double rmy, double h, double v) {
+        double mx = rmx / k;
         if (mx < px + side) sideScroll = Math.max(0, sideScroll - v * 16);
         else scroll = Math.max(0, scroll - v * 16);
         return true;
     }
 
     @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (renaming != null) {
+            typeName(String.valueOf(chr));
+            return true;
+        }
+        return super.charTyped(chr, modifiers);
+    }
+
+    private void typeName(String t) {
+        for (char c : t.toCharArray()) if (c >= 32 && c != 127 && renameText.length() < 32) renameText += c;
+    }
+
+    /** The name typed becomes its name (remembered with its settings); empty: its usual name again. */
+    private void finishRename() {
+        Display d = renaming;
+        renaming = null;
+        if (d == null) return;
+        String n = renameText.strip();
+        d.name = n.isEmpty() ? null : n;
+        DisplayManager.get().save();
+    }
+
+    @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (renaming != null) {
+            // (typing a name: every key is the name's, Esc included)
+            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) finishRename();
+            else if (keyCode == GLFW.GLFW_KEY_ESCAPE) renaming = null;
+            else if (keyCode == GLFW.GLFW_KEY_BACKSPACE && !renameText.isEmpty()) renameText = renameText.substring(0, renameText.offsetByCodePoints(renameText.length(), -1));
+            else if (keyCode == GLFW.GLFW_KEY_V && (modifiers & GLFW.GLFW_MOD_CONTROL) != 0) typeName(MinecraftClient.getInstance().keyboard.getClipboard());
+            return true;
+        }
         if (WindowsCraftClient.SHARE_KEY.matchesKey(keyCode, scanCode)) {
             close();
             return true;

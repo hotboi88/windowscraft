@@ -115,6 +115,26 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.27 (16 Oct): screens have names; remembered by name and settings only; the menu has its own size
+
+- **"make it so that monitors are renameable, and remembered by their name and settings. not the
+  apps that were on them … if they are destroyed or no longer exist they are not remembered"**:
+  `Display.name` (null: the usual "In-game monitor 2" / "Wall 3"), saved in displays.json with its
+  settings; "Rename" next to its title in the menu (type, Enter keeps it, Esc doesn't, empty →
+  the usual name; at most 32 characters, Ctrl+V pastes). A named in-game monitor's stream is
+  "In-game monitor: <name>" — friends' games know an in-game monitor by that start
+  (`DisplayRenderer`/`DeskView` `startsWith("In-game monitor")`). What was last shown on a screen
+  (`lastSource`, the share picker's preselection) is no longer saved. Forgetting destroyed screens
+  was already there: `DisplayManager.tick` removes a screen whose wall/monitor block is gone,
+  judged only where its chunks are loaded and well inside your view distance.
+- **"allow the monitor manager UI to have a gui scale bar"**: Settings → Menu size (60–200 %, on top
+  of Minecraft's GUI scale; `ClientSettings.hubScale`). The hub lays out in its own units
+  (`layout()` from `width / k`), draws under a `scale(k)`, takes the mouse divided by k, and scales
+  its scissor rects itself (1.21.1's `enableScissor` ignores the pose matrix — checked with javap).
+  The slider applies when you let go (the menu doesn't resize under your mouse).
+- WinGameTest: a screen renamed "Movies" is in displays.json, no "last" there; screenshots of the
+  menu (named), at 150 %, and the settings page at 150 %.
+
 ## 0.15.26 (16 Oct): "Logins follow my desk"; your own folders shared with every monitor
 
 - **"is there any way at all to preserve the sign ins while keeping sound separate on each one"**,

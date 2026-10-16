@@ -35,6 +35,8 @@ public final class Display {
     /** The size you chose for its in-game monitor (0: the usual 1920 × 1080). */
     public int monitorW, monitorH;
     /** In-game monitor: apps started at it run as its own copies (its own Sandboxie box). */
+    /** Its name, as you named it (null: the usual "In-game monitor 2", "Wall 3"). Remembered with its settings. */
+    public volatile String name;
     public boolean ownCopies = true;
     /** With own copies: its apps start from your desk's sign-ins each time (its box emptied once they've all closed). */
     public boolean followDesk = true;
