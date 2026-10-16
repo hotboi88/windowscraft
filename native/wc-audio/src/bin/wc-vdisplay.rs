@@ -1203,7 +1203,11 @@ static PING_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env:
 static LAST_DRIVER_CHANGE: Mutex<Option<Instant>> = Mutex::new(None);
 /// When you last used the Start menu or taskbar of the monitor you sit at.
 static SEAT_SHELL_AT: Mutex<Option<Instant>> = Mutex::new(None);
+/// Looking around: Ctrl and the left Alt held together (seated).
 static ALT: AtomicBool = AtomicBool::new(false);
+/// The left Alt, and either Ctrl, held right now (as the keyboard hook last saw them).
+static LALT_DOWN: AtomicBool = AtomicBool::new(false);
+static CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static ESC_HELD: AtomicBool = AtomicBool::new(false);
 static SEAT_DEVICE: Mutex<String> = Mutex::new(String::new());
 static SEAT_IDX: AtomicI32 = AtomicI32::new(-1);
@@ -1444,12 +1448,20 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
                 }
                 return LRESULT(1);
             }
-            // left Alt: looking around (it still reaches the app, so nothing sticks; the right
-            // Alt stays AltGr for typing)
-            if vk == VK_LMENU.0 {
-                if ALT.swap(down, Ordering::SeqCst) != down {
+            // Ctrl + left Alt: looking around (+ mouse), zooming (+ scroll), straight again
+            // (+ Space). Plain Alt is the app's: image editors hold it to pick colours, zoom, drag
+            // copies ("sometimes i need to use alt-holding for image editing apps"). Ctrl and Alt
+            // still reach the app, so nothing sticks; the right Alt stays AltGr for typing
+            if vk == VK_LMENU.0 || vk == VK_LCONTROL.0 || vk == VK_RCONTROL.0 {
+                if vk == VK_LMENU.0 {
+                    LALT_DOWN.store(down, Ordering::SeqCst);
+                } else {
+                    CTRL_DOWN.store(down, Ordering::SeqCst);
+                }
+                let look = LALT_DOWN.load(Ordering::SeqCst) && CTRL_DOWN.load(Ordering::SeqCst);
+                if ALT.swap(look, Ordering::SeqCst) != look {
                     unsafe {
-                        if down {
+                        if look {
                             let mut p = POINT::default();
                             let _ = GetCursorPos(&mut p);
                             *SAVED.lock().unwrap() = p;
@@ -1463,18 +1475,19 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
                             emit("lookmode 0");
                         }
                     }
-                    emit(if down { "alt 1" } else { "alt 0" });
+                    emit(if look { "alt 1" } else { "alt 0" });
                 }
-            } else if ALT.load(Ordering::SeqCst) && down {
+            } else if down && ((vk == VK_SPACE.0 && ALT.load(Ordering::SeqCst)) || (vk == VK_TAB.0 && LALT_DOWN.load(Ordering::SeqCst) && !ALT.load(Ordering::SeqCst))) {
                 if vk == VK_SPACE.0 {
                     emit("recenter");
-                } else if vk == VK_TAB.0 {
+                } else {
                     // Alt+Tab: only the windows on this monitor (Windows' own would list everything)
                     let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000 != 0;
                     emit(if shift { "switch-back" } else { "switch" });
                 }
-                // Alt + a key belongs to the game — its release too (an app that acts when a key
-                // is let go, a video player's Space, never sees half of it)
+                // that key belongs to the game — its release too (an app that acts when a key is
+                // let go, a video player's Space, never sees half of it). Every other key, with
+                // Ctrl+Alt held too, is the app's (Ctrl+Alt+Z in an image editor)
                 let mut held = KEYS_KEPT.lock().unwrap();
                 if !held.contains(&(vk as u32)) {
                     held.push(vk as u32);
@@ -1850,9 +1863,12 @@ fn hook_thread() {
                     release_from_hook(false);
                     continue;
                 }
-                // Alt's release can go unseen (Ctrl+Alt+Del, Win+L): don't stay in look mode
-                if ALT.load(Ordering::SeqCst) && (GetAsyncKeyState(VK_LMENU.0 as i32) as u16 & 0x8000) == 0 {
+                // Alt's or Ctrl's release can go unseen (Ctrl+Alt+Del, Win+L): don't stay in look mode
+                let held = |vk: VIRTUAL_KEY| (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0;
+                if ALT.load(Ordering::SeqCst) && (!held(VK_LMENU) || !(held(VK_LCONTROL) || held(VK_RCONTROL))) {
                     ALT.store(false, Ordering::SeqCst);
+                    LALT_DOWN.store(held(VK_LMENU), Ordering::SeqCst);
+                    CTRL_DOWN.store(held(VK_LCONTROL) || held(VK_RCONTROL), Ordering::SeqCst);
                     emit("lookmode 0");
                     let p = *SAVED.lock().unwrap();
                     let _ = SetCursorPos(p.x, p.y);
@@ -1920,6 +1936,8 @@ fn give_back(to_game: bool) {
     let t0 = Instant::now();
     SEATED.store(false, Ordering::SeqCst);
     ALT.store(false, Ordering::SeqCst);
+    LALT_DOWN.store(false, Ordering::SeqCst);
+    CTRL_DOWN.store(false, Ordering::SeqCst);
     KEYS_KEPT.lock().unwrap().clear();
     look_mode(false);
     WIN_PENDING.store(false, Ordering::SeqCst);
@@ -2063,6 +2081,8 @@ fn seat(idx: i32, device: &str, area: RECT, u: f64, v: f64, game: HWND) -> Resul
     *SEAT_START.lock().unwrap() = Some(Instant::now());
     GAME.store(game.0 as isize, Ordering::SeqCst);
     ALT.store(false, Ordering::SeqCst);
+    LALT_DOWN.store(false, Ordering::SeqCst);
+    CTRL_DOWN.store(false, Ordering::SeqCst);
     LOOK_X.store(0, Ordering::SeqCst);
     LOOK_Y.store(0, Ordering::SeqCst);
     HOOKS_OK.store(0, Ordering::SeqCst);
@@ -2862,28 +2882,66 @@ fn fix_misplaced_tray(tray: HWND, tr: &RECT, a: &RECT) {
     let along = (full_width && ((tr.bottom - a.bottom).abs() <= 1 || (tr.top - a.top).abs() <= 1))
         || (full_height && ((tr.left - a.left).abs() <= 1 || (tr.right - a.right).abs() <= 1));
     let inside = tr.left >= a.left - 1 && tr.top >= a.top - 1 && tr.right <= a.right + 1 && tr.bottom <= a.bottom + 1;
-    if (along && inside) || h <= 0 || w <= 0 {
+    // and as thick as that monitor's scale makes it: after a monitor went from 100 % to 200 % its
+    // taskbar stayed 48 px while drawing 96 — "the taskbar cut in half, icons cut in half too"
+    let thick = tray_thickness(a);
+    let right_size = (h.min(w) - thick).abs() <= 2;
+    if (along && inside && right_size) || h <= 0 || w <= 0 {
         return;
     }
     let key = tray.0 as isize;
     let mut fixed = TRAY_FIXED.lock().unwrap();
     let m = fixed.get_or_insert_with(HashMap::new);
-    let (last, tries) = m.get(&key).copied().unwrap_or((Instant::now() - Duration::from_secs(60), 0));
+    let (last, mut tries) = m.get(&key).copied().unwrap_or((Instant::now() - Duration::from_secs(60), 0));
     if last.elapsed() < Duration::from_millis(1500) {
+        return;
+    }
+    // (Windows keeps putting it its own way: left alone for a minute, then tried afresh)
+    if last.elapsed() > Duration::from_secs(60) {
+        tries = 0;
+    } else if tries >= 6 {
         return;
     }
     m.insert(key, (Instant::now(), tries + 1));
     drop(fixed);
-    eprintln!("info=a monitor's taskbar is out of place ({} on a monitor at {}): {}", rect_str(tr), rect_str(a),
+    eprintln!("info=a monitor's taskbar is out of place ({} on a monitor at {}, {} px thick there): {}", rect_str(tr), rect_str(a), thick,
         if tries % 2 == 0 { "Windows asked to lay it out again" } else { "putting it in place" });
     if tries % 2 == 0 {
         tell_taskbar();
         return;
     }
-    // along the bottom (where Windows puts it), its own height — never taller than a quarter of the screen
-    let th = (if w >= h { h } else { 48 }).clamp(24, ((a.bottom - a.top) / 4).max(24));
+    // along the bottom (where Windows puts it), as thick as that monitor's scale makes it — never
+    // taller than a quarter of the screen
+    let th = thick.clamp(24, ((a.bottom - a.top) / 4).max(24));
     unsafe {
         let _ = SetWindowPos(tray, None, a.left, a.bottom - th, a.right - a.left, th, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+    }
+}
+
+/// How thick a taskbar on that monitor should be: your own taskbar's thickness, at that monitor's
+/// scale (48 px at 100 % and 96 at 200 % with Windows' usual size).
+fn tray_thickness(a: &RECT) -> i32 {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, HMONITOR, MONITOR_DEFAULTTOPRIMARY};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    unsafe {
+        let dpi_of = |m: HMONITOR| {
+            let (mut x, mut y) = (96u32, 96u32);
+            if GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut x, &mut y).is_ok() && x >= 48 { x as i32 } else { 96 }
+        };
+        let mut base = 48;
+        let class = wide("Shell_TrayWnd");
+        if let Ok(main) = FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) {
+            let mut r = RECT::default();
+            if !main.0.is_null() && GetWindowRect(main, &mut r).is_ok() {
+                let t = (r.right - r.left).min(r.bottom - r.top);
+                let d = dpi_of(MonitorFromWindow(main, MONITOR_DEFAULTTOPRIMARY));
+                if t > 0 {
+                    base = ((t * 96 + d / 2) / d).clamp(24, 96);
+                }
+            }
+        }
+        let d = dpi_of(MonitorFromRect(a, MONITOR_DEFAULTTONEAREST));
+        (base * d + 48) / 96
     }
 }
 
@@ -4299,10 +4357,24 @@ fn taskmgr_normal_rights(_on: bool) {
 
 /// Tells the taskbar its settings changed (it picks the change up without signing out).
 fn tell_taskbar() {
-    let what = wide("TraySettings");
-    unsafe {
-        let _ = SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(what.as_ptr() as isize), SMTO_ABORTIFHUNG, 1000, None);
+    // (every window is told, each given up to a second: never on a thread that has to keep
+    //  answering — the mouse hook's, or the game's questions. Right after a monitor's resolution
+    //  changed, many are busy)
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    if BUSY.swap(true, Ordering::SeqCst) {
+        return;
     }
+    std::thread::spawn(|| {
+        let t0 = Instant::now();
+        let what = wide("TraySettings");
+        unsafe {
+            let _ = SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(what.as_ptr() as isize), SMTO_ABORTIFHUNG, 1000, None);
+        }
+        if t0.elapsed() > Duration::from_secs(2) {
+            eprintln!("info=telling every window about the taskbars took {} ms", t0.elapsed().as_millis());
+        }
+        BUSY.store(false, Ordering::SeqCst);
+    });
 }
 
 const NONE: u32 = 0xFFFF_FFFF; // "you didn't have this value"
@@ -4428,6 +4500,18 @@ fn mirrored(added: &AddedMap, idx: i32) -> bool {
     let Some(r) = rect_of(&device) else { return false };
     let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).collect();
     monitors().iter().any(|(d, o)| !ours.iter().any(|x| x.eq_ignore_ascii_case(d)) && o.left < r.right && r.left < o.right && o.top < r.bottom && r.top < o.bottom)
+}
+
+/// A command the game waits for that took over 2 s says so in the log (the game gives up on an
+/// answer after 20 s; a monitor's resolution change once kept this thread busy for longer).
+struct SlowCommand(String, Instant);
+
+impl Drop for SlowCommand {
+    fn drop(&mut self) {
+        if self.1.elapsed() > Duration::from_secs(2) {
+            eprintln!("info=\"{}\" took {} ms", self.0, self.1.elapsed().as_millis());
+        }
+    }
 }
 
 fn main() {
@@ -4556,6 +4640,7 @@ fn main() {
         }
     });
     for line in cmd_rx {
+        let _slow = SlowCommand(line.split_whitespace().next().unwrap_or("").to_string(), Instant::now());
         let p: Vec<&str> = line.split_whitespace().collect();
         let n = |i: usize| p.get(i).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
         let f = |i: usize| p.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.5);

@@ -144,8 +144,8 @@ one of your real screens instead, as before.
   around it (no black bars). Fully zoomed in, its edges touch the edges of what you can see of
   the game window, never further: nothing is cropped, and it never goes under your real Windows
   taskbar (a fullscreen game stays above the taskbar while you sit). When it fits 1:1 it's exactly
-  pixel for pixel. **Alt + scroll** out and it stays flat and sharp, just smaller; look around with
-  Alt to see the room (a hand resting on the mouse doesn't turn the view); **Esc** gets you up.
+  pixel for pixel. **Ctrl+Alt + scroll** out and it stays flat and sharp, just smaller; look around with
+  Ctrl+Alt to see the room (a hand resting on the mouse doesn't turn the view); **Esc** gets you up.
   The next time you sit down (or watch a screen in theater mode) you're as close as you were when
   you left. Someone else's screen you sit at or watch in theater mode is shown flat and sharp the
   same way, so it looks and feels the same for everyone. Joined monitors: moving onto the next one switches
@@ -201,12 +201,12 @@ one of your real screens instead, as before.
 - **Games and full-screen video**: a game that picks its own display (most have a "Display" or
   "Monitor" option in their video settings) needs that set to the in-game monitor once. A
   full-screen video or game on the monitor keeps the whole screen when you press Esc to get up:
-  the monitor's taskbar is hidden the moment Windows tries to show it over it. **Alt + Space**
-  while seated only looks straight again — the app never sees it.
+  the monitor's taskbar is hidden the moment Windows tries to show it over it. **Ctrl+Alt + Space**
+  while seated only looks straight again — the app never sees it. Plain Alt is the app's.
 - **Sit down (O) and it's your PC**: your real mouse and keyboard work whatever is on the monitor —
   any app, any game — and the wall shows your real pointer in its real shape (text cursor, hand
-  on links…), drawn live from your mouse so it never lags. **Esc** gets up; **left Alt** + mouse looks around, Alt + scroll zooms,
-  Alt + Space looks straight again. If the game ever stops answering, or you switch to something
+  on links…), drawn live from your mouse so it never lags. **Esc** gets up; **Ctrl + left Alt** + mouse looks around, Ctrl+Alt + scroll zooms,
+  Ctrl+Alt + Space looks straight again (plain Alt goes to the app: image editors hold it). If the game ever stops answering, or you switch to something
   else (Task Manager, Ctrl+Alt+Del), your mouse and keyboard come back by themselves. A game's own
   hold on the cursor (dragging Roblox's camera) is left alone.
 - **Alt-pointing works like sitting**: hold Alt and look at your monitor, and your real cursor is
@@ -266,8 +266,8 @@ in Windows too: windows drag across them, the cursor moves on from one to the ne
 **Tablets** (32 colours too) are your own hand-held in-game monitor:
 - **Holding one** turns your tablet on (one per person, whichever tablet you hold).
   **Right-click** holds it up, filling your screen with its frame around it: your real
-  mouse and keyboard work it, like sitting at a monitor. **Esc** puts it down; **hold Alt** to look
-  around while holding it up; **Alt + scroll** makes it smaller or bigger. Its picture has the
+  mouse and keyboard work it, like sitting at a monitor. **Esc** puts it down; **hold Ctrl+Alt** to look
+  around while holding it up; **Ctrl+Alt + scroll** makes it smaller or bigger. Its picture has the
   shape of its size (the menu's Picture tab), drawn sharp, with your real cursor.
 - Holding your tablet, the screens around you aren't yours to point at: your clicks and Alt are
   the tablet's, and nobody's screen thinks you're using it.
@@ -297,7 +297,7 @@ stops it.
   never mines it); **sneak** to mine or build.
 - **Theater mode (O)** is the computer chair: you sit where the screen fills your view, the mouse
   moves the pointer exactly like your PC's cursor, every key goes to the app (none to Minecraft or
-  other mods), **Alt + mouse** looks around, **Alt + scroll** zooms, **Alt + Space** recenters,
+  other mods), **Ctrl+Alt + mouse** looks around, **Ctrl+Alt + scroll** zooms, **Ctrl+Alt + Space** recenters,
   **Esc** gets up (Shift+Esc sends Esc to the app).
 - **The pointer only shows** while someone points at the screen with Alt or sits at it — so a
   video never has a cursor wandering over it. Everyone watching sees it then. Sitting, it hides

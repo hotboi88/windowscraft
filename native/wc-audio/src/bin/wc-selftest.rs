@@ -257,7 +257,7 @@ static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
-        | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE | WM_NCACTIVATE)
+        | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE | WM_NCACTIVATE)
     {
         LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
     }
@@ -926,19 +926,33 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     key(VK_A);
     let typed = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, _)| *w == target.0 as isize && *m == WM_CHAR));
     rep.check("typing at a monitor reaches the app you clicked", typed, format!("{:.0} ms", t0.elapsed().as_secs_f64() * 1000.0));
-    // Alt + Space (look straight again) is the game's: the app gets neither the press nor the release
+    // Ctrl + Alt + Space (look straight again) is the game's: the app gets neither the press nor the release
     LOG.lock().unwrap().clear();
     let t0 = Instant::now();
+    key_state(VK_LCONTROL, false);
     key_state(VK_LMENU, false);
     sleep(60);
     key(VK_SPACE);
     sleep(60);
     key_state(VK_LMENU, true);
+    key_state(VK_LCONTROL, true);
     sleep(300);
-    let leaked: Vec<(u32, usize)> = LOG.lock().unwrap().iter().filter(|(w, m, p)| *w == target.0 as isize && matches!(*m, WM_KEYDOWN | WM_KEYUP | WM_CHAR) && *p == 0x20).map(|(_, m, p)| (*m, *p)).collect();
+    let leaked: Vec<(u32, usize)> = LOG.lock().unwrap().iter().filter(|(w, m, p)| *w == target.0 as isize && matches!(*m, WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_SYSKEYDOWN | WM_SYSKEYUP) && *p == 0x20).map(|(_, m, p)| (*m, *p)).collect();
     let recentered = h.events_since(t0).iter().any(|e| e == "recenter");
-    rep.check("Alt + Space while seated looks straight again, and never reaches the app (not even its release)", leaked.is_empty() && recentered,
+    rep.check("Ctrl + Alt + Space while seated looks straight again, and never reaches the app (not even its release)", leaked.is_empty() && recentered,
         format!("app got {leaked:?} · recenter {recentered}"));
+    // plain Alt is the app's (an image editor holds it): Alt + A reaches it, and nothing turns to look around
+    LOG.lock().unwrap().clear();
+    let t0 = Instant::now();
+    key_state(VK_LMENU, false);
+    sleep(60);
+    key(VK_A);
+    sleep(60);
+    key_state(VK_LMENU, true);
+    let got_alt_a = wait_for(1000, || LOG.lock().unwrap().iter().any(|(w, m, p)| *w == target.0 as isize && *m == WM_SYSKEYDOWN && *p == 0x41));
+    let looked = h.events_since(t0).iter().any(|e| e == "alt 1");
+    rep.check("plain Alt while seated is the app's: Alt + A reaches it and doesn't start looking around", got_alt_a && !looked,
+        format!("app got Alt+A {got_alt_a} · looking around {looked}"));
 
     // ---- 3b. File Explorer and Task Manager open on the monitor you sit at (not your desk)
     unsafe {

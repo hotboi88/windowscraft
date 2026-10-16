@@ -1039,7 +1039,7 @@ public final class HubScreen extends Screen {
         String[] lines = {
                 k + " anywhere: this menu. " + k + " at a black concrete wall: turns an in-game monitor on or off. Sneak + " + k
                         + " at a wall: share one of your windows or screens on it instead (or, at an in-game monitor, this menu for it).",
-                t + " at a screen: sit down — the mouse and keyboard work it. Esc gets up. Sitting, hold Alt to look around and Alt + scroll to zoom.",
+                t + " at a screen: sit down — the mouse and keyboard work it. Esc gets up. Sitting, hold Ctrl+Alt to look around and Ctrl+Alt + scroll to zoom (plain Alt is the app's).",
                 "Hold Alt and look at a screen (without sitting): the pointer follows your view; click and scroll to use it.",
                 "At an in-game monitor, the Windows key opens its own Start menu.",
         };
@@ -1055,7 +1055,7 @@ public final class HubScreen extends Screen {
         y = heading(g, "IN-GAME MONITORS", x, y);
         y = toggleRow(g, mx, my, x, y, w, "Sit-down view: pixel for pixel",
                 "Sitting at your own monitor shows it flat on your screen, exactly like a real monitor: sharp, with nothing in between. "
-                        + "Alt + scroll out (or look around with Alt) to see the room.",
+                        + "Ctrl+Alt + scroll out (or look around with Ctrl+Alt) to see the room.",
                 ClientSettings.deskView(), ClientSettings::setDeskView);
         var known = InGameMonitors.knownDriver();
         if (known == null && !driverBusy) {

@@ -59,6 +59,8 @@ public final class InGameMonitors {
     private static final Set<String> RESTARTING = new HashSet<>();
     private static final Map<UUID, List<Long>> REVIVED = new ConcurrentHashMap<>();
     private static final Map<String, Integer> MISSES = new ConcurrentHashMap<>();
+    /** Your own screen's refresh rate (see {@link #screenHz}). */
+    private static volatile int screenHz = HZ;
     /** Monitors we're giving another size right now (the size Windows reports meanwhile is ours). */
     private static final Set<Integer> SIZING = ConcurrentHashMap.newKeySet();
     /** When a monitor was last put back to its own size after Windows changed it (index → nanoTime). */
@@ -206,7 +208,7 @@ public final class InGameMonitors {
             if (d.isLive()) DisplayManager.get().stop(d); // it was showing something else
             STARTING.add(d.id);
             hint(mc, "Turning on an in-game monitor…");
-            b.add(d.monitorW > 0 ? d.monitorW : WIDTH, d.monitorW > 0 ? d.monitorH : HEIGHT, HZ).whenComplete((m, err) -> mc.execute(() -> {
+            b.add(d.monitorW > 0 ? d.monitorW : WIDTH, d.monitorW > 0 ? d.monitorH : HEIGHT, screenHz(mc)).whenComplete((m, err) -> mc.execute(() -> {
                 STARTING.remove(d.id);
                 if (err != null) {
                     Throwable why = err instanceof java.util.concurrent.CompletionException && err.getCause() != null ? err.getCause() : err;
@@ -343,6 +345,26 @@ public final class InGameMonitors {
     }
 
     /**
+     * Your own screen's refresh rate (the one the game is on): an in-game monitor runs at it (the
+     * nearest Windows offers: 24–240 Hz), so its apps move as smoothly as on your desk. At 60 Hz on
+     * a 165 Hz screen everything on it lagged a frame or two behind your hand ("my apps feel bogged
+     * down on the ingame monitor"). Read on the game's thread (GLFW); remembered for the others.
+     */
+    static int screenHz(MinecraftClient mc) {
+        try {
+            long m = org.lwjgl.glfw.GLFW.glfwGetWindowMonitor(mc.getWindow().getHandle());
+            if (m == 0) m = org.lwjgl.glfw.GLFW.glfwGetPrimaryMonitor();
+            var mode = m == 0 ? null : org.lwjgl.glfw.GLFW.glfwGetVideoMode(m);
+            if (mode != null && mode.refreshRate() >= 30) screenHz = Math.min(240, mode.refreshRate());
+        } catch (Throwable ignored) {
+        }
+        return screenHz;
+    }
+
+    /** The refresh rate in-game monitors are given (your screen's, as last read). */
+    public static int monitorHz() { return screenHz; }
+
+    /**
      * Windows now and then gives an in-game monitor another size of its own accord: a layout it
      * remembers for that set of monitors (a 4096×2160 one became 1920×1080 the moment a second one
      * joined it). The size you picked is put back — at most once a minute, never fighting Windows.
@@ -362,7 +384,7 @@ public final class InGameMonitors {
         int w = d.monitorW, h = d.monitorH;
         WindowsCraftClient.LOGGER.info("In-game monitor {} became {}×{} by Windows' doing; putting it back to {}×{}", fresh.index(), fresh.width(), fresh.height(), w, h);
         SIZING.add(fresh.index());
-        b.setMode(fresh, w, h, HZ).whenComplete((m, err) -> mc.execute(() -> {
+        b.setMode(fresh, w, h, screenHz(mc)).whenComplete((m, err) -> mc.execute(() -> {
             SIZING.remove(fresh.index());
             if (err != null) WindowsCraftClient.LOGGER.info("In-game monitor {} couldn't be put back to {}×{}: {}", fresh.index(), w, h, err.toString());
             refreshRects(mc);
@@ -907,7 +929,7 @@ public final class InGameMonitors {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (m == null || b == null) return CompletableFuture.completedFuture("it isn't on");
         SIZING.add(m.index());
-        return b.setMode(m, w, h, hz).handle((fresh, err) -> {
+        return b.setMode(m, w, h, Math.max(hz, screenHz(mc))).handle((fresh, err) -> {
             mc.execute(() -> {
                 SIZING.remove(m.index());
                 if (err == null) { // (what Windows really made it)

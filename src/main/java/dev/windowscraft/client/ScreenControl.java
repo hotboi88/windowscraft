@@ -955,6 +955,22 @@ public final class ScreenControl {
                 || net.minecraft.client.util.InputUtil.isKeyPressed(h, GLFW.GLFW_KEY_RIGHT_ALT);
     }
 
+    /**
+     * Sitting at a screen: Ctrl + left Alt is looking around (+ mouse), zooming (+ scroll) and
+     * looking straight again (+ Space). Plain Alt is the app's: image editors hold it ("sometimes
+     * i need to use alt-holding for image editing apps"). Pointing while walking around stays Alt.
+     */
+    public static boolean lookHeld(MinecraftClient mc) {
+        if (testAlt) return true;
+        long h = mc.getWindow().getHandle();
+        return net.minecraft.client.util.InputUtil.isKeyPressed(h, GLFW.GLFW_KEY_LEFT_ALT)
+                && (net.minecraft.client.util.InputUtil.isKeyPressed(h, GLFW.GLFW_KEY_LEFT_CONTROL)
+                || net.minecraft.client.util.InputUtil.isKeyPressed(h, GLFW.GLFW_KEY_RIGHT_CONTROL));
+    }
+
+    /** Space went down as Ctrl+Alt+Space (looking straight again): its release isn't the app's either. */
+    private static boolean spaceKept;
+
     private static boolean sneaking(MinecraftClient mc) { return mc.player != null && mc.player.isSneaking(); }
 
     /**
@@ -1036,7 +1052,7 @@ public final class ScreenControl {
         Display d = TheaterMode.controlled();
         RemoteDisplays.Remote r = TheaterMode.controlledRemote();
         if (d != null || r != null) {
-            if (altHeld(mc)) return false; // Alt + wheel: zoom (theater handles it)
+            if (lookHeld(mc)) return false; // Ctrl + Alt + wheel: zoom (theater handles it)
         } else {
             if ((pointed == null && pointedRemote == null) || sneaking(mc) || !altHeld(mc)) return false; // otherwise your hotbar
             d = pointed;
@@ -1077,9 +1093,9 @@ public final class ScreenControl {
         // helper's reports of your mouse (nothing of it reaches the game twice)
         if (d == null && r == null && dev.windowscraft.monitor.InGameMonitors.pointReady()
                 && dev.windowscraft.monitor.InGameMonitors.seated() == null) return true;
-        boolean pointer = (d != null || r != null) && !altHeld(mc) && !TheaterMode.leaving();
+        boolean pointer = (d != null || r != null) && !lookHeld(mc) && !TheaterMode.leaving();
         // the pointer moves like your desktop cursor (Windows' own pointer movement); looking
-        // around (Alt) uses Minecraft's own mouse settings, so it turns exactly like in the game
+        // around (Ctrl+Alt) uses Minecraft's own mouse settings, so it turns exactly like in the game
         if (pointer != nativeOn) nativePointer(mc, pointer);
         if (!pointer) return false;
         if (dx != 0 || dy != 0) {
@@ -1134,9 +1150,15 @@ public final class ScreenControl {
         Display d = TheaterMode.controlled();
         RemoteDisplays.Remote r = TheaterMode.controlledRemote();
         if (d == null && r == null) return false; // a wall you only watch: theater keys as before
-        if (key == GLFW.GLFW_KEY_LEFT_ALT || key == GLFW.GLFW_KEY_RIGHT_ALT) return true; // Alt is for looking around
-        if (altHeld(mc)) {
-            if (key == GLFW.GLFW_KEY_SPACE && action == GLFW.GLFW_PRESS) TheaterMode.recenter();
+        // Ctrl + Alt + Space: looking straight again — the game's, its release too. Every other key
+        // is the app's, Alt and Ctrl themselves and Ctrl+Alt+Z in an image editor included
+        if (key == GLFW.GLFW_KEY_SPACE && (spaceKept || lookHeld(mc))) {
+            if (action == GLFW.GLFW_PRESS) {
+                spaceKept = true;
+                TheaterMode.recenter();
+            } else if (action == GLFW.GLFW_RELEASE) {
+                spaceKept = false;
+            }
             return true;
         }
         if (scancode <= 0) return true;

@@ -507,7 +507,8 @@ public final class DisplayManager {
     private void tickGpuSharing(Share s) {
         boolean want = dev.windowscraft.render.GpuInterop.wanted() && dev.windowscraft.capture.GpuShare.supported(s.source) && !s.gpuFailed;
         int fps = s.session.settings().fps();
-        if (dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(s.source)) fps = Math.max(60, fps); // (your own screen: every picture)
+        // (an in-game monitor: every picture it shows, at your screen's refresh rate)
+        if (dev.windowscraft.monitor.InGameMonitors.isInGameMonitor(s.source)) fps = Math.max(dev.windowscraft.monitor.InGameMonitors.monitorHz(), fps);
         if (s.gpu != null && (!want || fps != s.gpuFps)) {
             s.gpu.stop();
             s.gpu = null;

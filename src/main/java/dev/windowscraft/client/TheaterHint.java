@@ -24,7 +24,7 @@ public final class TheaterHint {
         double alpha;
         if (TheaterMode.controlled() != null || TheaterMode.controlledRemote() != null) {
             if (t >= 9) return;
-            text = "Mouse and keys: use the screen     Alt + mouse: look around     Alt + scroll: zoom     Alt + Space: recenter     Esc: leave";
+            text = "Mouse and keys: use the screen     Ctrl+Alt + mouse: look around     Ctrl+Alt + scroll: zoom     Ctrl+Alt + Space: recenter     Esc: leave";
             alpha = t < 0.5 ? t / 0.5 : t > 8 ? 9 - t : 1;
         } else if (t < 7) {
             text = "W / S or scroll: closer · further     Mouse: look around     " + jump + " or middle-click: recenter     "

@@ -115,6 +115,42 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.19 (16 Oct): in-game monitors at your screen's refresh rate; a taskbar at its monitor's scale; Ctrl+Alt to look around
+
+- **"my apps feel bogged down on the ingame monitor. i thought it should have no input delay and
+  no blur"**: his screen is 1920×1080 at 165 Hz; every in-game monitor was made at 60 Hz (`HZ`)
+  and its wall fed at most 60 pictures a second (`tickGpuSharing`: `max(60, fps)`). The Parsec
+  virtual display offers 24/30/60/144/240 Hz. Now `InGameMonitors.screenHz` (GLFW: the game's
+  monitor, else the primary) is asked for on `add`, `setMode` and `keepOwnSize` (Windows picks
+  the nearest: 144), and the wall's GPU sharing runs at that rate. Monitors already on keep 60
+  until they're turned on again (next game start). The pointer was already drawn live on the wall.
+  Blur: his monitor 0 is 4096×2160 at 200 %, shown ~1000 px tall while seated (a 1080p screen): a
+  picture shrunk to half blurs fine text — 1920×1080 is the sharp (and cheaper) size for him.
+- **"the taskbar cut in half completely. icons cut in half too"**: after `keepOwnSize` put monitor 0
+  back from 1600×1200 (100 %) to 4096×2160 (200 %), its taskbar stayed 48 px tall drawing 96 px;
+  `fix_misplaced_tray` only checked edge and position, and its fallback kept the current height.
+  Now a taskbar whose thickness isn't your own taskbar's at that monitor's DPI (`tray_thickness`:
+  `Shell_TrayWnd` thickness → 96 dpi → monitor's effective DPI, ±2 px) is out of place too, and is
+  put in place at that thickness. At most 6 tries a minute per taskbar (Windows insisting).
+- `tell_taskbar` (WM_SETTINGCHANGE "TraySettings" to HWND_BROADCAST, up to 1 s per window) now runs
+  on its own thread, one at a time: it ran on the hook thread (tidy_taskbars from the timer and
+  win_event), holding up the low-level mouse hook while every window answered. Logs if it takes
+  over 2 s. The command loop logs any command over 2 s (`SlowCommand`) — for the 20 s+ stall.
+- **"instead of just alt+scroll or alt+spacebar make it ctrl+alt+scroll and ctrl+alt+spacebar …
+  sometimes i need to use alt-holding for image editing apps"**: holding left Alt while seated
+  also started looking around (cursor parked, mouse turning the view) and every Alt+key was kept
+  for the game — so it's Ctrl + left Alt now for all three: look around (+ mouse), zoom (+ scroll),
+  straight again (+ Space). Helper: `LALT_DOWN`/`CTRL_DOWN`, `ALT` = the chord; only Space is kept
+  (with its release); every other key with Ctrl+Alt held is the app's (Ctrl+Alt+Z). Plain
+  Alt+Tab still switches between that monitor's windows. Game side (theater on a shared window
+  or someone else's screen): `ScreenControl.lookHeld`; Alt and Ctrl now reach the app. Pointing
+  while walking around stays plain Alt. Self-test: "Ctrl + Alt + Space … never reaches the app",
+  new "plain Alt while seated is the app's: Alt + A reaches it and doesn't start looking around"
+  (the test window now logs WM_SYSKEYDOWN/UP). wc-selftest.exe rebuilt (MSVC + crt-static,
+  `target-static-remap`).
+- wc-vdisplay.exe rebuilt (GNU, `--target-dir target-remap`, path prefixes remapped; new import:
+  api-ms-win-shcore-scaling for GetDpiForMonitor). wc-audio.exe unchanged (0.4.5).
+
 ## 0.15.18 (16 Oct): a slow helper no longer turns every monitor off; a monitor keeps the size you picked
 
 - **"i just changed the resolution on one monitor and they both shut down (joint monitors)"**

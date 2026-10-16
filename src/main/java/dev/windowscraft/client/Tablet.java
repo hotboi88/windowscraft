@@ -43,7 +43,7 @@ public final class Tablet {
     private static long goneSince;
     /** Without a tablet for this long, its monitor turns off (its apps close, like turning it off). */
     private static final long GONE_NANOS = 60_000_000_000L;
-    /** How big it is held up: its share of your screen's height (Alt + scroll changes it). */
+    /** How big it is held up: its share of your screen's height (Ctrl+Alt + scroll changes it). */
     private static double size = 1.0; // (the whole screen, its frame around it)
     private static long frame;
     /** Set while the game draws an item in your own hand (first or third person). */
@@ -114,7 +114,7 @@ public final class Tablet {
             ScreenControl.nativePointer(mc, false);
             return;
         }
-        hint(mc, "Esc puts it down · hold Alt to look around · Alt + scroll: bigger or smaller");
+        hint(mc, "Esc puts it down · hold Ctrl+Alt to look around · Ctrl+Alt + scroll: bigger or smaller");
     }
 
     /** Puts it down (it keeps going in your hand). */
@@ -129,7 +129,7 @@ public final class Tablet {
         KeyBinding.updatePressedStates();
     }
 
-    /** Alt + scroll while holding it up: bigger or smaller. */
+    /** Ctrl+Alt + scroll while holding it up: bigger or smaller. */
     public static void zoom(double notches) {
         size = Math.max(0.35, Math.min(1.0, size + notches * 0.05));
     }
@@ -246,7 +246,7 @@ public final class Tablet {
         if (d == null || stack == null) return;
         int sw = g.getScaledWindowWidth(), sh = g.getScaledWindowHeight();
         double a = aspect(d);
-        // as tall as you've made it (Alt + scroll), and the screen exactly its monitor's shape
+        // as tall as you've made it (Ctrl+Alt + scroll), and the screen exactly its monitor's shape
         float h = (float) (sh * size), b = h / 14f, w = (float) ((h - 2 * b) * a) + 2 * b;
         if (w > sw) { // (as big as fits: the whole screen, frame and all)
             float k = sw / w;
