@@ -115,6 +115,38 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.21 (16 Oct): the helper can't hang on Sandboxie; monitors go off together and take their apps
+
+- **"i just had all the monitors shut off for no reason"** (11:31:53, 0.15.18): he turned on a third
+  monitor; Windows applied a remembered three-monitor layout (monitor 0 4096×2160 → 1800×1200,
+  monitor 1 1920×1080 → 4096×2160), `keepOwnSize` asked for both back, and the helper never
+  answered again: the first question waiting (`windows`, sent right after `arrange` answered)
+  had 0 lines after 80 s, so 0.15.18's grace ran out and it was restarted. Not slowness — stuck.
+  Just before, `Sandbox.pushAll()` (from `refreshRects`) had sent `isoexclude`, whose handler on
+  the command thread rewrote every box section and called `SbieApi_ReloadConf` (and Sandboxie
+  had been "didn't take it" on every force change all day). Now: the Sandboxie part of
+  `isoexclude` runs on its own thread (logs if the reload takes over 2 s); one writer of
+  Sandboxie.ini at a time (`INI_LOCK`: the force thread and the command thread both wrote it);
+  and a watchdog names the command (and its last `step`: writing Sandboxie.ini, asking Sandboxie
+  to reload, Windows applying a layout, listing windows) every 5 s once one runs over 10 s. If it
+  happens again, the log says where.
+- **"stop them from all shutting off one at a time … 5 monitors i have to wait like a whole
+  minute"**: leaving the world sends one `remove` per monitor; each waited up to 8 s for its own
+  copies to close, then up to 3 s for the display to go. The helper now reads ahead 150 ms for
+  more `remove`s and does them together (`remove_many`): every box's apps close at the same time,
+  then the monitors go right to left (as `shutdown_monitors` did). Answers stay in order.
+- **"monitors should destroy all their processes / apps along with them"**: a monitor's own
+  windows were moved to your desk and then sent WM_CLOSE; anything asking "save changes?" stayed
+  there, and only windowless leftovers were ended (after 6 s). Now its windows are closed where
+  they are (only ones brought from your desk go back), and 3 s later every program started while
+  it was on and still running is ended, unless it has a window off the monitor (your desk Brave).
+  Its box gets 3 s (was 8) before `/terminate`. At the helper's start, every WindowsCraft box is
+  emptied (`end_box_leftovers`): a monitor's own copies exist only while it's on.
+- Asked next: every app its own copy by default (new monitors with own copies on; Discord,
+  WhatsApp, launchers as copies unless added to "Always run normally"); the monitor block's
+  picture behind the frame's lip; fewer display changes per monitor start (Discord's whole-screen
+  share pauses on each).
+
 ## 0.15.20 (16 Oct): an app's sound moves between walls without ever reaching your desk
 
 - **"it's not really a stutter it just goes really loud on my main desktop and then transfers

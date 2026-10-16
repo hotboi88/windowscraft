@@ -627,6 +627,7 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
                 return Err(format!("Windows refused to move {d} ({})", r.0));
             }
         }
+        step("Windows applying the new layout");
         let applied = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
         if applied != DISP_CHANGE_SUCCESSFUL {
             return Err(format!("Windows didn't apply it ({})", applied.0));
@@ -729,6 +730,7 @@ fn set_mode(device: &str, area: RECT, w: u32, h: u32, hz: u32, ours: &[String]) 
                 let _ = ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(&p), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
             }
         }
+        step("Windows applying the new layout");
         let applied = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
         if applied != DISP_CHANGE_SUCCESSFUL {
             return Err(format!("Windows didn't apply it ({})", applied.0));
@@ -935,6 +937,7 @@ fn app_windows() -> Vec<HWND> {
         }
         windows::core::BOOL(1)
     }
+    step("listing windows");
     let mut list = Vec::new();
     unsafe {
         let _ = EnumWindows(Some(each), LPARAM(&mut list as *mut _ as isize));
@@ -3324,7 +3327,12 @@ fn write_ini(lines: &[String]) -> bool {
 }
 
 /// Sets that box's section to exactly these settings (made if it isn't there), keeping the rest of the file.
+/// Sandboxie.ini is read, changed and written back by more than one thread: one at a time.
+static INI_LOCK: Mutex<()> = Mutex::new(());
+
 fn set_section(name: &str, settings: &[(String, String)]) {
+    let _one = INI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    step("writing Sandboxie.ini");
     let lines = read_ini();
     let mut out = Vec::new();
     let mut i = 0;
@@ -3354,6 +3362,7 @@ fn set_section(name: &str, settings: &[(String, String)]) {
 }
 
 fn reload_conf() -> bool {
+    step("asking Sandboxie to reload its settings");
     static RELOAD: OnceLock<Option<unsafe extern "system" fn(u32, u32) -> i32>> = OnceLock::new();
     let f = RELOAD.get_or_init(|| unsafe {
         let d = sbie_dir()?;
@@ -3673,11 +3682,29 @@ fn ensure_iso_thread() {
     });
 }
 
+/// A monitor's own copies exist only while it's on: at the start, whatever still runs in one of
+/// WindowsCraft's boxes (left by a game or helper that ended without turning its monitors off,
+/// their windows dropped on your desk) is ended.
+fn end_box_leftovers() {
+    if sbie_dir().is_none() {
+        return;
+    }
+    let boxes: Vec<String> = read_ini().iter().map(|l| l.trim()).filter(|t| t.starts_with("[WC") && t.ends_with(']')).map(|t| t[1..t.len() - 1].to_string()).collect();
+    let leftover: std::collections::HashSet<String> = app_windows().into_iter().map(|w| box_of(pid(w))).filter(|b| boxes.iter().any(|x| x.eq_ignore_ascii_case(b))).collect();
+    for b in &leftover {
+        eprintln!("info=ending what still ran in {b} (its monitor is off)");
+    }
+    for b in &boxes {
+        sbie_start(&[&format!("/box:{b}"), "/terminate"]); // (in the background too, without a window)
+    }
+}
+
 /// No force rule left behind (after a crash, at the start, at the end): every WindowsCraft box.
 fn clear_all_force() {
     if sbie_dir().is_none() {
         return;
     }
+    let _one = INI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let lines = read_ini();
     let mut section = String::new();
     let mut out = Vec::with_capacity(lines.len());
@@ -4506,12 +4533,48 @@ fn mirrored(added: &AddedMap, idx: i32) -> bool {
 /// answer after 20 s; a monitor's resolution change once kept this thread busy for longer).
 struct SlowCommand(String, Instant);
 
+impl SlowCommand {
+    fn new(cmd: &str) -> SlowCommand {
+        *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some((cmd.to_string(), Instant::now(), ""));
+        SlowCommand(cmd.to_string(), Instant::now())
+    }
+}
+
 impl Drop for SlowCommand {
     fn drop(&mut self) {
+        *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if self.1.elapsed() > Duration::from_secs(2) {
             eprintln!("info=\"{}\" took {} ms", self.0, self.1.elapsed().as_millis());
         }
     }
+}
+
+/// The command the command thread is on, since when, and the step it last reached (for the watchdog).
+static CURRENT: Mutex<Option<(String, Instant, &'static str)>> = Mutex::new(None);
+static CMD_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
+
+/// Marks how far the command thread has got (only its own steps count).
+fn step(what: &'static str) {
+    if CMD_THREAD.get() != Some(&std::thread::current().id()) {
+        return;
+    }
+    if let Some(c) = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        c.2 = what;
+    }
+}
+
+/// Every 5 s: a command running for over 10 s is named in the log, with its last step — a stuck
+/// helper says where it's stuck (the game restarts it after 80 s, and with it every monitor).
+fn command_watchdog() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let cur = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((cmd, since, at)) = cur {
+            if since.elapsed() > Duration::from_secs(10) {
+                eprintln!("info=still on \"{cmd}\" after {} s{}", since.elapsed().as_secs(), if at.is_empty() { String::new() } else { format!(" ({at})") });
+            }
+        }
+    });
 }
 
 fn main() {
@@ -4536,6 +4599,7 @@ fn main() {
     taskbars_separate(false); // a crash may have left the taskbar setting on: yours comes back
     restore_mouse(); // …or your pointer speed neutral
     clear_all_force(); // …or new programs going into a box
+    std::thread::spawn(end_box_leftovers); // …or a monitor's own copies still running without it
     let homes: Homes = Arc::new(Mutex::new(HashMap::new()));
     let _ = HOMES.set(homes.clone());
 
@@ -4639,8 +4703,18 @@ fn main() {
             }
         }
     });
-    for line in cmd_rx {
-        let _slow = SlowCommand(line.split_whitespace().next().unwrap_or("").to_string(), Instant::now());
+    let _ = CMD_THREAD.set(std::thread::current().id());
+    command_watchdog();
+    let mut queued: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    loop {
+        let line = match queued.pop_front() {
+            Some(l) => l,
+            None => match cmd_rx.recv() {
+                Ok(l) => l,
+                Err(_) => break,
+            },
+        };
+        let _slow = SlowCommand::new(line.split_whitespace().next().unwrap_or(""));
         let p: Vec<&str> = line.split_whitespace().collect();
         let n = |i: usize| p.get(i).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
         let f = |i: usize| p.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.5);
@@ -4696,13 +4770,31 @@ fn main() {
                 say(&answer);
             }
             Some("remove") => {
-                let idx = n(1) as i32;
-                remove_one(&vdd, &added, &homes, idx);
+                // leaving the world asks for every monitor at once: they go together (the apps in
+                // their own copies closing on all of them at the same time), not one after another —
+                // five took a whole minute
+                let mut ids = vec![n(1) as i32];
+                if queued.is_empty() {
+                    let until = Instant::now() + Duration::from_millis(150);
+                    while let Ok(l) = cmd_rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                        let mut w = l.split_whitespace();
+                        match (w.next(), w.next().and_then(|x| x.parse::<i32>().ok())) {
+                            (Some("remove"), Some(i)) => ids.push(i),
+                            _ => {
+                                queued.push_back(l);
+                                break;
+                            }
+                        }
+                    }
+                }
+                remove_many(&vdd, &added, &homes, &ids);
                 *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
                 if added.lock().unwrap().is_empty() {
                     taskbars_separate(false);
                 }
-                say(&format!("removed {idx}"));
+                for idx in &ids {
+                    say(&format!("removed {idx}"));
+                }
             }
             Some("rects") => {
                 let list: Vec<i32> = added.lock().unwrap().keys().copied().collect();
@@ -4852,11 +4944,20 @@ fn main() {
                 *ISO_APPDIRS.lock().unwrap() = groups.get(2).cloned().unwrap_or_default();
                 ISO_DIRTY.store(true, Ordering::SeqCst);
                 refresh_carve(); // (worked out now, before anyone sits down)
-                std::thread::spawn(|| { let _ = sbie_query("GlobalSettings", "FileRootPath", 0); }); // (and Sandboxie's interface loaded)
-                for b in BOXES_MADE.lock().unwrap().clone() {
-                    ensure_box(&b);
-                }
-                reload_conf();
+                // Sandboxie itself on a thread of its own: its settings reload once kept this
+                // thread — the one answering the game — from answering anything for 80 s, and every
+                // in-game monitor went dark when the game restarted it
+                std::thread::spawn(|| {
+                    let _ = sbie_query("GlobalSettings", "FileRootPath", 0); // (Sandboxie's interface loaded)
+                    for b in BOXES_MADE.lock().unwrap().clone() {
+                        ensure_box(&b);
+                    }
+                    let t0 = Instant::now();
+                    reload_conf();
+                    if t0.elapsed() > Duration::from_secs(2) {
+                        eprintln!("info=Sandboxie took {} ms to reload its settings", t0.elapsed().as_millis());
+                    }
+                });
             }
             Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
             Some("installsbie") => {
@@ -5133,7 +5234,30 @@ fn remove_orphans(v: &Vdd, added: &AddedMap) {
     }
 }
 
-fn remove_one(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32) {
+/// Several monitors off at once: the apps in their own copies close on all of them at the same
+/// time (each may take a few seconds to save and close), then the monitors go right to left
+/// (removing one in the middle can make Windows reshuffle the others).
+fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
+    let t0 = Instant::now();
+    let mut list: Vec<i32> = ids.to_vec();
+    list.sort_by_key(|i| -i);
+    list.dedup();
+    let boxed: Vec<i32> = list.iter().copied().filter(|i| isolated(*i)).collect();
+    if boxed.len() > 1 {
+        let closing: Vec<_> = boxed.iter().map(|&i| std::thread::spawn(move || close_box(i, Duration::from_secs(3)))).collect();
+        for t in closing {
+            let _ = t.join();
+        }
+    }
+    for &idx in &list {
+        remove_one_with(vdd, added, homes, idx, boxed.len() <= 1);
+    }
+    if list.len() > 1 {
+        eprintln!("info=turned {} in-game monitors off in {} ms", list.len(), t0.elapsed().as_millis());
+    }
+}
+
+fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, close_copies: bool) {
     if SEATED.load(Ordering::SeqCst) {
         let seated_dev = SEAT_DEVICE.lock().unwrap().clone();
         if added.lock().unwrap().get(&idx).map_or(false, |a| a.device.eq_ignore_ascii_case(&seated_dev)) {
@@ -5145,8 +5269,8 @@ fn remove_one(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32) {
         unpoint();
     }
     let since = added.lock().unwrap().get(&idx).map(|a| a.since);
-    if isolated(idx) {
-        close_box(idx, Duration::from_secs(8)); // (its own copies close, as you'd close them: they keep what they saved)
+    if close_copies && isolated(idx) {
+        close_box(idx, Duration::from_secs(3)); // (its own copies close, as you'd close them; what's left is ended)
     }
     if let Some((_, a)) = our_area(added, idx) {
         let left = evacuate(idx, &a, homes);
@@ -5187,20 +5311,27 @@ fn remove_one(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32) {
 /// question shows up where you can answer it. Returns the programs whose windows were closed.
 fn evacuate(idx: i32, a: &RECT, homes: &Homes) -> Vec<u32> {
     let _ = idx;
+    let wins = app_windows();
+    // a program with a window off this monitor too (your desk Brave with a window here) keeps
+    // running: only its windows here close
+    let elsewhere: Vec<u32> = wins.iter().filter(|h| !on_area(**h, a)).map(|h| pid(*h)).collect();
     let mut closed = Vec::new();
-    for h in app_windows() {
-        if on_area(h, a) {
-            let brought = homes.lock().unwrap().contains_key(&(h.0 as isize));
-            send_home(h, homes);
-            if !brought {
-                unsafe {
-                    let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-                }
-                let p = pid(h);
-                if !closed.contains(&p) {
-                    closed.push(p);
-                }
-            }
+    for h in wins {
+        if !on_area(h, a) {
+            continue;
+        }
+        if homes.lock().unwrap().contains_key(&(h.0 as isize)) {
+            send_home(h, homes); // brought over from your desk: back it goes
+            continue;
+        }
+        // the monitor's own: closed where it is, never put on your desk first ("monitors should
+        // destroy all their processes / apps along with them")
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        let p = pid(h);
+        if !closed.contains(&p) && !elsewhere.contains(&p) {
+            closed.push(p);
         }
     }
     owned().lock().unwrap().retain(|_, i| *i != idx);
@@ -5208,10 +5339,10 @@ fn evacuate(idx: i32, a: &RECT, homes: &Homes) -> Vec<u32> {
     closed
 }
 
-/// A few seconds later: a program started while the monitor was on that's still running with no
-/// window anywhere (it went to the system tray, or keeps running in the background) is ended.
-/// Never one you had running before, never one with a window still open (a "save changes?"
-/// question waits for you), never Windows' own.
+/// A few seconds later: a program started while the monitor was on that's still running is ended
+/// — in the system tray, in the background, or asking "save changes?" (the monitor and its apps
+/// go together). Never one you had running before, never one with a window off the monitor,
+/// never Windows' own.
 fn end_leftovers(pids: Vec<u32>, since: u64) {
     if pids.is_empty() {
         return;
@@ -5219,12 +5350,10 @@ fn end_leftovers(pids: Vec<u32>, since: u64) {
     let me = std::process::id();
     let parent = std::env::args().skip_while(|a| a != "--parent-pid").nth(1).and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(6));
+        std::thread::sleep(Duration::from_secs(3));
         let shell = shell_pid();
-        // any visible window at all (a "save changes?" dialog counts)
-        let windows: Vec<u32> = all_top_windows().into_iter().map(|h| pid(HWND(h as *mut _))).collect();
         for p in pids {
-            if p == 0 || p == shell || p == me || p == parent || windows.contains(&p) {
+            if p == 0 || p == shell || p == me || p == parent {
                 continue;
             }
             let Some((created, exe)) = process_info(p) else { continue }; // gone already
@@ -5278,12 +5407,8 @@ fn shutdown_monitors(vdd: &Driver, added: &AddedMap, homes: &Homes) {
     unpoint();
     look_mode(false);
     unseat();
-    let mut list: Vec<i32> = added.lock().unwrap().keys().copied().collect();
-    // right to left: removing one in the middle can make Windows reshuffle the others
-    list.sort_by_key(|i| -i);
-    for idx in list {
-        remove_one(vdd, added, homes, idx);
-    }
+    let list: Vec<i32> = added.lock().unwrap().keys().copied().collect();
+    remove_many(vdd, added, homes, &list);
     show_hidden_trays();
     keep_fullscreen_on_top(&[], &[]);
     taskbars_separate(false);

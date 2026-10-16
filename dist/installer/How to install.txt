@@ -1,4 +1,7 @@
-WindowsCraft 0.15.20 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.21 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.21: leaving with several monitors on turns them all off at once, and each takes its
+own apps with it. A monitor no longer goes dark because Sandboxie was slow.
 
 New in 0.15.20: clicking an app that has windows on two monitors moves its sound between their
 walls without it ever blaring from your speakers in between.
