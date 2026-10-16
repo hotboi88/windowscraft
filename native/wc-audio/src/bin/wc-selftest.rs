@@ -1893,7 +1893,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let mut rules = ini_forced();
     let _ = wait_for(20000, || {
         rules = ini_forced();
-        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))) && rules.iter().any(|l| l.to_lowercase().replace('/', "\\").ends_with("\\wcapps\\a"))
+        // (all three app folders: the rule is written value by value — read mid-way, part of it)
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
+            && ["\\wcapps\\a", "\\wcapps\\b", "\\wcapps\\c"].iter().all(|f| rules.iter().any(|l| l.to_lowercase().replace('/', "\\").ends_with(f)))
     });
     rep.note(format!("(the rule at A, carved: {} ms)", t_rule.elapsed().as_millis()));
     rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {} folders", rules.len()));
