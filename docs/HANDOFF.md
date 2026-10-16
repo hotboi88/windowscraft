@@ -115,6 +115,24 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.20 (16 Oct): an app's sound moves between walls without ever reaching your desk
+
+- **"it's not really a stutter it just goes really loud on my main desktop and then transfers
+  back if i click on brave on a separate ingame monitor"**: one Brave (one process) with windows
+  on two monitors. `SoundHome` sent its sound to the monitor last used, and `MonitorAudio` did it
+  by closing that wall's capture at once (wc-audio gives the app its volume back: full volume on
+  his speakers) while the other wall started its own up to 0.7 s later (`--duck` again); the
+  losing wall's mixer then ran dry, so its player kept growing its delay (120 → 270 ms). Now one
+  capture per app (`MonitorAudio.APPS`), shared by every monitor it has a window on: it lives
+  while the app is on any monitor (plus 2 s, `endSoon`: a monitor's picture restarting closes and
+  reopens its sound), and only `App.wall` — which wall's buffer its sound goes to — changes:
+  `SoundHome.usedOn` moves it at once (the follower looks every 200 ms), the walls' looks confirm.
+  Each wall keeps a buffer for every app on its monitor, so it writes silence rather than running
+  dry. Captures start outside the mixer's lock (they start a process), and wc-audio.exe is
+  checked against the jar once per run instead of per capture. wc-audio.exe unchanged.
+- Discord "screen" share pausing whenever a monitor is turned on: he shares the whole screen;
+  adding/changing a display resets Windows' screen duplication. Not looked at yet.
+
 ## 0.15.19 (16 Oct): in-game monitors at your screen's refresh rate; a taskbar at its monitor's scale; Ctrl+Alt to look around
 
 - **"my apps feel bogged down on the ingame monitor. i thought it should have no input delay and

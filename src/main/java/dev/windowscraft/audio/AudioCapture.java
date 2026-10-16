@@ -218,7 +218,11 @@ public abstract class AudioCapture implements AutoCloseable {
         @Override
         public java.util.concurrent.CompletableFuture<?> stopped() { return process.onExit(); }
 
+        /** The helper as checked this run (each new capture used to read it from the jar and the disk again). */
+        private static Path extracted;
+
         static synchronized Path extractHelper() throws IOException {
+            if (extracted != null && Files.isRegularFile(extracted)) return extracted;
             Path dir = FabricLoader.getInstance().getGameDir().resolve("windowscraft").resolve("bin");
             Path exe = dir.resolve("wc-audio.exe");
             try (InputStream in = AudioCapture.class.getResourceAsStream("/windowscraft/natives/wc-audio.exe")) {
@@ -231,6 +235,7 @@ public abstract class AudioCapture implements AutoCloseable {
                     Files.move(tmp, exe, StandardCopyOption.REPLACE_EXISTING);
                 }
             }
+            extracted = exe;
             return exe;
         }
 

@@ -64,7 +64,9 @@ public final class SoundHome {
 
     /** That program was used on that monitor (null: on your desk — its sound stays where it is, on the wall). */
     static void usedOn(long pid, String monitor) {
-        if (monitor != null) HOME.put(pid, monitor);
+        if (monitor == null) return;
+        HOME.put(pid, monitor);
+        MonitorAudio.usedOn(pid, monitor); // (its sound goes there now, not at that wall's next look)
     }
 
     private static synchronized void ensureFollower() {

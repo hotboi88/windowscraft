@@ -1,4 +1,7 @@
-WindowsCraft 0.15.19 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.20 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.20: clicking an app that has windows on two monitors moves its sound between their
+walls without it ever blaring from your speakers in between.
 
 New in 0.15.19: in-game monitors run at your screen's refresh rate (144 Hz on a 144/165 Hz
 screen), so their apps feel as quick as on your desk. A monitor's taskbar is never cut in half.

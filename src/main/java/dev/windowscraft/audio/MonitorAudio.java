@@ -28,8 +28,9 @@ final class MonitorAudio extends AudioCapture {
 
     private final SourceInfo source;
     private final boolean hearInGame;
+    /** App → this wall's buffer of its sound: every app with a window on the monitor (filled while its sound plays here). */
     private final Map<Long, Feed> feeds = new HashMap<>();
-    /** App → how many looks in a row it wasn't on the monitor (its capture stops after GONE_AFTER). */
+    /** App → how many looks in a row it wasn't on the monitor (it's let go after GONE_AFTER). */
     private final Map<Long, Integer> missing = new HashMap<>();
     private static final int GONE_AFTER = 3; // (~2 s: a look while monitors are added and laid out can miss it)
     private final Thread mixer, watcher;
@@ -37,9 +38,29 @@ final class MonitorAudio extends AudioCapture {
 
     private static final class Feed {
         final PcmRing ring = new PcmRing(AudioCapture.BYTES_PER_SECOND / 2);
-        WasapiHelper helper;
         boolean primed;
     }
+
+    /**
+     * One capture per app, shared by every monitor it has a window on. It lives as long as the app
+     * is on any of them, so the app stays turned down on your desk the whole time; which wall hears
+     * it is only where its sound is sent. (Moving Brave's sound to the monitor you clicked used to
+     * close one capture — its volume came back on your speakers: "it just goes really loud on my
+     * main desktop and then transfers back" — and start another up to 0.7 s later.)
+     */
+    private static final class App {
+        final long pid;
+        final boolean duck;
+        WasapiHelper helper;
+        /** The monitors it has a window on (guarded by APPS). */
+        final Set<MonitorAudio> on = new HashSet<>();
+        /** The one whose wall plays it now (null: none for the moment — still turned down). */
+        volatile MonitorAudio wall;
+
+        App(long pid, boolean duck) { this.pid = pid; this.duck = duck; }
+    }
+
+    private static final List<App> APPS = new java.util.ArrayList<>();
 
     MonitorAudio(SourceInfo source, boolean hearInGame, Sink sink) {
         super(sink);
@@ -56,7 +77,7 @@ final class MonitorAudio extends AudioCapture {
         mixer.start();
     }
 
-    /** Every couple of seconds: which apps have a window on the monitor? Each gets a capture. */
+    /** Every 0.7 s: which apps have a window on the monitor, and which of them this wall plays. */
     private void watch() {
         long me = ProcessHandle.current().pid();
         while (running) {
@@ -65,51 +86,64 @@ final class MonitorAudio extends AudioCapture {
             if (m != null && b != null) {
                 try {
                     Set<Long> pids = new HashSet<>();
-                    Map<Long, String> titles = new HashMap<>();
                     for (MonitorBackend.Win w : b.windowsOn(m).get(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                        if (w.pid() > 0 && w.pid() != me) {
-                            pids.add(w.pid());
-                            titles.putIfAbsent(w.pid(), w.title());
-                        }
+                        if (w.pid() > 0 && w.pid() != me) pids.add(w.pid());
                     }
                     // an app on several monitors is heard where it was last used on one (Windows
                     // can't split one program's sound by window); your desk never takes it
                     SoundHome.seen(source.id(), pids);
-                    Set<Long> onIt = Set.copyOf(pids);
-                    pids.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));
-                    update(pids, onIt);
+                    Set<Long> plays = new HashSet<>(pids);
+                    plays.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));
+                    update(plays, pids);
                 } catch (Exception e) {
                     WindowsCraftClient.LOGGER.debug("monitor audio: couldn't list apps", e);
                 }
             }
             try {
-                Thread.sleep(700); // (often: when you switch to Brave on another monitor, its sound follows quickly)
+                Thread.sleep(700);
             } catch (InterruptedException e) {
                 return;
             }
         }
     }
 
-    private void update(Set<Long> pids, Set<Long> onIt) {
+    private void update(Set<Long> plays, Set<Long> onIt) {
+        List<Long> leaving = new java.util.ArrayList<>();
         synchronized (feeds) {
             for (Long pid : new HashSet<>(feeds.keySet())) {
-                if (pids.contains(pid)) {
+                if (onIt.contains(pid)) {
                     missing.remove(pid);
                     continue;
                 }
-                // its sound belongs to another monitor now: it goes at once (never two walls at a
-                // time). Gone from this one: only after a few looks in a row — one look while
-                // monitors are added and laid out again can come back without it, and closing the
-                // capture then gave its volume back: the sound jumped to your desk for a moment
-                int n = onIt.contains(pid) ? GONE_AFTER : missing.merge(pid, 1, Integer::sum);
-                if (n >= GONE_AFTER) {
+                // gone from this monitor: only after a few looks in a row — one look while monitors
+                // are added and laid out again can come back without it
+                if (missing.merge(pid, 1, Integer::sum) >= GONE_AFTER) {
                     missing.remove(pid);
-                    feeds.remove(pid).helper.close(); // gone from the monitor: its volume comes back
+                    feeds.remove(pid);
+                    leaving.add(pid);
                 }
             }
-            for (Long pid : pids) {
-                if (feeds.containsKey(pid) || !running) continue;
-                Feed f = new Feed();
+            if (running) for (Long pid : onIt) feeds.computeIfAbsent(pid, p -> new Feed());
+            int n = feeds.size();
+            status = n == 0 ? "apps on this monitor (none playing)" : "apps on this monitor (" + n + ")";
+        }
+        // (never while holding the mixer's lock: starting a capture starts a process)
+        for (Long pid : leaving) letGo(pid);
+        if (!running) return;
+        for (Long pid : onIt) hold(pid, plays.contains(pid));
+    }
+
+    /** That app is on this monitor: its capture (started if it's the first monitor it's on); with {@code plays}, its sound comes here. */
+    private void hold(long pid, boolean plays) {
+        synchronized (APPS) {
+            App a = null;
+            for (App x : APPS) if (x.pid == pid && x.duck == hearInGame) a = x;
+            if (a != null && a.helper.stopped().isDone()) { // (its helper ended by itself: a fresh one)
+                APPS.remove(a);
+                a = null;
+            }
+            if (a == null) {
+                App fresh = new App(pid, hearInGame);
                 try {
                     List<String> args = new java.util.ArrayList<>(List.of("--include-pid", Long.toString(pid),
                             "--parent-pid", Long.toString(ProcessHandle.current().pid())));
@@ -119,15 +153,79 @@ final class MonitorAudio extends AudioCapture {
                         Files.createDirectories(state.getParent());
                         args.addAll(List.of("--duck", state.toString()));
                     }
-                    f.helper = new WasapiHelper(args, "app audio", f.ring::write, state);
-                    feeds.put(pid, f);
+                    fresh.helper = new WasapiHelper(args, "app audio", (pcm, off, len) -> {
+                        MonitorAudio w = fresh.wall;
+                        if (w != null) w.receive(pid, pcm, off, len);
+                    }, state);
                 } catch (Exception e) {
                     WindowsCraftClient.LOGGER.warn("monitor audio: couldn't capture app {}", pid, e);
+                    return;
                 }
+                APPS.add(fresh);
+                a = fresh;
             }
-            int n = feeds.size();
-            status = n == 0 ? "apps on this monitor (none playing)" : "apps on this monitor (" + n + ")";
+            a.on.add(this);
+            if (plays || a.wall == null) a.wall = this;
         }
+    }
+
+    /** That app left this monitor: its sound stops coming here; its capture ends once it's on no monitor (its volume comes back). */
+    private void letGo(long pid) {
+        synchronized (APPS) {
+            for (App a : APPS) {
+                if (a.pid != pid || a.duck != hearInGame || !a.on.remove(this)) continue;
+                if (a.wall == this) a.wall = nextWall(a);
+                if (a.on.isEmpty()) endSoon(a);
+            }
+        }
+    }
+
+    /**
+     * An app on no monitor any more: its capture ends a moment later, unless a monitor takes it up
+     * again meanwhile — a monitor's picture restarting (a new resolution) closes its sound and
+     * opens it again, and the app's volume came back on your desk in between. Done once it's ended
+     * (or taken up again).
+     */
+    private static java.util.concurrent.CompletableFuture<?> endSoon(App a) {
+        java.util.concurrent.CompletableFuture<Object> done = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture.delayedExecutor(2, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
+            boolean end;
+            synchronized (APPS) {
+                end = a.on.isEmpty() && APPS.remove(a);
+            }
+            if (!end) {
+                done.complete(null);
+                return;
+            }
+            a.helper.close();
+            a.helper.stopped().whenComplete((r, e) -> done.complete(null));
+        });
+        return done;
+    }
+
+    /** Where an app's sound goes once the wall that played it lets go: the monitor it belongs to now, if it's on one. */
+    private static MonitorAudio nextWall(App a) {
+        for (MonitorAudio o : a.on) if (SoundHome.playsHere(o.source.id(), a.pid)) return o;
+        return null;
+    }
+
+    /** That app was just used on that monitor: its sound goes to that wall now (not at the wall's next look). */
+    static void usedOn(long pid, String monitor) {
+        synchronized (APPS) {
+            for (App a : APPS) {
+                if (a.pid != pid) continue;
+                for (MonitorAudio m : a.on) if (m.source.id().equals(monitor)) a.wall = m;
+            }
+        }
+    }
+
+    /** Sound of one of the apps, sent to this wall. */
+    private void receive(long pid, byte[] pcm, int off, int len) {
+        Feed f;
+        synchronized (feeds) {
+            f = feeds.get(pid);
+        }
+        if (f != null) f.ring.write(pcm, off, len);
     }
 
     /** Every 10 ms: a little from each app, added together. */
@@ -186,11 +284,14 @@ final class MonitorAudio extends AudioCapture {
         watcher.interrupt();
         mixer.interrupt();
         java.util.List<java.util.concurrent.CompletableFuture<?>> all = new java.util.ArrayList<>();
-        synchronized (feeds) {
-            for (Feed f : feeds.values()) {
-                f.helper.close();
-                all.add(f.helper.stopped());
+        synchronized (APPS) {
+            for (App a : APPS) {
+                if (!a.on.remove(this)) continue;
+                if (a.wall == this) a.wall = nextWall(a);
+                if (a.on.isEmpty()) all.add(endSoon(a));
             }
+        }
+        synchronized (feeds) {
             feeds.clear();
         }
         stoppedAll = java.util.concurrent.CompletableFuture.allOf(all.toArray(new java.util.concurrent.CompletableFuture[0]));
