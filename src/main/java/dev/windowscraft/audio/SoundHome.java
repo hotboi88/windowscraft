@@ -19,17 +19,22 @@ public final class SoundHome {
     private static final Map<Long, String> HOME = new ConcurrentHashMap<>();
     /** in-game monitor (source id) → the programs with a window on it (as its sound watcher last saw). */
     private static final Map<String, Set<Long>> ON = new ConcurrentHashMap<>();
+    /** program → the monitor it was on first (while it's still there): where it plays until it's used on another. */
+    private static final Map<Long, String> FIRST = new ConcurrentHashMap<>();
     private static Thread follower;
 
     /** Its watcher saw these programs on that monitor. */
     static void seen(String monitor, Set<Long> pids) {
         ON.put(monitor, Set.copyOf(pids));
+        for (Long pid : pids) FIRST.putIfAbsent(pid, monitor);
+        FIRST.entrySet().removeIf(e -> e.getValue().equals(monitor) && !pids.contains(e.getKey()));
         ensureFollower();
     }
 
     static void gone(String monitor) {
         ON.remove(monitor);
         HOME.values().removeIf(monitor::equals);
+        FIRST.values().removeIf(monitor::equals);
     }
 
     /** Should that monitor play this program's sound? */
@@ -39,7 +44,12 @@ public final class SoundHome {
         for (var e : ON.entrySet()) if (!e.getKey().equals(monitor) && e.getValue().contains(pid)) elsewhere = true;
         if (!elsewhere) return true; // only here (maybe on your desk too): this wall
         if (home != null && ON.getOrDefault(home, Set.of()).contains(pid)) return home.equals(monitor);
-        // not used on a monitor yet: the first monitor it's on (by name), so exactly one plays it
+        // not used on a monitor yet: where it already was — a monitor turned on next to it (or one
+        // Windows put a window of it on for a moment) doesn't take its sound ("i'm not even using
+        // brave … on a new monitor i created but i can hear it from" there)
+        String first0 = FIRST.get(pid);
+        if (first0 != null && ON.getOrDefault(first0, Set.of()).contains(pid)) return first0.equals(monitor);
+        // (else the first monitor it's on, by name, so exactly one plays it)
         String first = null;
         for (var e : ON.entrySet()) if (e.getValue().contains(pid) && (first == null || e.getKey().compareTo(first) < 0)) first = e.getKey();
         return monitor.equals(first);
