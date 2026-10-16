@@ -1818,12 +1818,27 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let ini_forced = || -> Vec<String> {
         let b = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Sandboxie.ini")).unwrap_or_default();
         let t = if b.len() > 2 && b[0] == 0xFF { String::from_utf16_lossy(&b[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()) } else { String::from_utf8_lossy(&b).into_owned() };
+        // each [WC…] box's force rule: its own ForceFolder lines, and the force template's when it uses it
         let mut sec = String::new();
-        let mut out = Vec::new();
+        let mut own: Vec<(String, String)> = Vec::new();
+        let mut uses: Vec<String> = Vec::new();
+        let mut template: Vec<String> = Vec::new();
         for l in t.lines() {
             let l = l.trim();
             let low = l.to_lowercase();
-            if l.starts_with('[') { sec = l.to_string(); } else if sec.starts_with("[WC") && (low.starts_with("forcefolder") || low == "template=wcforce") { out.push(format!("{sec} {l}")); }
+            if l.starts_with('[') {
+                sec = l.to_string();
+            } else if sec.eq_ignore_ascii_case("[Template_WCForce]") && low.starts_with("forcefolder") {
+                template.push(l.to_string());
+            } else if sec.starts_with("[WC") && low.starts_with("forcefolder") {
+                own.push((sec.clone(), l.to_string()));
+            } else if sec.starts_with("[WC") && low == "template=wcforce" {
+                uses.push(sec.clone());
+            }
+        }
+        let mut out: Vec<String> = own.into_iter().map(|(s, l)| format!("{s} {l}")).collect();
+        for s in uses {
+            out.extend(template.iter().map(|l| format!("{s} {l}")));
         }
         out
     };
