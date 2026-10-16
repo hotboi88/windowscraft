@@ -115,6 +115,28 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.17 (16 Oct): opening a copy no longer shuts the in-game monitors down
+
+- **"Couldn't hand your mouse and keyboard to the in-game monitor: … the in-game monitor helper
+  stopped" / "The in-game monitors stopped (their helper closed)"**, each time right after "Open
+  another copy here" (Discord, the Xbox Minecraft launcher) or "Reset this monitor's apps". The
+  helper answers `boxlaunch`, `boxreset` and `ownbrowser` from their own thread whenever they're
+  done; `VDisplayHelper` matched answers strictly in order, so one finishing after the menu's next
+  `windows`/`modes` swallowed that question's end line, the question after it never completed, and
+  20 s later the helper was killed (his log: "didn't answer "modes" in 20 s", "… "windows" …").
+  Now `HelperAnswers` routes those three one-line answers to their own question and everything else
+  to the oldest in-order one; each helper run has its own (a killed helper's last lines can't reach
+  the next). Unit test `HelperAnswersTest` replays the sequence. Java only: the helper is unchanged.
+- The guest's choppy sound / blur (0.15.16 below): her laptop was at 7.2 of 8 GB while playing.
+  His log agrees: every lowering from 03:29 was "a viewer's PC can't play it fast enough", never
+  network; her viewer is on TCP (UDP: 0 packets). A stall from paging → behind → skip to the newest
+  keyframe, which drops the sound too.
+- Next (asked): every app's "own copy on each monitor" optional — Discord, WhatsApp, launchers as
+  removable defaults in "Always run normally"; only anti-cheat games, Store apps and the game
+  itself locked, each with its reason. Plus real app names (version info, not file names), current
+  WhatsApp (`WhatsApp.Root.exe`), no "+"/"another copy" for what already runs normally, and decode
+  trouble not lowering at all when the source is already 720p30.
+
 ## 0.15.16 (16 Oct): a guest sitting still sends your apps nothing; a slow viewer no longer blurs the stream
 
 - **"whenever i leave a show / movie running the time bar keeps popping up … it only happens in

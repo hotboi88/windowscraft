@@ -11,9 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -21,29 +19,32 @@ import net.fabricmc.loader.api.FabricLoader;
 
 /**
  * In-game monitors on Windows, through wc-vdisplay.exe (Parsec Virtual Display Driver). The
- * helper answers commands one at a time, in order; while you sit at a monitor it also reports
+ * helper answers commands one at a time, in order (a few slow ones whenever they're done: see
+ * {@link HelperAnswers}); while you sit at a monitor it also reports
  * the keys the game keeps (Esc, Alt…). If the helper stops, the driver drops its monitors by
  * itself within a second — nothing can be left behind.
  */
 public final class VDisplayHelper implements MonitorBackend {
     private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single", "gkey");
 
-    private record Pending(Set<String> ends, List<String> lines, CompletableFuture<List<String>> done) {}
-
     private Process process;
     private OutputStream stdin;
-    private final Deque<Pending> pending = new ArrayDeque<>();
+    /** The running helper's answers (each helper its own: a stopped one's last lines never reach the next). */
+    private HelperAnswers answers = new HelperAnswers();
     private volatile Events events;
     private boolean everStarted;
 
     @Override public void events(Events e) { events = e; }
 
     private synchronized CompletableFuture<List<String>> call(String command, String... ends) {
-        CompletableFuture<List<String>> f = new CompletableFuture<>();
         try {
             ensure();
-            Pending p = new Pending(Set.of(ends), new ArrayList<>(), f);
-            pending.add(p);
+        } catch (IOException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        HelperAnswers a = answers;
+        CompletableFuture<List<String>> f = a.expect(ends);
+        try {
             stdin.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             stdin.flush();
             // never wait forever: a helper that stops answering is restarted (everything waiting
@@ -55,12 +56,13 @@ public final class VDisplayHelper implements MonitorBackend {
                 if (f.isDone()) return;
                 WindowsCraftClient.LOGGER.warn("The in-game monitor helper didn't answer \"{}\" in {} s: restarting it", command.split("[ \t]")[0], secs);
                 f.completeExceptionally(new IOException("the in-game monitor helper didn't answer (it was restarted: try again)"));
+                a.forget(f);
                 synchronized (VDisplayHelper.this) {
-                    pending.remove(p);
                     if (process == proc && proc != null) proc.destroyForcibly(); // (the reader then fails the rest; the next call starts a fresh one)
                 }
             });
         } catch (IOException e) {
+            a.forget(f);
             f.completeExceptionally(e);
         }
         return f;
@@ -79,13 +81,14 @@ public final class VDisplayHelper implements MonitorBackend {
     private void ensure() throws IOException {
         if (process != null && process.isAlive()) return;
         // whatever the old helper still owed will never come
-        for (Pending x : pending) x.done.completeExceptionally(new IOException("the in-game monitor helper stopped"));
-        pending.clear();
+        answers.failAll(new IOException("the in-game monitor helper stopped"));
+        answers = new HelperAnswers();
+        HelperAnswers a = answers;
         Path exe = extract();
         process = new ProcessBuilder(exe.toString(), "--parent-pid", Long.toString(ProcessHandle.current().pid())).start();
         stdin = process.getOutputStream();
         Process p = process;
-        Thread out = new Thread(() -> read(p), "WindowsCraft in-game monitors");
+        Thread out = new Thread(() -> read(p, a), "WindowsCraft in-game monitors");
         out.setDaemon(true);
         out.start();
         Thread err = new Thread(() -> {
@@ -99,7 +102,7 @@ public final class VDisplayHelper implements MonitorBackend {
         everStarted = true;
     }
 
-    private void read(Process p) {
+    private void read(Process p, HelperAnswers a) {
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             for (String line; (line = r.readLine()) != null; ) {
                 String first = line.split(" ", 2)[0];
@@ -107,25 +110,15 @@ public final class VDisplayHelper implements MonitorBackend {
                     event(line);
                     continue;
                 }
-                Pending done = null;
-                synchronized (this) {
-                    Pending head = pending.peek();
-                    if (head == null) continue;
-                    head.lines.add(line);
-                    if (head.ends.contains(first)) done = pending.poll();
-                }
-                if (done != null) done.done.complete(done.lines);
+                a.line(line);
             }
         } catch (IOException ignored) {
         }
-        List<Pending> left;
         synchronized (this) {
             if (process != p) return; // an older helper: a new one is running already
-            left = new ArrayList<>(pending);
-            pending.clear();
             process = null;
         }
-        for (Pending x : left) x.done.completeExceptionally(new IOException("the in-game monitor helper stopped"));
+        a.failAll(new IOException("the in-game monitor helper stopped"));
         Events e = events;
         if (e != null) e.lost();
     }

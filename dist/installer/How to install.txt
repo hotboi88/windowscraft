@@ -1,4 +1,7 @@
-WindowsCraft 0.15.16 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.17 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.17: opening another copy of an app on a monitor no longer shuts the in-game
+monitors down.
 
 New in 0.15.16: someone sitting at your monitor without moving no longer wakes the video's
 time bar or flickers your hovers. A viewer whose PC can't keep up gets 720p at 30 pictures a
