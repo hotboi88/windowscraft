@@ -115,6 +115,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.30 (16 Oct): a boxed browser opens your desk's sign-ins
+
+- **"sign-ins aren't carrying over."** Browsers built on Chromium (Chrome, Edge, Brave, Vivaldi,
+  Opera, …) lock the sign-ins they save with a key only their own elevation service can open
+  (app-bound encryption: `os_crypt.app_bound_encrypted_key` in Local State; his Brave has one). In a
+  box that service ran inside it as the box's user and couldn't open the key: the box saw the
+  desk's sign-ins and could read none of them. ("Logins follow my desk" never carried a browser's
+  over — the probe had said so all along, as a note: "box 1 starts with your desk login: no".)
+- Every box now runs each such service as SYSTEM inside it (`chromium_elevation_services`: every
+  service whose program is `elevation_service.exe`, whichever browser installed it, in
+  [Template_WCShared]: `SandboxService` + `RunServiceAsSystem`, `OpenSamEndpoint=y`,
+  `UseChromeSecurePreferencesHack=n` — what Sandboxie's own `Template_Chromium_Elevation` does for
+  the browsers it names).
+- Probe section 11 (CI): desk Chrome and Edge signed in and closed; in a plain box `wc[none]`, with
+  the services run as SYSTEM `wc[wclogin=desk]` — both browsers. Self-test: every elevation service
+  on the PC is in the boxes' template.
+
 ## 0.15.29 (16 Oct): own copies box again; no open corners on the monitor's lip
 
 - **"it didn't work. sound went straight from my desktop to the monitor once i opened brave."**

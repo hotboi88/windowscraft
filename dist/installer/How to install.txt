@@ -1,4 +1,7 @@
-WindowsCraft 0.15.29 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.30 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.30: a browser on a monitor (Chrome, Edge, Brave and the like) starts signed in
+like the one on your desk.
 
 New in 0.15.29: own copies work again: what you start on a monitor is its own copy, with its
 own sound. The monitor's corners have no holes.
