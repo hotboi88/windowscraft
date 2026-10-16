@@ -59,6 +59,10 @@ public final class InGameMonitors {
     private static final Set<String> RESTARTING = new HashSet<>();
     private static final Map<UUID, List<Long>> REVIVED = new ConcurrentHashMap<>();
     private static final Map<String, Integer> MISSES = new ConcurrentHashMap<>();
+    /** Monitors we're giving another size right now (the size Windows reports meanwhile is ours). */
+    private static final Set<Integer> SIZING = ConcurrentHashMap.newKeySet();
+    /** When a monitor was last put back to its own size after Windows changed it (index → nanoTime). */
+    private static final Map<Integer, Long> SIZED_BACK = new ConcurrentHashMap<>();
     private static volatile Driver driver;
 
     // ---- which backend --------------------------------------------------------------------------
@@ -333,8 +337,36 @@ public final class InGameMonitors {
                 if (seatedMon != null && seatedMon.index() == fresh.index()) seatedMon = fresh;
                 Sandbox.pushAll();
                 restartShares(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1)));
+                if (fresh.width() != old.width() || fresh.height() != old.height()) keepOwnSize(b, mc, e.getKey(), fresh);
             }
         })).exceptionally(t -> null);
+    }
+
+    /**
+     * Windows now and then gives an in-game monitor another size of its own accord: a layout it
+     * remembers for that set of monitors (a 4096×2160 one became 1920×1080 the moment a second one
+     * joined it). The size you picked is put back — at most once a minute, never fighting Windows.
+     */
+    private static void keepOwnSize(MonitorBackend b, MinecraftClient mc, String id, Mon fresh) {
+        if (SIZING.contains(fresh.index())) return;
+        Display d = null;
+        for (Share s : DisplayManager.get().liveShares()) {
+            if (!s.source().id().equals(id)) continue;
+            for (Display x : s.displays()) if (x.monitorW > 0 && x.monitorH > 0) d = x;
+        }
+        if (d == null || (d.monitorW == fresh.width() && d.monitorH == fresh.height())) return;
+        long now = System.nanoTime();
+        Long last = SIZED_BACK.get(fresh.index());
+        if (last != null && now - last < 60_000_000_000L) return;
+        SIZED_BACK.put(fresh.index(), now);
+        int w = d.monitorW, h = d.monitorH;
+        WindowsCraftClient.LOGGER.info("In-game monitor {} became {}×{} by Windows' doing; putting it back to {}×{}", fresh.index(), fresh.width(), fresh.height(), w, h);
+        SIZING.add(fresh.index());
+        b.setMode(fresh, w, h, HZ).whenComplete((m, err) -> mc.execute(() -> {
+            SIZING.remove(fresh.index());
+            if (err != null) WindowsCraftClient.LOGGER.info("In-game monitor {} couldn't be put back to {}×{}: {}", fresh.index(), w, h, err.toString());
+            refreshRects(mc);
+        }));
     }
 
     private static void restartShares(String id, SourceInfo fresh) {
@@ -874,8 +906,10 @@ public final class InGameMonitors {
         MonitorBackend b = backend();
         MinecraftClient mc = MinecraftClient.getInstance();
         if (m == null || b == null) return CompletableFuture.completedFuture("it isn't on");
+        SIZING.add(m.index());
         return b.setMode(m, w, h, hz).handle((fresh, err) -> {
             mc.execute(() -> {
+                SIZING.remove(m.index());
                 if (err == null) { // (what Windows really made it)
                     d.monitorW = fresh.width();
                     d.monitorH = fresh.height();

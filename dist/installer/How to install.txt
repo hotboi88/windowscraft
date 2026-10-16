@@ -1,4 +1,7 @@
-WindowsCraft 0.15.17 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.18 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.18: changing a monitor's resolution no longer turns every monitor off, and a
+monitor keeps the size you picked.
 
 New in 0.15.17: opening another copy of an app on a monitor no longer shuts the in-game
 monitors down.

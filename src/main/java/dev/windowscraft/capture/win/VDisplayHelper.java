@@ -25,6 +25,8 @@ import net.fabricmc.loader.api.FabricLoader;
  * itself within a second — nothing can be left behind.
  */
 public final class VDisplayHelper implements MonitorBackend {
+    /** After a question's own time is up: how long more the helper may take before it's restarted. */
+    private static final long GRACE_S = 60;
     private static final Set<String> EVENTS = Set.of("esc", "alt", "look", "zoom", "recenter", "mbtn", "mwheel", "altup", "pointlost", "pointok", "pointfail", "seatmove", "gone", "adminapp", "moved", "single", "gkey");
 
     private Process process;
@@ -43,23 +45,31 @@ public final class VDisplayHelper implements MonitorBackend {
             return CompletableFuture.failedFuture(e);
         }
         HelperAnswers a = answers;
-        CompletableFuture<List<String>> f = a.expect(ends);
+        String what = command.split("[ \t]")[0];
+        CompletableFuture<List<String>> f = a.expect(what, ends);
         try {
             stdin.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             stdin.flush();
-            // never wait forever: a helper that stops answering is restarted (everything waiting
-            // on it gets an error to show, instead of U silently doing nothing)
+            // never wait forever: whoever asked gets an error to show after a while, instead of U
+            // silently doing nothing. The helper is restarted only if the answer never comes —
+            // every in-game monitor goes dark with it, and Windows shuffles their windows. (A slow
+            // moment isn't a stuck helper: right after a monitor's resolution changed it went
+            // quiet for over 20 s, and restarting it then turned every monitor off)
             Process proc = process;
             long secs = command.startsWith("install") || command.startsWith("uninstall") || command.startsWith("repair") ? 600 : command.startsWith("add") ? 90
                     : command.startsWith("setmode") || command.startsWith("seat") || command.startsWith("remove") || command.startsWith("box") ? 40 : 20;
             CompletableFuture.delayedExecutor(secs, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
                 if (f.isDone()) return;
-                WindowsCraftClient.LOGGER.warn("The in-game monitor helper didn't answer \"{}\" in {} s: restarting it", command.split("[ \t]")[0], secs);
-                f.completeExceptionally(new IOException("the in-game monitor helper didn't answer (it was restarted: try again)"));
-                a.forget(f);
-                synchronized (VDisplayHelper.this) {
-                    if (process == proc && proc != null) proc.destroyForcibly(); // (the reader then fails the rest; the next call starts a fresh one)
-                }
+                WindowsCraftClient.LOGGER.warn("The in-game monitor helper didn't answer \"{}\" in {} s; giving it {} s more (waiting for: {})", what, secs, GRACE_S, a.describe());
+                f.completeExceptionally(new IOException("the in-game monitor helper is busy (try again in a moment)"));
+                a.giveUp(f);
+                CompletableFuture.delayedExecutor(GRACE_S, java.util.concurrent.TimeUnit.SECONDS).execute(() -> {
+                    if (!a.waiting(f)) return;
+                    WindowsCraftClient.LOGGER.warn("The in-game monitor helper still hasn't answered \"{}\" after {} s: restarting it (waiting for: {})", what, secs + GRACE_S, a.describe());
+                    synchronized (VDisplayHelper.this) {
+                        if (process == proc && proc != null) proc.destroyForcibly(); // (the reader then fails the rest; the next call starts a fresh one)
+                    }
+                });
             });
         } catch (IOException e) {
             a.forget(f);
@@ -82,7 +92,7 @@ public final class VDisplayHelper implements MonitorBackend {
         if (process != null && process.isAlive()) return;
         // whatever the old helper still owed will never come
         answers.failAll(new IOException("the in-game monitor helper stopped"));
-        answers = new HelperAnswers();
+        answers = new HelperAnswers(n -> WindowsCraftClient.LOGGER.info("The in-game monitor helper: {}", n));
         HelperAnswers a = answers;
         Path exe = extract();
         process = new ProcessBuilder(exe.toString(), "--parent-pid", Long.toString(ProcessHandle.current().pid())).start();

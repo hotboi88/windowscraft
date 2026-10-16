@@ -115,6 +115,32 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.18 (16 Oct): a slow helper no longer turns every monitor off; a monitor keeps the size you picked
+
+- **"i just changed the resolution on one monitor and they both shut down (joint monitors)"**
+  (10:26, 10:34, 10:40, all on 0.15.13): each time 20 s after a size change on monitor 0 the
+  next `windows`/`rects` went unanswered — no box command near, so not the 0.15.17 mix-up: the
+  helper's command thread was busy or blocked for 20 s+ (cause not yet known; `fix_misplaced_tray`
+  → `tell_taskbar` broadcasts WM_SETTINGCHANGE at the same moment each time). The game then killed
+  it: the driver drops every monitor, Windows moves their windows to the desk, and its "remember
+  window locations" puts them back on whichever monitor has that UID ("it moved all my windows
+  from the other monitor … onto it"). Now a question that takes too long is given up (the caller
+  gets "busy, try again") but keeps its place (`HelperAnswers.giveUp`: its late answer is dropped,
+  never handed to the next question); the helper is restarted only if it's still silent 60 s
+  later. Both log what's still waiting and, when it does come, how long the answer took — next
+  time the log says how long the stall really is.
+- **Monitor 0 went 4096×2160 → 1920×1080 by itself** the moment monitor 1 joined (Windows'
+  remembered layout for that set of monitors; `UID256+index` is the same "monitor" every time).
+  `keepOwnSize`: when a live monitor's size changes and it isn't ours (`SIZING`), it's set back to
+  the wall's saved `monitorW/H`, at most once a minute per monitor.
+- Still open (helper, needs a rebuild): log any command that takes over 2 s; a taskbar sized for
+  the wrong scale (48 px on a 200 % monitor: "the taskbar cut off in half") counts as misplaced;
+  windows Windows moves onto a newly added monitor go back. Brave's sound stutters on every click
+  between two monitors (one process, windows on both: `SoundHome` hands it over by closing one
+  capture and starting another; MonitorAudio builds it inside `synchronized (feeds)`) — next.
+- The mouse "trapped" after dragging a window to another monitor: fixed in 0.15.14 (e3d3457);
+  he was still on 0.15.13.
+
 ## 0.15.17 (16 Oct): opening a copy no longer shuts the in-game monitors down
 
 - **"Couldn't hand your mouse and keyboard to the in-game monitor: … the in-game monitor helper
