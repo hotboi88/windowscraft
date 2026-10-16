@@ -254,12 +254,16 @@ static LOG: Mutex<Vec<(isize, u32, usize)>> = Mutex::new(Vec::new());
 static GAME_HOLDS: AtomicBool = AtomicBool::new(false);
 static GAME_RESTORE: Mutex<(i32, i32)> = Mutex::new((0, 0));
 static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
+static DISPLAY_CHANGES: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
         | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_CAPTURECHANGED | WM_MOUSEACTIVATE | WM_ACTIVATE | WM_KILLFOCUS | WM_SETFOCUS | WM_CANCELMODE | WM_NCACTIVATE)
     {
         LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
+    }
+    if msg == WM_DISPLAYCHANGE && class_name(h) == "WindowsCraftDisplayWatch" {
+        DISPLAY_CHANGES.fetch_add(1, Ordering::SeqCst); // (each change to the layout of the screens)
     }
     if msg == WM_LBUTTONDOWN {
         // what an app that asks Windows sees: is the left button held?
@@ -1390,6 +1394,74 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             }
         }
         Err(e) => rep.check("a new monitor never comes back with an old one's settings", false, e),
+    }
+
+    // ---- 10b. leaving the world: every monitor off together — one change to your screens, not one
+    //      each ("instead of making my screen go black 10 separate times"); and only what's a
+    //      monitor's own closes with it ("my apps all disappear from my main desktop")
+    let _watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
+    let screens_before = monitors().len();
+    let three: Vec<Mon> = (0..3).filter_map(|_| add(&h, 1920, 1080).ok()).collect();
+    if three.len() == 3 {
+        // Windows moving a desk window onto a monitor as it comes on (it remembers where windows
+        // were): put back
+        let desk_win = spawn_window("WindowsCraftTestWin", "Desk window (self-test)", RECT { left: prim.left + 200, top: prim.top + 150, right: prim.left + 700, bottom: prim.top + 450 }, false);
+        sleep(300);
+        let four = add(&h, 1920, 1080);
+        if let Ok(m4) = &four {
+            let r4 = now_rect(&h, m4.idx).unwrap_or(m4.r);
+            unsafe {
+                let _ = SetWindowPos(desk_win, None, r4.left + 100, r4.top + 100, 500, 300, SWP_NOACTIVATE | SWP_NOZORDER);
+            }
+        }
+        let back = wait_for(4000, || { let (x, y) = center(&rect_of(desk_win)); inside(&prim, x, y) });
+        rep.check("a window Windows moves onto a monitor as it comes on goes back to your desk", four.is_ok() && back, format!("at {}", fmt(&rect_of(desk_win))));
+        close(desk_win);
+        let mut all = three.clone();
+        all.extend(four.ok());
+        sleep(800);
+        // a desk window that ended up on one (not opened there, not brought over by WindowsCraft):
+        // opened on your desk, then moved across as Windows does
+        let visitor = spawn_window("WindowsCraftTestWin", "Ended up on a monitor (self-test)", RECT { left: prim.left + 250, top: prim.top + 200, right: prim.left + 750, bottom: prim.top + 500 }, false);
+        sleep(3500); // (past the "came on" guard: it stays where it is put now)
+        let rc = now_rect(&h, all[2].idx).unwrap_or(all[2].r);
+        unsafe {
+            let _ = SetWindowPos(visitor, None, rc.left + 100, rc.top + 100, 500, 300, SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+        sleep(1000);
+        let (vx, vy) = center(&rect_of(visitor));
+        rep.note(format!("(the visitor window before the monitors go: {} — {})", fmt(&rect_of(visitor)), if inside(&rc, vx, vy) { "on the monitor" } else { "not on it" }));
+        let changes0 = DISPLAY_CHANGES.load(Ordering::SeqCst);
+        let t_off = Instant::now();
+        for m in &all[..all.len() - 1] {
+            h.send(&format!("remove {}", m.idx));
+        }
+        let first = h.call(&format!("remove {}", all[all.len() - 1].idx), "removed", 60000);
+        let mut done = first.as_ref().map_or(0, |l| l.iter().filter(|x| x.starts_with("removed")).count());
+        while done < all.len() {
+            match h.answers.recv_timeout(Duration::from_secs(10)) {
+                Ok(l) if l.starts_with("removed") => done += 1,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let off_ms = t_off.elapsed().as_millis();
+        let _ = wait_for(5000, || monitors().len() == screens_before);
+        sleep(1500); // (late notices)
+        let changes = DISPLAY_CHANGES.load(Ordering::SeqCst) - changes0;
+        rep.note(format!("({} monitors off together in {off_ms} ms: {changes} changes to the screens' layout)", all.len()));
+        rep.check("leaving with several monitors on: they go together, in one change to your screens", done == all.len() && monitors().len() == screens_before && changes <= 1,
+            format!("{done}/{} removed · {changes} layout changes · {} screens now (was {screens_before})", all.len(), monitors().len()));
+        let alive_v = unsafe { IsWindow(Some(visitor)) }.as_bool();
+        let (x, y) = center(&rect_of(visitor));
+        rep.check("…and a window that was on one without being its own comes back to your desk, not closed", alive_v && inside(&prim, x, y),
+            format!("still open {alive_v}, at {}", fmt(&rect_of(visitor))));
+        close(visitor);
+    } else {
+        rep.check("leaving with several monitors on: they go together, in one change to your screens", false, format!("only {} of 3 monitors came on", three.len()));
+        for m in &three {
+            let _ = h.call(&format!("remove {}", m.idx), "removed", 15000);
+        }
     }
 
     // ---- 11. the cursor and text stay the same size at any resolution

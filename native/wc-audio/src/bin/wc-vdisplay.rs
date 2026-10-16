@@ -5572,6 +5572,7 @@ fn uninstaller_exe(cmd: &str) -> String {
 /// One new monitor, placed: the "added …" answer, or why not (and whether a fresh one may work).
 fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<String, (String, bool)> {
     remove_orphans(v, added);
+    let spots = window_spots(); // (where every window was: see keep_windows_put)
     // (right after a monitor went away the driver is still busy with it: asking it for a new one
     // too soon can upset it — so a moment's rest first, and gentle retries)
     let since_change = LAST_DRIVER_CHANGE.lock().unwrap().map_or(Duration::from_secs(60), |t| t.elapsed());
@@ -5684,6 +5685,7 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     taskbars_separate(true);
     ensure_placer();
     rearrange_with(added, idx);
+    keep_windows_put(spots, "a monitor came on");
     let r = rect_of(&device).unwrap_or(r);
     Ok(format!("added {idx} {device} {} {} {} {}", r.left, r.top, r.right - r.left, r.bottom - r.top))
 }
@@ -5725,45 +5727,24 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
             let _ = t.join();
         }
     }
+    // each one's windows (while they're all still there): its own close, any other goes back to
+    // your desk
+    let mut leftovers = Vec::new();
     for &idx in &list {
-        remove_one_with(vdd, added, homes, idx, boxed.len() <= 1);
+        leftovers.extend(clear_monitor(added, homes, idx, boxed.len() <= 1));
     }
-    if list.len() > 1 {
-        eprintln!("info=turned {} in-game monitors off in {} ms", list.len(), t0.elapsed().as_millis());
+    // then off your desktop together: one change to your screens, however many there are (each
+    // one unplugged on its own made every screen go black once per monitor)
+    let devices: Vec<String> = list.iter().filter_map(|i| added.lock().unwrap().get(i).map(|a| a.device.clone())).filter(|d| !d.is_empty() && rect_of(d).is_some()).collect();
+    if devices.len() > 1 {
+        detach_together(&devices);
     }
-}
-
-fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, close_copies: bool) {
-    if SEATED.load(Ordering::SeqCst) {
-        let seated_dev = SEAT_DEVICE.lock().unwrap().clone();
-        if added.lock().unwrap().get(&idx).map_or(false, |a| a.device.eq_ignore_ascii_case(&seated_dev)) {
-            unseat();
-        }
+    let others = window_spots(); // (the monitors that stay, and your desk: Windows may shuffle them)
+    for &idx in &list {
+        unplug(vdd, added, idx);
     }
-    if POINTING.load(Ordering::SeqCst) && SEAT_IDX.load(Ordering::SeqCst) == idx {
-        let _g = POINT_LOCK.lock().unwrap();
-        unpoint();
-    }
-    let since = added.lock().unwrap().get(&idx).map(|a| a.since);
-    if close_copies && isolated(idx) && !box_shared(idx) {
-        close_box(idx, Duration::from_secs(3)); // (its own copies close, as you'd close them; what's left is ended)
-        if follows(idx) {
-            empty_box(&box_name(idx), "its monitor turned off");
-        }
-    }
-    if let Some((_, a)) = our_area(added, idx) {
-        let left = evacuate(idx, &a, homes);
-        if let Some(since) = since {
-            end_leftovers(left, since);
-        }
-    }
-    let had = added.lock().unwrap().remove(&idx);
-    *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
-    if had.is_some() {
-        let v = vdd.lock().unwrap().clone();
-        if let Some(v) = v {
-            v.remove(idx);
-        }
+    // (each one is asked for straight away; then all of them waited for)
+    for &idx in &list {
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline && device_for_index(idx).is_some() {
             std::thread::sleep(Duration::from_millis(50));
@@ -5784,17 +5765,142 @@ fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, clos
             }
         }
     }
+    keep_windows_put(others, "monitors turned off");
+    for (pids, since) in leftovers {
+        end_leftovers(pids, since);
+    }
+    if list.len() > 1 {
+        eprintln!("info=turned {} in-game monitors off in {} ms", list.len(), t0.elapsed().as_millis());
+    }
 }
 
-/// The monitor is turning off: whatever lives on it closes — except windows you brought over
-/// from your desk, which just go back. Everything comes to your desk first, so a "save changes?"
-/// question shows up where you can answer it. Returns the programs whose windows were closed.
+/// Takes these in-game monitors off your desktop in one go: each set aside first, then Windows
+/// told once — one change to the layout of your screens instead of one per monitor. They're
+/// unplugged after, with nothing left on the desktop to rearrange.
+fn detach_together(devices: &[String]) {
+    let t0 = Instant::now();
+    unsafe {
+        for d in devices {
+            let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+            p.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT; // (no size: off the desktop)
+            let dn = wide(d);
+            let r = ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(&p), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
+            if r != DISP_CHANGE_SUCCESSFUL {
+                eprintln!("info=Windows wouldn't set {d} aside ({}): it goes when it's unplugged", r.0);
+            }
+        }
+        step("Windows taking the monitors off the desktop");
+        let applied = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
+        eprintln!("info=took {} in-game monitors off the desktop together ({} ms{})", devices.len(), t0.elapsed().as_millis(),
+            if applied == DISP_CHANGE_SUCCESSFUL { String::new() } else { format!(", Windows said {}", applied.0) });
+    }
+}
+
+/// Where every window is now (on which in-game monitor, if any, and that monitor's place then).
+fn window_spots() -> Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)> {
+    app_windows().into_iter().filter_map(|h| {
+        let on = monitor_of_window(h).and_then(|i| monitor_area(i).map(|a| (i, a)));
+        placement(h).map(|p| (h.0 as isize, on, p))
+    }).collect()
+}
+
+/// Windows moves windows by itself when a monitor comes or goes — back onto a monitor it remembers
+/// ("it moved all my windows from the other monitor i have ingame onto it"), or from one monitor to
+/// another. For a few seconds after, any window that changed monitor without WindowsCraft moving
+/// it goes back where it was: on your desk, or on its in-game monitor (wherever that is now).
+fn keep_windows_put(before: Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)>, why: &'static str) {
+    std::thread::spawn(move || {
+        for wait in [300u64, 1200, 2500] {
+            std::thread::sleep(Duration::from_millis(wait));
+            for (hw, was, p) in &before {
+                let h = HWND(*hw as *mut _);
+                if unsafe { !IsWindow(Some(h)).as_bool() || !IsWindowVisible(h).as_bool() } {
+                    continue;
+                }
+                let now = monitor_of_window(h);
+                if now == was.map(|(i, _)| i) {
+                    continue;
+                }
+                // (one WindowsCraft put somewhere — brought over, placed, started for a monitor — stays)
+                let p_id = pid(h);
+                if HOMES.get().is_some_and(|m| m.lock().unwrap().contains_key(hw)) || now.is_some_and(|i| placed().lock().unwrap().get(hw) == Some(&i) || owned().lock().unwrap().get(&p_id) == Some(&i)) {
+                    continue;
+                }
+                let mut q = *p;
+                match was {
+                    Some((i, old)) => {
+                        // its monitor may have moved meanwhile: the same spot on it
+                        let Some(cur) = monitor_area(*i) else { continue };
+                        let (dx, dy) = (cur.left - old.left, cur.top - old.top);
+                        q.rcNormalPosition = RECT { left: q.rcNormalPosition.left + dx, top: q.rcNormalPosition.top + dy, right: q.rcNormalPosition.right + dx, bottom: q.rcNormalPosition.bottom + dy };
+                    }
+                    None if now.is_none() => continue, // (between your own screens: Windows' business)
+                    None => {}
+                }
+                if q.showCmd != SW_SHOWMAXIMIZED.0 as u32 && q.showCmd != SW_SHOWMINIMIZED.0 as u32 {
+                    q.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+                }
+                q.flags = WINDOWPLACEMENT_FLAGS(0);
+                let before_fg = unsafe { GetForegroundWindow() };
+                unsafe {
+                    let _ = SetWindowPlacement(h, &q);
+                    if !before_fg.0.is_null() && GetForegroundWindow() != before_fg && !SEATED.load(Ordering::SeqCst) {
+                        foreground(before_fg);
+                    }
+                }
+                eprintln!("info=Windows moved \"{}\" ({why}): put back {}", title(h), match was { Some((i, _)) => format!("on in-game monitor {i}"), None => "on your desk".into() });
+            }
+        }
+    });
+}
+
+/// A monitor about to go: you get up from it, its own copies close (when it's the only one
+/// going), its windows are seen to. What it leaves running (ended a few seconds later), if any.
+fn clear_monitor(added: &AddedMap, homes: &Homes, idx: i32, close_copies: bool) -> Option<(Vec<u32>, u64)> {
+    if SEATED.load(Ordering::SeqCst) {
+        let seated_dev = SEAT_DEVICE.lock().unwrap().clone();
+        if added.lock().unwrap().get(&idx).map_or(false, |a| a.device.eq_ignore_ascii_case(&seated_dev)) {
+            unseat();
+        }
+    }
+    if POINTING.load(Ordering::SeqCst) && SEAT_IDX.load(Ordering::SeqCst) == idx {
+        let _g = POINT_LOCK.lock().unwrap();
+        unpoint();
+    }
+    let since = added.lock().unwrap().get(&idx).map(|a| a.since);
+    if close_copies && isolated(idx) && !box_shared(idx) {
+        close_box(idx, Duration::from_secs(3)); // (its own copies close, as you'd close them; what's left is ended)
+        if follows(idx) {
+            empty_box(&box_name(idx), "its monitor turned off");
+        }
+    }
+    let (_, a) = our_area(added, idx)?;
+    let left = evacuate(idx, &a, homes);
+    since.map(|s| (left, s))
+}
+
+/// The monitor unplugged (the driver asked; not waited for here).
+fn unplug(vdd: &Driver, added: &AddedMap, idx: i32) {
+    let had = added.lock().unwrap().remove(&idx);
+    *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
+    if had.is_some() {
+        let v = vdd.lock().unwrap().clone();
+        if let Some(v) = v {
+            v.remove(idx);
+        }
+    }
+}
+
+/// The monitor is turning off: what's its own closes — windows that opened on it or were put
+/// there, apps started for it, its own copies. Anything else on it goes back to your desk: windows
+/// you brought over, and any that ended up there some other way (Windows putting a window back on
+/// a monitor it remembers, a window dragged across). Returns the programs whose windows were closed.
 fn evacuate(idx: i32, a: &RECT, homes: &Homes) -> Vec<u32> {
-    let _ = idx;
     let wins = app_windows();
     // a program with a window off this monitor too (your desk Brave with a window here) keeps
     // running: only its windows here close
     let elsewhere: Vec<u32> = wins.iter().filter(|h| !on_area(**h, a)).map(|h| pid(*h)).collect();
+    let own_box = isolated(idx).then(|| box_name(idx));
     let mut closed = Vec::new();
     for h in wins {
         if !on_area(h, a) {
@@ -5804,12 +5910,22 @@ fn evacuate(idx: i32, a: &RECT, homes: &Homes) -> Vec<u32> {
             send_home(h, homes); // brought over from your desk: back it goes
             continue;
         }
+        let p = pid(h);
+        let own = placed().lock().unwrap().get(&(h.0 as isize)) == Some(&idx)
+            || owned().lock().unwrap().get(&p) == Some(&idx)
+            || own_box.as_ref().is_some_and(|b| box_of(p).eq_ignore_ascii_case(b));
+        if !own {
+            // your desk's, wherever it came from: closing it would end the app with it ("my apps
+            // all disappear from my main desktop sometimes when i close the game")
+            eprintln!("info=\"{}\" was on in-game monitor {idx} without being its own: back to your desk", title(h));
+            send_home(h, homes);
+            continue;
+        }
         // the monitor's own: closed where it is, never put on your desk first ("monitors should
         // destroy all their processes / apps along with them")
         unsafe {
             let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
-        let p = pid(h);
         if !closed.contains(&p) && !elsewhere.contains(&p) {
             closed.push(p);
         }
