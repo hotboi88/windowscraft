@@ -115,6 +115,30 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.29 (16 Oct): own copies box again; no open corners on the monitor's lip
+
+- **"it didn't work. sound went straight from my desktop to the monitor once i opened brave."**
+  The helper's box work had frozen for good. When the game sends its exceptions again (it does
+  whenever it lays the monitors out, and when its anti-cheat scan is done) every box made so far is
+  written again — in a `for` over `BOXES_MADE.lock().unwrap().clone()`, whose lock lives for the
+  whole loop, and `ensure_box` locks it again: that thread waited on itself, and every thread that
+  touched a box after it waited behind it, the one moving the rule with your seat included. So
+  nothing you started was a monitor's own copy: the Brave you opened on a monitor was your desk's
+  Brave, and the monitor took its sound. Found on the live helper: its threads' stacks, read
+  without stopping it (each thread suspended for a moment), named with a build of the same code
+  that kept its symbols (`-C strip=none` in RUSTFLAGS leaves the code byte-identical; the profile's
+  `strip` changes the layout) — ten threads in `Mutex<Vec<String>>::lock`, under `ensure_box` and
+  the force thread.
+- Fix: `note_box` / `boxes_made`, the list never locked while anything else runs. Two more locks no
+  longer held across calls: the worked-out folders (`force_folders`) and the driver handle when a
+  monitor is removed again.
+- The watchdog now says when the thread that moves the rule with you hasn't gone round for 10 s
+  ("own copies: the rule that boxes what you start hasn't followed you…"), and when it does again.
+- Self-test, step 4b: the exceptions (and a box's options) sent again once both boxes exist; the
+  rule still follows you to A, and on to B. (The old helper froze right there.)
+- **"the monitor blocks have these weird corner holes"**: the lip's top and bottom bars (0.15.22)
+  had no end faces, an open notch at each corner. They have them now, in all three models.
+
 ## 0.15.28 (16 Oct): own copies set up per monitor; joined monitors share one box
 
 - **"a set of advanced settings … per monitor … do you even want files to save"** and **"when a

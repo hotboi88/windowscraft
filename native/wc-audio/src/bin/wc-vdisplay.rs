@@ -3240,7 +3240,22 @@ static ISO_DIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_APPDIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The box the force rule is on right now (where new programs land), if any.
 static FORCED: Mutex<Option<String>> = Mutex::new(None);
+/// The boxes made so far. Only through `note_box` and `boxes_made`: never locked while anything
+/// else runs (a loop over it, written with the lock held, once called `ensure_box` — which locks it
+/// again — and froze every thread that touched a box; nothing was boxed after that).
 static BOXES_MADE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn note_box(name: &str) {
+    let mut made = BOXES_MADE.lock().unwrap_or_else(|e| e.into_inner());
+    if !made.iter().any(|b| b.eq_ignore_ascii_case(name)) {
+        made.push(name.to_string());
+    }
+}
+
+fn boxes_made() -> Vec<String> { BOXES_MADE.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+
+/// When the thread that moves the rule with you last went round (see command_watchdog).
+static ISO_BEAT: Mutex<Option<Instant>> = Mutex::new(None);
 static ISO_THREAD: AtomicBool = AtomicBool::new(false);
 static ISO_DIRTY: AtomicBool = AtomicBool::new(false);
 // Only what can't run in a box: Windows itself (Explorer, Task Manager, Settings, installers) and
@@ -3646,12 +3661,13 @@ fn carve(max_depth: u32, budget: usize) -> Vec<String> {
 /// only if that hasn't happened yet is it waited for, briefly).
 fn force_folders() -> Vec<String> {
     let sig = carve_sig();
-    if let Some((s, at, v)) = CARVED.lock().unwrap().as_ref() {
-        if *s == sig {
+    let have = CARVED.lock().unwrap().clone(); // (not held while anything else runs)
+    if let Some((s, at, v)) = have {
+        if s == sig {
             if at.elapsed() > Duration::from_secs(300) {
                 refresh_carve();
             }
-            return v.clone();
+            return v;
         }
     }
     refresh_carve();
@@ -3938,9 +3954,7 @@ fn ensure_templates(force_too: bool) {
 }
 
 fn ensure_box(name: &str) {
-    if !BOXES_MADE.lock().unwrap().iter().any(|b| b == name) {
-        BOXES_MADE.lock().unwrap().push(name.to_string());
-    }
+    note_box(name);
     let forced = FORCED.lock().map(|f| f.as_deref() == Some(name)).unwrap_or(false);
     ensure_templates(forced);
     set_section(name, &box_settings(name, forced));
@@ -3975,9 +3989,7 @@ fn set_force(to: Option<String>) {
         }
     }
     if let Some(b) = to.as_ref() {
-        if !BOXES_MADE.lock().unwrap().iter().any(|x| x == b) {
-            BOXES_MADE.lock().unwrap().push(b.clone());
-        }
+        note_box(b);
         ensure_templates(true);
         set_section(b, &box_settings(b, true));
     }
@@ -4010,6 +4022,7 @@ fn ensure_iso_thread() {
     std::thread::spawn(|| {
         let mut ticks = 0u32;
         loop {
+            *ISO_BEAT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
             std::thread::sleep(Duration::from_millis(60));
             let want = wanted_force();
             set_force(want);
@@ -4924,15 +4937,29 @@ fn step(what: &'static str) {
 }
 
 /// Every 5 s: a command running for over 10 s is named in the log, with its last step — a stuck
-/// helper says where it's stuck (the game restarts it after 80 s, and with it every monitor).
+/// helper says where it's stuck (the game restarts it after 80 s, and with it every monitor). So is
+/// the thread that moves the own-copies rule with you, if it stops going round (nothing you start
+/// is then a monitor's own copy, and nothing else would say so).
 fn command_watchdog() {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(5));
-        let cur = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if let Some((cmd, since, at)) = cur {
-            if since.elapsed() > Duration::from_secs(10) {
-                eprintln!("info=still on \"{cmd}\" after {} s{}", since.elapsed().as_secs(), if at.is_empty() { String::new() } else { format!(" ({at})") });
+    std::thread::spawn(|| {
+        let mut told = false;
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let cur = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some((cmd, since, at)) = cur {
+                if since.elapsed() > Duration::from_secs(10) {
+                    eprintln!("info=still on \"{cmd}\" after {} s{}", since.elapsed().as_secs(), if at.is_empty() { String::new() } else { format!(" ({at})") });
+                }
             }
+            let beat = *ISO_BEAT.lock().unwrap_or_else(|e| e.into_inner());
+            let stuck = beat.map_or(false, |b| b.elapsed() > Duration::from_secs(10));
+            if stuck && !told {
+                eprintln!("info=own copies: the rule that boxes what you start hasn't followed you for {} s (apps start as your desk's meanwhile)",
+                    beat.map_or(0, |b| b.elapsed().as_secs()));
+            } else if !stuck && told {
+                eprintln!("info=own copies: the rule follows you again");
+            }
+            told = stuck;
         }
     });
 }
@@ -5312,7 +5339,8 @@ fn main() {
                 let idx = n(1) as i32;
                 let o = BoxOpts { follow: p.get(2) != Some(&"0"), desk_files: p.get(3) != Some(&"0") };
                 let old = OPTS.lock().unwrap().get_or_insert_with(HashMap::new).insert(idx, o);
-                if old.map_or(true, |x| x.follow != o.follow || x.desk_files != o.desk_files) && sbie_dir().is_some() && BOXES_MADE.lock().unwrap().iter().any(|b| b.eq_ignore_ascii_case(&box_name(idx))) {
+                let b = box_name(idx);
+                if old.map_or(true, |x| x.follow != o.follow || x.desk_files != o.desk_files) && sbie_dir().is_some() && boxes_made().iter().any(|x| x.eq_ignore_ascii_case(&b)) {
                     std::thread::spawn(move || {
                         ensure_box(&box_name(idx));
                         reload_conf();
@@ -5333,7 +5361,7 @@ fn main() {
                 // in-game monitor went dark when the game restarted it
                 std::thread::spawn(|| {
                     let _ = sbie_query("GlobalSettings", "FileRootPath", 0); // (Sandboxie's interface loaded)
-                    for b in BOXES_MADE.lock().unwrap().clone() {
+                    for b in boxes_made() {
                         ensure_box(&b);
                     }
                     let t0 = Instant::now();
@@ -5685,7 +5713,8 @@ fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, clos
         if device_for_index(idx).is_some() {
             // didn't take: ask again (it must never be left behind)
             eprintln!("info=the in-game monitor {idx} is still there; removing it again");
-            if let Some(v) = vdd.lock().unwrap().clone() {
+            let v = vdd.lock().unwrap().clone(); // (not held while the driver is asked)
+            if let Some(v) = v {
                 v.remove(idx);
             }
             let deadline = Instant::now() + Duration::from_secs(3);

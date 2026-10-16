@@ -122,6 +122,24 @@
             10.5
           ],
           "texture": "#back"
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            0.5,
+            1
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            0.5,
+            1
+          ],
+          "texture": "#body"
         }
       },
       "rotation": {
@@ -173,6 +191,24 @@
             10.5
           ],
           "texture": "#back"
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            0.5,
+            1.125
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            0.5,
+            1.125
+          ],
+          "texture": "#body"
         }
       },
       "rotation": {

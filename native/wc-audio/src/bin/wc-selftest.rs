@@ -1937,6 +1937,31 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     rep.check("…an app started at B runs in B's box, on B", wb.is_some() && inb.contains(&wb.map_or(0, pid)) && !ina.contains(&wb.map_or(0, pid)) && on_b,
         format!("window {:?} at {} · A's box {ina:?} · B's box {inb:?}", wb.map(pid), wb.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
     rep.check("…and A's app is still A's, on A", wa.map_or(false, |w| ina.contains(&pid(w)) && !inb.contains(&pid(w))) && on(wa, &ra), format!("A's box {ina:?}"));
+    // 4b. the game sends its exceptions again — it does whenever it lays the monitors out, and when
+    //     its anti-cheat scan is done — now that both boxes exist (each is written again): the rule
+    //     still follows you. (A lock held over that rewrite once froze the helper's box work for
+    //     good: from then on nothing you started was a monitor's own copy.)
+    exceptions(&h);
+    sleep(1500);
+    h.send(&format!("boxopts {} 1 1", ma.idx));
+    let _ = h.call("unseat", "unseated", 8000);
+    let s = seat(&h, ma.idx);
+    let mut rules = ini_forced();
+    let _ = wait_for(8000, || {
+        rules = ini_forced();
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
+    });
+    let live = h.call("forcestate", "forcestate", 3000).ok().and_then(|l| l.last().cloned()).unwrap_or_default();
+    rep.check("the exceptions sent again once the boxes exist: the rule still follows you (back at A: A's box)",
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))) && live.eq_ignore_ascii_case(&format!("forcestate WC{ka}")),
+        format!("{s:?} · {} rules · {live}", rules.len()));
+    let _ = h.call("unseat", "unseated", 8000);
+    let s = seat(&h, mb.idx);
+    let _ = wait_for(8000, || {
+        rules = ini_forced();
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
+    });
+    rep.check("…and on to B again: B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {} rules", rules.len()));
     // 5. own copies off everywhere: no rule even while sitting
     h.send(&format!("isolate {} 0", ma.idx));
     h.send(&format!("isolate {} 0", mb.idx));
