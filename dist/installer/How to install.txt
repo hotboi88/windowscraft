@@ -1,4 +1,7 @@
-WindowsCraft 0.15.22 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.23 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.23: a friend's clicks on your monitors count as held in more apps; turning on a new
+monitor no longer takes an app's sound from the monitor it plays on.
 
 New in 0.15.22: every app you start at a monitor is its own copy there (Discord and launchers
 too), apps show their real names, and a gaming monitor's picture sits behind its frame.

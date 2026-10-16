@@ -281,16 +281,39 @@ impl Input {
         self.post(h, WM_MOUSEMOVE, self.modifiers(), lp(x, y));
     }
 
+    /// The button as the app sees it when it asks Windows (GetKeyState): held while the guest
+    /// holds it. Many apps check that before they take a click or start a drag, and a posted
+    /// message alone left it up. Only in the app's own shared input state (attached), never
+    /// while you're using that app yourself (that state would be yours).
+    fn button_state(&mut self, vk: u16, down: bool) {
+        if !self.attached || !self.valid() {
+            return;
+        }
+        let mut state = [0u8; 256];
+        unsafe {
+            if GetKeyboardState(&mut state).is_err() {
+                return;
+            }
+            if down {
+                state[vk as usize] |= 0x80;
+            } else {
+                state[vk as usize] &= !0x80;
+            }
+            let _ = SetKeyboardState(&state);
+        }
+    }
+
     fn button(&mut self, which: &str, down: bool, nx: f64, ny: f64) {
-        let (flag, dn, up, dbl, xbtn) = match which {
-            "l" => (MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDBLCLK, 0),
-            "r" => (MK_RBUTTON, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_RBUTTONDBLCLK, 0),
-            "m" => (MK_MBUTTON, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MBUTTONDBLCLK, 0),
-            "x1" => (MK_XBUTTON1, WM_XBUTTONDOWN, WM_XBUTTONUP, WM_XBUTTONDBLCLK, 1),
-            "x2" => (MK_XBUTTON2, WM_XBUTTONDOWN, WM_XBUTTONUP, WM_XBUTTONDBLCLK, 2),
+        let (flag, dn, up, dbl, xbtn, vk) = match which {
+            "l" => (MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDBLCLK, 0, VK_LBUTTON.0),
+            "r" => (MK_RBUTTON, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_RBUTTONDBLCLK, 0, VK_RBUTTON.0),
+            "m" => (MK_MBUTTON, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MBUTTONDBLCLK, 0, VK_MBUTTON.0),
+            "x1" => (MK_XBUTTON1, WM_XBUTTONDOWN, WM_XBUTTONUP, WM_XBUTTONDBLCLK, 1, VK_XBUTTON1.0),
+            "x2" => (MK_XBUTTON2, WM_XBUTTONDOWN, WM_XBUTTONUP, WM_XBUTTONDBLCLK, 2, VK_XBUTTON2.0),
             _ => return,
         };
         let (h, x, y) = self.locate(nx, ny);
+        self.button_state(vk, down);
         if down {
             if self.buttons == 0 {
                 self.capture = Some(h);

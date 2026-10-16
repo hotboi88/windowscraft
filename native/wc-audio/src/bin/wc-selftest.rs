@@ -261,6 +261,11 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     {
         LOG.lock().unwrap().push((h.0 as isize, msg, w.0));
     }
+    if msg == WM_LBUTTONDOWN {
+        // what an app that asks Windows sees: is the left button held?
+        let held = unsafe { GetKeyState(VK_LBUTTON.0 as i32) } < 0;
+        BUTTON_SEEN.lock().unwrap().push((h.0 as isize, held));
+    }
     match msg {
         WM_ACTIVATE if class_name(h) == "GLFW30" && GAME_HOLDS.load(Ordering::SeqCst) => unsafe {
             if (w.0 & 0xFFFF) != 0 {
@@ -1574,6 +1579,9 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
 
 /// Two people using windows at once through wc-input (as guests do): each their own target,
 /// held buttons and keys — and your own cursor and front window never move.
+/// (window, whether the left button showed as held to GetKeyState) at each WM_LBUTTONDOWN.
+static BUTTON_SEEN: Mutex<Vec<(isize, bool)>> = Mutex::new(Vec::new());
+
 fn guests(rep: &mut Report, dir: &std::path::Path, rb: &RECT) {
     let rb = *rb;
     let w1 = spawn_window("WindowsCraftTestWin", "Guest 1's app (self-test)", RECT { left: rb.left + 100, top: rb.top + 100, right: rb.left + 800, bottom: rb.top + 600 }, false);
@@ -1584,6 +1592,7 @@ fn guests(rep: &mut Report, dir: &std::path::Path, rb: &RECT) {
     match Command::new(dir.join("wc-input.exe")).args(["--parent-pid", &std::process::id().to_string()]).stdin(Stdio::piped()).spawn() {
         Ok(mut inp) => {
             LOG.lock().unwrap().clear();
+            BUTTON_SEEN.lock().unwrap().clear();
             {
                 let s = inp.stdin.as_mut().unwrap();
                 let mut say = |l: String| {
@@ -1617,6 +1626,10 @@ fn guests(rep: &mut Report, dir: &std::path::Path, rb: &RECT) {
             let held = matches!((up1, key1), (Some(u), Some(k)) if u > k);
             rep.check("two people at once: each one's clicks and keys reach only their own window", ok1 && ok2, format!("guest 1 got {l1:?}; guest 2 got {l2:?}"));
             rep.check("…and one clicking never lets go of the other's held button", held, format!("{l1:?}"));
+            // apps that ask Windows whether the button is down (before taking a click or a drag)
+            let seen = BUTTON_SEEN.lock().unwrap().clone();
+            let shows = seen.iter().any(|(h, b)| *h == w1.0 as isize && *b);
+            rep.check("…and to an app that asks Windows, the guest's button shows as held", shows, format!("{seen:?}"));
             rep.check("…and your own cursor and window never moved", cursor() == my_cursor && foreground_root() == my_front,
                 format!("cursor {:?} → {:?}; front {} → {}", my_cursor, cursor(), title(my_front), title(foreground_root())));
             // a guest still holds Shift on their window when you sit down and type there yourself:

@@ -115,6 +115,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.23 (16 Oct): a guest's held button shows as held; a new monitor doesn't take an app's sound; 720p30 kept
+
+- **Guests' clicks, the safe upgrade** (he chose it over pen/touch injection, which takes the
+  game's focus): wc-input sets the button in the app's own shared key state while the guest
+  holds it (`button_state`: GetKeyboardState/SetKeyboardState while attached — never while
+  you're in that app), so apps that ask `GetKeyState` before taking a click or a drag see it.
+  Self-test: "…and to an app that asks Windows, the guest's button shows as held". Still to try
+  ("another reliable way for real input without pausing my focus"): pen injection with the
+  target made `WS_EX_NOACTIVATE` for the moment, or UI Automation Invoke at the point.
+- **"i'm not even using brave … on a new monitor i created but i can hear it from" there**: an app
+  on several monitors, not yet used on any, played from the first monitor by source id. Now from
+  the one it was on first (`SoundHome.FIRST`), until it's used on another.
+- Streams: decode trouble no longer lowers a stream that's already ≤ 30 fps at ≤ 720 lines
+  (`lightAlready`): those steps only cut bits — a blurrier picture, not a lighter one.
+- He was still on 0.15.18 when "starting the second monitor on joint monitors doesn't work" and
+  "all the monitors shut off" (12:20): the stuck helper 0.15.21 fixed; 0.15.22 installed 12:36.
+
 ## 0.15.22 (16 Oct): every app its own copy by default; real app names; the screen behind the lip
 
 - **"make it so all apps run sandboxed by default"**: own copies were already on for every new
