@@ -150,6 +150,13 @@ Four things the owner hit while playing (his game open; nothing tested on his sc
   monitor, that fallback puts it on your monitor instead; and a window rule 2 passed over only
   for being small is looked at again 0.3 s and 1.2 s later (Steam sizes its window after showing
   it) and comes to your monitor once it has its size. Self-test 6c.
+- Server Distant Horizons throttled live from the console (the owner's "distant horizons … still
+  makes me lag"): `dh config threading.numberOfThreads 2`, `threading.threadRunTimeRatio 0.5`,
+  `generation.maxRequestDistance 320` (were 10 / 1.0 / 4096; saved to its config). It was building
+  far terrain on 4.3 cores of the same PC; 1.8 after.
+- CI: sandbox-probe flaked twice on timing ("…and opens on monitor A": the move landed after the
+  check looked — the check now waits up to 3 s; "sitting at monitor B: the rule moved to B's box":
+  read before the rule switched), green on the third run. 4/4 green.
 - wc-vdisplay.exe (GNU) and wc-selftest.exe (MSVC, static CRT) rebuilt with the path remaps: neither
   carries the build PC's user folder any more.
 
