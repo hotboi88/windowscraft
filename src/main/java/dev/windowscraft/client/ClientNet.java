@@ -23,6 +23,13 @@ public final class ClientNet {
     private static volatile String relayHost = "127.0.0.1";
     private static final Map<UUID, Ack> acks = new ConcurrentHashMap<>();
 
+    /** Flips the shader pack on screens for everyone on this server; false if the server can't take it. */
+    public static boolean setScreensShadedForEveryone(boolean on) {
+        if (!ClientPlayNetworking.canSend(Payloads.ScreensShaded.ID)) return false;
+        ClientPlayNetworking.send(new Payloads.ScreensShaded(on));
+        return true;
+    }
+
     public static void init() {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, mc) -> {
             hello = null;
@@ -34,6 +41,7 @@ public final class ClientNet {
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> {
             hello = null;
+            dev.windowscraft.config.ClientSettings.serverScreensShaded(null);
             relayUdpPort = 0;
             acks.clear();
             mc.execute(RemoteDisplays::clear);
@@ -47,6 +55,8 @@ public final class ClientNet {
             WindowsCraftClient.LOGGER.info("Server runs WindowsCraft; relay at {}:{}", relayHost, p.relayPort());
         });
         ClientPlayNetworking.registerGlobalReceiver(Payloads.RelayInfo.ID, (p, ctx) -> relayUdpPort = p.udpPort());
+        // the shader pack on screens: the server's setting, for everyone
+        ClientPlayNetworking.registerGlobalReceiver(Payloads.ScreensShaded.ID, (p, ctx) -> dev.windowscraft.config.ClientSettings.serverScreensShaded(p.on()));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.AnnounceAck.ID, (p, ctx) -> acks.put(p.displayId(), new Ack(p.relayOpen(), p.message())));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.DisplayState.ID, (p, ctx) -> ctx.client().execute(() -> RemoteDisplays.upsert(p)));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.DisplayGone.ID, (p, ctx) -> ctx.client().execute(() -> RemoteDisplays.remove(p.displayId())));

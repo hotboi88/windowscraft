@@ -55,7 +55,9 @@ public final class SoundHome {
             com.sun.jna.platform.win32.WinDef.RECT r = new com.sun.jna.platform.win32.WinDef.RECT();
             if (p.getValue() <= 0 || !com.sun.jna.platform.win32.User32.INSTANCE.GetWindowRect(h, r)) return;
             String m = InGameMonitors.sourceIdAt((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-            usedOn(p.getValue(), m);
+            char[] cls = new char[64];
+            int n = com.sun.jna.platform.win32.User32.INSTANCE.GetClassName(h, cls, cls.length);
+            usedOn(dev.windowscraft.capture.win.WinGdiBackend.soundPid(h, new String(cls, 0, Math.max(0, n)), p.getValue()), m);
         } catch (Throwable ignored) {
         }
     }

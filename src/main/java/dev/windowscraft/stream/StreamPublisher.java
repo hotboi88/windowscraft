@@ -120,6 +120,7 @@ public final class StreamPublisher {
     private volatile boolean triedUp; // a step back up already failed: stay down for this share
     private volatile int videoSkips; // CPU path: the encoder couldn't take the frames in time
     private static final int MAX_LEVEL = 4;
+    private static final int STREAM_MAX_H = Integer.getInteger("windowscraft.streamMaxHeight", 1080);
     // GPU mode: FFmpeg sends back a small preview for your own wall (newest frame wins)
     private final AtomicReference<Frame> preview = new AtomicReference<>();
     private final dev.windowscraft.capture.FramePool previewPool = new dev.windowscraft.capture.FramePool();
@@ -438,6 +439,10 @@ public final class StreamPublisher {
         double scale = Math.min(1.0, Math.min(Ffmpeg.MAX_STREAM_W / (double) w, Ffmpeg.MAX_STREAM_H / (double) h));
         // (your own wall may show an in-game monitor at its full size: the stream keeps the size you picked)
         if (settings.maxHeight() > 0 && h > settings.maxHeight()) scale = Math.min(scale, settings.maxHeight() / (double) h);
+        // at most 1080 lines for the people watching: a 4K monitor's own wall stays 4K (it doesn't
+        // use the stream), but 4K pictures were ~12 MB each for a viewer's PC to take in — three
+        // screens took a laptop down to 15 fps
+        if (h * scale > STREAM_MAX_H) scale = STREAM_MAX_H / (double) h;
         int ew = Math.max(2, (int) (w * scale) & ~1), eh = Math.max(2, (int) (h * scale) & ~1);
         if (gpuAttempt >= 1 && !gpuFailed) { // second GPU try: sizes the GPU's converter always accepts
             ew = Math.max(16, ew & ~15);

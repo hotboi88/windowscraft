@@ -135,6 +135,23 @@ public final class StreamSubscriber implements FrameSource {
         }
     }
 
+    /**
+     * Another of the screens you see is nearer: this one plays light (30 pictures a second, at
+     * most 720 lines) — so each screen someone puts up costs this PC little, and the one you're
+     * watching stays smooth. Back to full when it's the nearest again (not if this PC fell behind).
+     */
+    public void playLight(boolean on) {
+        if (on == light || (!on && !lightByRank)) return;
+        if (on && fps <= 30 && height <= 720) return; // (already that light)
+        light = on;
+        lightByRank = on;
+        quickRestart = true;
+        WindowsCraftClient.LOGGER.info("Viewer for {}: {}", streamId.substring(0, 8), on ? "another screen is nearer, playing it light" : "the nearest screen again, full pictures");
+        Process p = ffmpeg;
+        if (p != null) p.destroyForcibly(); // rebuilt right away with the new settings
+    }
+
+    private volatile boolean lightByRank;
     private volatile boolean quickRestart;
     /** UDP didn't get through for this stream (a firewall): TCP from now on. */
     private volatile boolean udpOff;
@@ -336,7 +353,12 @@ public final class StreamSubscriber implements FrameSource {
         // upload; 1–1.5 cores at 1080p60 with the conversion). BGRA while that isn't set up yet, or
         // if it doesn't work on this PC.
         boolean nv12 = dev.windowscraft.render.Nv12Converter.ready();
-        int ow = nv12 ? width & ~1 : width, oh = nv12 ? height & ~1 : height;
+        int sw = width, sh = height;
+        if (light && sh > 720) { // (light playback: at most 720 lines too)
+            sw = Math.max(2, (int) Math.round(width * 720.0 / height));
+            sh = 720;
+        }
+        int ow = nv12 ? sw & ~1 : sw, oh = nv12 ? sh & ~1 : sh;
         planes = nv12;
         outW = ow;
         outH = oh;

@@ -29,6 +29,9 @@ final class MonitorAudio extends AudioCapture {
     private final SourceInfo source;
     private final boolean hearInGame;
     private final Map<Long, Feed> feeds = new HashMap<>();
+    /** App → how many looks in a row it wasn't on the monitor (its capture stops after GONE_AFTER). */
+    private final Map<Long, Integer> missing = new HashMap<>();
+    private static final int GONE_AFTER = 3; // (~2 s: a look while monitors are added and laid out can miss it)
     private final Thread mixer, watcher;
     private volatile boolean running = true;
 
@@ -72,8 +75,9 @@ final class MonitorAudio extends AudioCapture {
                     // an app on several monitors is heard where it was last used on one (Windows
                     // can't split one program's sound by window); your desk never takes it
                     SoundHome.seen(source.id(), pids);
+                    Set<Long> onIt = Set.copyOf(pids);
                     pids.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));
-                    update(pids);
+                    update(pids, onIt);
                 } catch (Exception e) {
                     WindowsCraftClient.LOGGER.debug("monitor audio: couldn't list apps", e);
                 }
@@ -86,10 +90,22 @@ final class MonitorAudio extends AudioCapture {
         }
     }
 
-    private void update(Set<Long> pids) {
+    private void update(Set<Long> pids, Set<Long> onIt) {
         synchronized (feeds) {
             for (Long pid : new HashSet<>(feeds.keySet())) {
-                if (!pids.contains(pid)) feeds.remove(pid).helper.close(); // gone from the monitor: its volume comes back
+                if (pids.contains(pid)) {
+                    missing.remove(pid);
+                    continue;
+                }
+                // its sound belongs to another monitor now: it goes at once (never two walls at a
+                // time). Gone from this one: only after a few looks in a row — one look while
+                // monitors are added and laid out again can come back without it, and closing the
+                // capture then gave its volume back: the sound jumped to your desk for a moment
+                int n = onIt.contains(pid) ? GONE_AFTER : missing.merge(pid, 1, Integer::sum);
+                if (n >= GONE_AFTER) {
+                    missing.remove(pid);
+                    feeds.remove(pid).helper.close(); // gone from the monitor: its volume comes back
+                }
             }
             for (Long pid : pids) {
                 if (feeds.containsKey(pid) || !running) continue;

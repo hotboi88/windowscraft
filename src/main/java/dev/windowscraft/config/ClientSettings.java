@@ -42,7 +42,7 @@ public final class ClientSettings {
     private static CaptureSettings current;
     private static boolean remoteDirect;
     private static double ownVolume = 1.0;
-    private static boolean screensWithoutShaders = true;
+    private static boolean screensWithoutShaders = false;
     private static double pointerSpeed = 1.0;
     /** Your upload for screens, shared among the ones people are watching (kbit/s). */
     private static int uploadKbps = 10_000;
@@ -115,17 +115,35 @@ public final class ClientSettings {
         set(current);
     }
 
-    /** Draw screens with their true colours, untouched by shader packs (default on). */
+    /**
+     * Draw screens with their true colours, untouched by shader packs? On a WindowsCraft server
+     * that's one setting for everyone (the server's: shaded unless someone turned it off), and
+     * flipping it flips it for everyone. Elsewhere, your own (shaded by default).
+     */
     public static boolean screensWithoutShaders() {
+        Boolean server = serverShaded;
+        if (server != null) return !server;
         get();
         return screensWithoutShaders;
     }
 
     public static void setScreensWithoutShaders(boolean on) {
+        if (serverShaded != null && dev.windowscraft.client.ClientNet.setScreensShadedForEveryone(!on)) {
+            serverShaded = !on; // (the server tells everyone, us included, straight after)
+            return;
+        }
         get();
         screensWithoutShaders = on;
         set(current);
     }
+
+    /** Is the shader-pack-on-screens setting the server's (everyone's)? */
+    public static boolean screensShadedForEveryone() { return serverShaded != null; }
+
+    /** The server's setting for everyone (null: not on a server that has one). */
+    private static volatile Boolean serverShaded;
+
+    public static void serverScreensShaded(Boolean on) { serverShaded = on; }
 
     /**
      * Direct GPU sharing for your own walls (Windows). Automatic: on, wherever this PC's check

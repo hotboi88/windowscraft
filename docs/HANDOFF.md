@@ -115,6 +115,39 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.15 (16 Oct): a monitor's sound never leaves it; viewers' cost capped; shaders on screens for everyone
+
+- **"the audio still goes straight to my main desktop when i create a new monitor. i dont want a
+  monitor's audio to ever leave that monitor."** (His game was still 0.15.13: he restarted it
+  inside the old watcher's 15 s look, so 0.15.14's SoundHome fix never went in; the PC watcher now
+  looks every second: `scratchpad/client-swap-fast.ps1`, jar from `scratchpad/ready`.) Two more
+  ways found:
+  - Store apps (Media Player, Netflix…): the window is ApplicationFrameHost's, the sound the app's
+    own process. `windows`/`deskwindows` reported the frame host's pid, so wc-audio captured (and
+    turned down) nothing and the film played on the desk. `sound_pid` (wc-vdisplay) and
+    `WinGdiBackend.soundPid` (window shares, SoundHome) take the pid of the window inside the
+    frame (Windows.UI.Core.CoreWindow). Seen live: wc-audio on ApplicationFrameHost.exe while
+    Microsoft.Media.Player.exe played.
+  - `MonitorAudio` closed an app's capture the first time a look at the monitor came back without
+    it (monitors being added and laid out again) — its volume came back for a moment. Now only
+    after 3 looks in a row (~2 s); handing it to another monitor is still at once.
+- **Own copies (Sandboxie) per monitor** are on by default already (`Display.ownCopies = true`),
+  but Sandboxie-Plus was never set up on his PC (not installed; no "new programs now start in
+  box" in his log). That needs his one click (U → Own copies of apps → Set up; Windows asks once).
+- **vnill at 15 fps "just by me having my screens up".** His log: streams of 3840×2024@60 (two)
+  and 1800×1200@60 to her laptop at once; her PC reported it couldn't keep up, and quality came
+  down one step, one stream at a time, minutes later. Each 4K picture is ~12 MB through her game
+  (NV12 after the decoder) — ~1.2 GB/s for three. Now: streams at most 1080 lines
+  (`StreamPublisher` STREAM_MAX_H, `-Dwindowscraft.streamMaxHeight`; his own walls stay full size,
+  they don't use the stream), and a viewer plays only its nearest screen full: the others it sees
+  play light (30 pictures a second, at most 720 lines; `StreamSubscriber.playLight`, held 3 s
+  before changing). Screens not drawn for 2 s already decoded their sound only (as he asked:
+  "if someone doesn't have a monitor on their screen … it just needs to stream audio").
+- **Shader pack on screens: one setting for everyone, on by default.** `Payloads.ScreensShaded`
+  (both ways); the server keeps it (`windowscraft-server.json` "screensShaded", default true),
+  sends it on join and to everyone when anyone flips it. Off a WindowsCraft server it's your own
+  (now shaded by default). Each side checks the other has the payload first.
+
 ## 0.15.14 (16 Oct): sound stays on the wall, Roblox and Steam stay on the monitor, joined monitors after a drag
 
 Four things the owner hit while playing (his game open; nothing tested on his screen):

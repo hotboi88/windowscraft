@@ -180,7 +180,21 @@ public final class Payloads {
         @Override public Id<? extends CustomPayload> getId() { return ID; }
     }
 
+    /**
+     * Both ways: the shader pack on screens, on or off — one setting for everyone on the server.
+     * Player → server: flip it (for everyone). Server → players: what it is now (on join and on
+     * every change). Newer servers and clients only; each side checks the other has it first.
+     */
+    public record ScreensShaded(boolean on) implements CustomPayload {
+        public static final Id<ScreensShaded> ID = id("screens_shaded");
+        public static final PacketCodec<PacketByteBuf, ScreensShaded> CODEC = PacketCodec.of(
+                (v, b) -> b.writeBoolean(v.on), b -> new ScreensShaded(b.readBoolean()));
+        @Override public Id<? extends CustomPayload> getId() { return ID; }
+    }
+
     public static void register() {
+        PayloadTypeRegistry.playC2S().register(ScreensShaded.ID, ScreensShaded.CODEC);
+        PayloadTypeRegistry.playS2C().register(ScreensShaded.ID, ScreensShaded.CODEC);
         PayloadTypeRegistry.playS2C().register(UpdateOffer.ID, UpdateOffer.CODEC);
         PayloadTypeRegistry.playC2S().register(UpdateRequest.ID, UpdateRequest.CODEC);
         PayloadTypeRegistry.playS2C().register(UpdateChunk.ID, UpdateChunk.CODEC);

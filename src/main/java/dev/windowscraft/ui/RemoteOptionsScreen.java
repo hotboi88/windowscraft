@@ -179,7 +179,8 @@ public final class RemoteOptionsScreen extends Screen {
             final boolean wantOff = i == 0;
             hits.add(new Hit(sx, y + 2, sw, 14, () -> dev.windowscraft.config.ClientSettings.setScreensWithoutShaders(wantOff)));
         }
-        String note = dev.windowscraft.render.ShaderCompat.shaderPackInUse() ? "applies to every screen" : "only matters with a shader pack";
+        String note = dev.windowscraft.config.ClientSettings.screensShadedForEveryone() ? "for everyone on this server"
+                : dev.windowscraft.render.ShaderCompat.shaderPackInUse() ? "applies to every screen" : "only matters with a shader pack";
         UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, note, pw - pad * 2 - segW - w2 - 14), x + segW + w2 + 12, y + 5, UiKit.TEXT_MUTED);
     }
 

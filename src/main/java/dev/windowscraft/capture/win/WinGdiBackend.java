@@ -82,11 +82,31 @@ public final class WinGdiBackend implements CaptureBackend {
             u.GetClientRect(hwnd, r);
             if (r.right - r.left < 32 || r.bottom - r.top < 32) return null;
         }
-        String exe = exeName(pid.getValue());
+        int app = soundPid(hwnd, cls, pid.getValue());
+        String exe = exeName(app);
         String sub = (exe.isEmpty() ? "" : exe) + (minimized ? " · minimized" : "");
         long handle = Pointer.nativeValue(hwnd.getPointer());
         return new SourceInfo(SourceInfo.Kind.WINDOW, "win:" + Long.toHexString(handle), title, sub, handle,
-                0, 0, r.right - r.left, r.bottom - r.top, exe, false, pid.getValue());
+                0, 0, r.right - r.left, r.bottom - r.top, exe, false, app);
+    }
+
+    /**
+     * The program a window's sound comes from: a Store app's window (Media Player, Netflix…) is a
+     * frame belonging to Windows' ApplicationFrameHost; the app owns the window inside it.
+     */
+    public static int soundPid(HWND hwnd, String cls, int pid) {
+        if (!"ApplicationFrameWindow".equals(cls)) return pid;
+        int[] found = {0};
+        com.sun.jna.platform.win32.User32.INSTANCE.EnumChildWindows(hwnd, (child, data) -> {
+            IntByReference p = new IntByReference();
+            com.sun.jna.platform.win32.User32.INSTANCE.GetWindowThreadProcessId(child, p);
+            if (p.getValue() > 0 && p.getValue() != pid) {
+                found[0] = p.getValue();
+                return false;
+            }
+            return true;
+        }, null);
+        return found[0] > 0 ? found[0] : pid;
     }
 
     static boolean isCloaked(HWND hwnd) {

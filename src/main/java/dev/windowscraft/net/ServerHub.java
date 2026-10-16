@@ -41,6 +41,8 @@ public final class ServerHub {
     private static RelayServer relay;
     private static int relayPort = RelayProtocol.DEFAULT_PORT;
     private static boolean relayEnabled = true;
+    /** The shader pack on screens, for everyone here (on unless someone turned it off). */
+    private static volatile boolean screensShaded = true;
     private static int tick;
 
     public static void init() {
@@ -56,6 +58,7 @@ public final class ServerHub {
         ServerPlayNetworking.registerGlobalReceiver(Payloads.Pointer.ID, (p, ctx) -> onPointer(ctx.player(), p));
         ServerPlayNetworking.registerGlobalReceiver(Payloads.StreamTrouble.ID, (p, ctx) -> onTrouble(ctx.player(), p));
         ServerPlayNetworking.registerGlobalReceiver(Payloads.UpdateRequest.ID, (p, ctx) -> UpdateServer.onRequest(ctx.player(), p));
+        ServerPlayNetworking.registerGlobalReceiver(Payloads.ScreensShaded.ID, (p, ctx) -> onScreensShaded(ctx.player(), p.on()));
     }
 
     /** Per screen: when its owner was last told someone can't keep up (at most every 5 s). */
@@ -87,6 +90,7 @@ public final class ServerHub {
                 JsonObject o = JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject();
                 if (o.has("relayPort")) relayPort = o.get("relayPort").getAsInt();
                 if (o.has("relayEnabled")) relayEnabled = o.get("relayEnabled").getAsBoolean();
+                if (o.has("screensShaded")) screensShaded = o.get("screensShaded").getAsBoolean();
             } else {
                 JsonObject o = new JsonObject();
                 o.addProperty("relayPort", relayPort);
@@ -109,9 +113,41 @@ public final class ServerHub {
         MinecraftServer server = player.getServer();
         ServerPlayNetworking.send(player, new Payloads.Hello(Payloads.PROTOCOL, relayPort, token, server != null && relayAllowed(server)));
         sendRelayInfo(player);
+        if (ServerPlayNetworking.canSend(player, Payloads.ScreensShaded.ID)) ServerPlayNetworking.send(player, new Payloads.ScreensShaded(screensShaded));
         UpdateServer.onJoin(player);
         for (Live l : displays.values()) {
             if (!l.owner.equals(player.getUuid())) ServerPlayNetworking.send(player, new Payloads.DisplayState(l.info, l.owner, l.ownerName));
+        }
+    }
+
+    /** Someone flipped the shader pack on screens: it changes for everyone, and stays so. */
+    private static void onScreensShaded(ServerPlayerEntity player, boolean on) {
+        MinecraftServer server = player.getServer();
+        if (server == null) return;
+        server.execute(() -> {
+            if (screensShaded != on) {
+                screensShaded = on;
+                saveSetting("screensShaded", on);
+                LOG.info("Shader pack on screens turned {} for everyone by {}", on ? "on" : "off", player.getName().getString());
+            }
+            for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+                if (ServerPlayNetworking.canSend(p, Payloads.ScreensShaded.ID)) ServerPlayNetworking.send(p, new Payloads.ScreensShaded(on));
+            }
+        });
+    }
+
+    /** Writes one setting into windowscraft-server.json, keeping the rest. */
+    private static void saveSetting(String key, boolean value) {
+        Path f = FabricLoader.getInstance().getConfigDir().resolve("windowscraft-server.json");
+        try {
+            JsonObject o = Files.exists(f) ? JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject() : new JsonObject();
+            o.addProperty(key, value);
+            Files.createDirectories(f.getParent());
+            Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+            Files.writeString(tmp, o.toString(), StandardCharsets.UTF_8);
+            Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            LOG.warn("Couldn't save {} to {}", key, f, e);
         }
     }
 

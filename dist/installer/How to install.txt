@@ -1,4 +1,9 @@
-WindowsCraft 0.15.14 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.15 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.15: a monitor's sound stays on its wall, also from Store apps like Media Player and
+while monitors are being added. Screens you watch cost your PC much less (the nearest plays full,
+the others lighter; at most 1080 lines). "Shader pack on screens" is now one setting for everyone
+on the server, on by default.
 
 New in 0.15.14: an app with a window on an in-game monitor is heard only from the wall, also
 when you click its window on your own desktop. Apps you open while sitting at a monitor (Steam…)

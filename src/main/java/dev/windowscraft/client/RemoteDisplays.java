@@ -94,6 +94,9 @@ public final class RemoteDisplays {
         final UUID audioId = UUID.randomUUID();
         AcousticModel.Environment environment = AcousticModel.Environment.OPEN_AIR;
         UUID audibleWall;
+        /** Whether it should play light (another screen is nearer), and since when that's so. */
+        boolean wantLight;
+        long wantSince = System.nanoTime();
         private long lastPollFrame = -1;
         private Identifier lastPolled;
 
@@ -258,8 +261,18 @@ public final class RemoteDisplays {
         for (Remote r : chosen) wanted.add(r.info.streamId());
         for (String sid : new ArrayList<>(watches.keySet())) if (!wanted.contains(sid)) stopWatch(sid);
 
-        for (Remote wall : chosen) {
+        for (int i = 0; i < chosen.size(); i++) {
+            Remote wall = chosen.get(i);
             Watch w = watches.computeIfAbsent(wall.info.streamId(), k -> new Watch(wall));
+            // only the nearest screen plays full; the others you see play light (see playLight) —
+            // a change only once it has held for 3 s, so walking past doesn't rebuild decoders
+            boolean wantLight = i > 0;
+            if (wantLight != w.wantLight) {
+                w.wantLight = wantLight;
+                w.wantSince = nowN;
+            } else if (nowN - w.wantSince > 3_000_000_000L) {
+                w.subscriber.playLight(wantLight);
+            }
             // the sound comes from the nearest wall of this stream
             if (!wall.id.equals(w.audibleWall)) {
                 w.audibleWall = wall.id;

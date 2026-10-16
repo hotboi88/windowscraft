@@ -986,6 +986,31 @@ fn pid(h: HWND) -> u32 {
     p
 }
 
+/// The program a window's sound comes from. A Store app's window (Media Player, Netflix…) is a
+/// frame that belongs to Windows' ApplicationFrameHost; the app itself owns the window inside it
+/// (Windows.UI.Core.CoreWindow) — capturing the frame host's sound got nothing, and the film
+/// played on your desk.
+fn sound_pid(h: HWND) -> u32 {
+    let frame = pid(h);
+    if class_name(h) != "ApplicationFrameWindow" {
+        return frame;
+    }
+    unsafe extern "system" fn each(c: HWND, data: LPARAM) -> windows::core::BOOL {
+        let st = unsafe { &mut *(data.0 as *mut (u32, u32)) };
+        let p = pid(c);
+        if p != 0 && p != st.0 {
+            st.1 = p;
+            return windows::core::BOOL(0);
+        }
+        windows::core::BOOL(1)
+    }
+    let mut st = (frame, 0u32);
+    unsafe {
+        let _ = EnumChildWindows(Some(h), Some(each), LPARAM(&mut st as *mut _ as isize));
+    }
+    if st.1 != 0 { st.1 } else { frame }
+}
+
 /// The part of that monitor apps use (without its taskbar).
 fn work_area(area: &RECT) -> RECT {
     unsafe {
@@ -4613,7 +4638,7 @@ fn main() {
                     let idx = n(1) as i32;
                     for h in app_windows() {
                         if on_area(h, &a) {
-                            let id = pid(h);
+                            let id = sound_pid(h);
                             say(&format!("win {} {} {} {}", h.0 as usize, if id == shell { 0 } else { id }, started_on(h, idx) as u8, title(h)));
                         }
                     }
@@ -4625,7 +4650,7 @@ fn main() {
                 let areas: Vec<RECT> = devices.iter().filter_map(|d| rect_of(d)).collect();
                 for h in app_windows() {
                     if !areas.iter().any(|a| on_area(h, a)) {
-                        say(&format!("win {} {} 0 {}", h.0 as usize, pid(h), title(h)));
+                        say(&format!("win {} {} 0 {}", h.0 as usize, sound_pid(h), title(h)));
                     }
                 }
                 say("windows-end");

@@ -1008,7 +1008,8 @@ public final class HubScreen extends Screen {
                         + "(Not needed with direct GPU sharing running.)",
                 ClientSettings.on(ClientSettings.Auto.SHARP_AS_SEEN) ? sharpNow() : null);
         y = toggleRow(g, mx, my, x, y, w, "Shader pack on screens",
-                "Off: screens keep their true colours and stay sharp, untouched by your shader pack's lighting, fog and blur. "
+                (ClientSettings.screensShadedForEveryone() ? "For everyone on this server: flipping it changes every player's view. " : "")
+                        + "Off: screens keep their true colours and stay sharp, untouched by shader packs' lighting, fog and blur. "
                         + (dev.windowscraft.render.ShaderCompat.shaderPackInUse() ? "" : "(No shader pack is on right now.)"),
                 !ClientSettings.screensWithoutShaders(), shaded -> ClientSettings.setScreensWithoutShaders(!shaded));
         y += 4;
