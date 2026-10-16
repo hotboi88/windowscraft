@@ -165,9 +165,9 @@ one of your real screens instead, as before.
     (or pointing at it) runs as that monitor's own copy — its own program, so its own sound, and
     all its windows and tabs play from that monitor, all at once. Its logins and data are its own
     and kept (sign in to a site once on that monitor, it stays), and apps that only run once can
-    run there too ("Open another copy here"). The apps on your desk are never touched. Discord,
-    WhatsApp, game launchers, games with anti-cheat, Java and Minecraft, and anything you add to
-    "Always run normally" are never copies (Discord and WhatsApp come over instead). Getting up,
+    run there too ("Open another copy here"). The apps on your desk are never touched. Every app
+    is a copy by default — Discord, WhatsApp, launchers, a second Minecraft too; only games with
+    anti-cheat, Windows' own tools and anything you add to "Always run normally" never are. Getting up,
     turning it off, closing the game or the game crashing leave nothing behind that would affect
     your desk's apps. "Reset this monitor's apps" wipes its logins and data.
   - Without it, an app open in several places plays from wherever you last used it (never from two

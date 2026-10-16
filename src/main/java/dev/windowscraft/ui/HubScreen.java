@@ -676,9 +676,9 @@ public final class HubScreen extends Screen {
             }
             y += ROW - 2;
         }
-        // always normal: apps that must never be a copy (Discord, WhatsApp and anti-cheat games already are)
+        // always normal: apps that must never be a copy (games with anti-cheat and Windows' own tools already are)
         List<String> normal = ClientSettings.isoPrograms();
-        UiKit.text(g, textRenderer, "Always run normally" + (normal.isEmpty() ? " (Discord, WhatsApp and games with anti-cheat already do):" : ":"), x + 4, y + 4, UiKit.TEXT_2);
+        UiKit.text(g, textRenderer, "Always run normally" + (normal.isEmpty() ? " (games with anti-cheat and Windows' own tools already do):" : ":"), x + 4, y + 4, UiKit.TEXT_2);
         y += 14;
         int ax = x + 4;
         for (String p : normal) {
@@ -726,18 +726,14 @@ public final class HubScreen extends Screen {
         if (exe.isEmpty() || apps.containsKey(exe)) return;
         String f = fileOf(exe);
         if (f.equals("explorer.exe") || f.equals("javaw.exe") || f.equals("java.exe") || f.equals("applicationframehost.exe")) return;
+        if (AppNames.storeApp(exe)) return; // (a Store app can't be a monitor's own copy)
         apps.put(exe, appName(pid));
     }
 
     private static String fileOf(String exe) { return exe.substring(Math.max(exe.lastIndexOf('\\'), exe.lastIndexOf('/')) + 1).toLowerCase(java.util.Locale.ROOT); }
 
-    /** "Brave", "Discord": the program's file name, tidied. */
-    private static String appName(long pid) {
-        String f = fileOf(InGameMonitors.exeOf(pid));
-        if (f.endsWith(".exe")) f = f.substring(0, f.length() - 4);
-        if (f.isEmpty()) return "app";
-        return Character.toUpperCase(f.charAt(0)) + f.substring(1);
-    }
+    /** "WhatsApp", "Windows Terminal": what the program calls itself (see AppNames). */
+    private static String appName(long pid) { return AppNames.of(InGameMonitors.exeOf(pid)); }
 
     /** Is that window's program (the same process) also showing windows on your desk or another monitor? */
     private boolean sharedElsewhere(MonitorBackend.Win win) {

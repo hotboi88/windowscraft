@@ -14,8 +14,14 @@ import net.minecraft.util.math.Vec3d;
  */
 public record WallRect(Direction face, BlockPos min, BlockPos max, int turn, MonitorPose pose) {
     /** The screen of a gaming monitor block, in its model's own pixels (made facing north): x 1..15, y 5.125..13 (16:9: a
-     *  16:9 picture covers it edge to edge — up to 0.15.10 it was 6..13, 2:1, with dark bars beside the picture), front at z 7. */
-    private static final double M_LEFT = 15 / 16.0, M_RIGHT = 1 / 16.0, M_TOP = 13 / 16.0, M_BOTTOM = 5.125 / 16.0, M_FRONT = 7 / 16.0 - 1 / 1024.0;
+     *  16:9 picture covers it edge to edge — up to 0.15.10 it was 6..13, 2:1, with dark bars beside the picture), set
+     *  {@link #RECESS} back from the frame's front at z 7 — behind its lip, like a real monitor's panel. */
+    private static final double M_LEFT = 15 / 16.0, M_RIGHT = 1 / 16.0, M_TOP = 13 / 16.0, M_BOTTOM = 5.125 / 16.0;
+
+    /** How far a gaming monitor's screen sits behind the frame around it (half a model pixel). */
+    public static final double RECESS = 0.5 / 16.0;
+
+    private static final double M_FRONT = 7 / 16.0 + RECESS - 1 / 1024.0;
 
     /** How far the picture sits off the block face: practically on it (1/1024 of a block). Keeping
      *  it in front of the concrete is the renderer's job (it pulls the picture toward your eye along
@@ -184,7 +190,7 @@ public record WallRect(Direction face, BlockPos min, BlockPos max, int turn, Mon
             if (w / h > aspect) fw = (h * aspect) / w; else fh = (w / aspect) / h;
         }
         if (pose != null) { // in the panel's own terms: x right, y up, the screen's front
-            double z = MonitorPose.FRONT + SURFACE_OFFSET;
+            double z = MonitorPose.FRONT - RECESS + SURFACE_OFFSET; // (behind the frame's lip)
             double l = lerp(MonitorPose.SCREEN_L, MonitorPose.SCREEN_R, (1 - fw) / 2), r = lerp(MonitorPose.SCREEN_L, MonitorPose.SCREEN_R, 1 - (1 - fw) / 2);
             double t = lerp(MonitorPose.SCREEN_T, MonitorPose.SCREEN_B, (1 - fh) / 2), b = lerp(MonitorPose.SCREEN_T, MonitorPose.SCREEN_B, 1 - (1 - fh) / 2);
             return new Vec3d[]{pose.at(min, l, t, z), pose.at(min, r, t, z), pose.at(min, r, b, z), pose.at(min, l, b, z)};

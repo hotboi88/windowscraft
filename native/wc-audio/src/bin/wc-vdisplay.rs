@@ -3243,12 +3243,12 @@ static FORCED: Mutex<Option<String>> = Mutex::new(None);
 static BOXES_MADE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_THREAD: AtomicBool = AtomicBool::new(false);
 static ISO_DIRTY: AtomicBool = AtomicBool::new(false);
-// (Discord and WhatsApp too, as you asked: opened from a monitor, the one you're signed in to comes
-//  over to it, rather than a copy of its own)
-const ALWAYS_NORMAL: [&str; 26] = ["discord.exe", "discordptb.exe", "discordcanary.exe", "whatsapp.exe", "explorer.exe", "javaw.exe", "java.exe", "steam.exe", "steamwebhelper.exe", "steamservice.exe",
-    "epicgameslauncher.exe", "epicwebhelper.exe", "battle.net.exe", "agent.exe", "riotclientservices.exe", "riotclientux.exe",
-    "easyanticheat.exe", "easyanticheat_eos.exe", "beservice.exe", "beservice_x64.exe", "start_protected_game.exe", "vgc.exe",
-    "taskmgr.exe", "msiexec.exe", "systemsettings.exe", "minecraftlauncher.exe"];
+// Only what can't run in a box: Windows itself (Explorer, Task Manager, Settings, installers) and
+// anti-cheat (it refuses to start there). Every other app is the monitor's own copy by default —
+// Discord, WhatsApp, launchers, a second Minecraft too ("make it so all apps run sandboxed by
+// default"); "Always run normally" lets one out. The game you play in is let out by its folder.
+const ALWAYS_NORMAL: [&str; 10] = ["explorer.exe", "taskmgr.exe", "msiexec.exe", "systemsettings.exe",
+    "easyanticheat.exe", "easyanticheat_eos.exe", "beservice.exe", "beservice_x64.exe", "start_protected_game.exe", "vgc.exe"];
 
 fn sbie_dir() -> Option<std::path::PathBuf> {
     let d = std::path::PathBuf::from(std::env::var("ProgramW6432").or_else(|_| std::env::var("ProgramFiles")).unwrap_or_else(|_| "C:\\Program Files".into())).join("Sandboxie-Plus");

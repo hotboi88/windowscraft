@@ -1,4 +1,7 @@
-WindowsCraft 0.15.21 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.22 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.22: every app you start at a monitor is its own copy there (Discord and launchers
+too), apps show their real names, and a gaming monitor's picture sits behind its frame.
 
 New in 0.15.21: leaving with several monitors on turns them all off at once, and each takes its
 own apps with it. A monitor no longer goes dark because Sandboxie was slow.

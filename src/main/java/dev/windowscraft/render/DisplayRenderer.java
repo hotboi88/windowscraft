@@ -220,8 +220,13 @@ public final class DisplayRenderer {
             case "small" -> 0.002 + 0.0005 * d + Math.min(0.02, (1 / 512.0) / facing); // (dev: depth precision only)
             default -> Math.min(0.002 + 1.5 * d * pixelAngle / facing, 0.25 + 0.02 * d);
         };
+        // a gaming monitor's screen sits behind the frame's lip: never pulled out past it
+        if (recessed) pull = Math.min(pull, (WallRect.RECESS - 0.004) / facing);
         return cam.add(to.multiply(Math.max(0.5, 1 - pull / d)));
     }
+
+    /** What's being drawn now is a gaming monitor's screen (set back behind its frame): see towardCamera, drawInFront. */
+    private static boolean recessed;
 
     /** A wall shorter than this on your screen counts as "far away" (distance frame-rate limit). */
     public static final double FAR_PX = 160; // ~1/7 of a 1080p screen: really far away, not just across the room
@@ -286,6 +291,7 @@ public final class DisplayRenderer {
 
     private static void quad(MatrixStack matrices, VertexConsumerProvider.Immediate immediate, WallRect rect, Identifier tex,
                              int cw, int ch, Vec3d cam) {
+        recessed = rect.isMonitor(); // (its pointer and hovers are drawn next, the same way)
         {
             Vec3d[] c = rect.corners(cw, ch);
             // "always in front of its own wall", yet flat on it: the picture is pulled toward your
@@ -494,6 +500,7 @@ public final class DisplayRenderer {
 
     private static void drawPointer(MatrixStack matrices, VertexConsumerProvider.Immediate immediate, Vec3d[] c, WallRect rect,
                                     dev.windowscraft.client.Box box, double[] uv, Vec3d cam) {
+        recessed = rect.isMonitor();
         Identifier tex = pointerTexture();
         Vec3d right = c[1].subtract(c[0]), down = c[3].subtract(c[0]);
         double hBlocks = down.length() * (box.y1() - box.y0()) * 0.022, wBlocks = hBlocks * pointerW / pointerH;
@@ -522,7 +529,8 @@ public final class DisplayRenderer {
     private static void drawInFront(VertexConsumerProvider.Immediate immediate, RenderLayer layer) {
         if (NO_BIAS) { immediate.draw(layer); return; }
         com.mojang.blaze3d.systems.RenderSystem.enablePolygonOffset();
-        com.mojang.blaze3d.systems.RenderSystem.polygonOffset(-4f, -16f);
+        // (a monitor's screen behind its lip: a steep bias would lift it over the lip seen from the side)
+        com.mojang.blaze3d.systems.RenderSystem.polygonOffset(recessed ? 0f : -4f, -16f);
         try {
             immediate.draw(layer);
         } finally {

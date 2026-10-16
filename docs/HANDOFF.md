@@ -115,6 +115,30 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.22 (16 Oct): every app its own copy by default; real app names; the screen behind the lip
+
+- **"make it so all apps run sandboxed by default"**: own copies were already on for every new
+  monitor (`Display.ownCopies = true`), but the helper let Discord, WhatsApp, Java, Steam, Epic,
+  Battle.net, Riot and the Minecraft launcher out of the box by name (`ALWAYS_NORMAL`, 26). Now
+  only what can't run in a box: Explorer, Task Manager, Settings, msiexec and the anti-cheat
+  programs (10). The game you play in is let out by its folder (game dir, java.home), anti-cheat
+  games by theirs; "Always run normally" lets any other out.
+- **Real app names** (asked earlier: "Whatsapp.root", "Lghub", "Steelseriesggclient"…):
+  `ui.AppNames` reads the program's version info — ProductName, else FileDescription (Windows'
+  own say "… Operating System"), a dotted one-word name cut at the dot ("PowerToys.QuickAccess"
+  → "PowerToys") — else the tidied file name. Store apps (an AppxManifest.xml in the exe's folder
+  or up to 3 above: WindowsApps, XboxGames) aren't offered as copies: Sandboxie can't run them.
+  On his PC that's WhatsApp, Claude, Notepad, Windows Terminal, the Xbox Minecraft launcher.
+- **"the monitor block screen doesn't yet go behind the lip"**: there was no lip — the panel was one
+  cuboid z 7..9 with the bezel painted on its flat front, and the picture sat on that face
+  (`M_FRONT = 7/16 − 1/1024`), pulled toward the eye. Now the templates (block, diagonal, panel)
+  have the panel 0.5 px thinner and four lip bars (top, bottom 1.125, sides 1) 0.5 px proud
+  around the screen opening, front UVs mapped to the same texels (u flipped on north faces); the
+  picture sits `WallRect.RECESS` (0.5/16) back (`M_FRONT = 7.5/16 − 1/1024`; panels
+  `FRONT − RECESS`). `DisplayRenderer.towardCamera` caps the pull on monitors so its depth part
+  stays under the recess (`(RECESS − 0.004)/facing`), and `drawInFront` drops the slope bias for
+  them (`recessed`, set per wall in `quad`/`drawPointer`). Walls are unchanged.
+
 ## 0.15.21 (16 Oct): the helper can't hang on Sandboxie; monitors go off together and take their apps
 
 - **"i just had all the monitors shut off for no reason"** (11:31:53, 0.15.18): he turned on a third
