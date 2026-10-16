@@ -138,6 +138,9 @@ held up — in spite of the 500 ms buffer asked for.
 - `LostSound` stays, as a safety net. Not measured: under the bench's heavy load (three game
   instances), as his game was running; 0.4.4 lost ~2 % there, and with the looks off the sound
   thread it should behave like a plain capture, which lost nothing under that load.
+- CI: sandbox-probe failed once on "…and opens on monitor A" (the sandboxed app's window at
+  the desktop's default spot, [104,104]) and passed on the re-run: a second flaky check there
+  (nothing in 0.15.13 touches window placement).
 
 ## 0.15.12 (15 Oct): lip sync for real — the sound with its picture, also far away
 
