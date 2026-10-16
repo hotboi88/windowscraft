@@ -419,7 +419,8 @@ public final class HubScreen extends Screen {
         int sy = py + ph - 26;
         boolean shov = UiKit.inside(mx, my, x, sy, w, 20);
         if (settingsPage || shov) UiKit.round(g, x, sy, w, 20, 4, settingsPage ? UiKit.SEG_ACTIVE : UiKit.SURFACE_HOVER);
-        UiKit.text(g, textRenderer, "⚙  Settings", x + 8, sy + 6, UiKit.TEXT);
+        UiKit.gear(g, x + 8, sy + 4, UiKit.TEXT);
+        UiKit.text(g, textRenderer, "Settings", x + 24, sy + 6, UiKit.TEXT);
         hit(x, sy, w, 20, () -> {
             settingsPage = true;
             scroll = 0;

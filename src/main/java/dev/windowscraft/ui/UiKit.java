@@ -54,6 +54,34 @@ final class UiKit {
         }
     }
 
+    /** A gear, 11 × 11 pixels (the font has no gear: "⚙" came out as something else). */
+    private static final String[] GEAR = {
+            "....###....",
+            ".##.###.##.",
+            ".#########.",
+            "..#######..",
+            "####...####",
+            "####...####",
+            "####...####",
+            "..#######..",
+            ".#########.",
+            ".##.###.##.",
+            "....###....",
+    };
+
+    static void gear(DrawContext g, int x, int y, int color) {
+        for (int r = 0; r < GEAR.length; r++) {
+            String row = GEAR[r];
+            for (int c = 0; c < row.length(); c++) {
+                if (row.charAt(c) != '#') continue;
+                int e = c;
+                while (e + 1 < row.length() && row.charAt(e + 1) == '#') e++;
+                g.fill(x + c, y + r, x + e + 1, y + r + 1, color);
+                c = e;
+            }
+        }
+    }
+
     static void text(DrawContext g, TextRenderer tr, String s, int x, int y, int color) {
         g.drawText(tr, s, x, y, color, false);
     }

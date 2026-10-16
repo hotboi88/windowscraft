@@ -130,6 +130,8 @@ full FFmpeg restart on quality change; no guest relative mouse.
   Each wall keeps a buffer for every app on its monitor, so it writes silence rather than running
   dry. Captures start outside the mixer's lock (they start a process), and wc-audio.exe is
   checked against the jar once per run instead of per capture. wc-audio.exe unchanged.
+- **"make the settings icon an actual settings icon pixel art"**: the hub's "⚙  Settings" used a
+  character Minecraft's font doesn't draw as a gear; now `UiKit.gear`, an 11 × 11 pixel gear.
 - Discord "screen" share pausing whenever a monitor is turned on: he shares the whole screen;
   adding/changing a display resets Windows' screen duplication. Not looked at yet.
 
