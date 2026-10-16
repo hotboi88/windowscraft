@@ -1,4 +1,7 @@
-WindowsCraft 0.15.27 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.28 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.28: set up each monitor's own copies (Like your desk, Its own PC, Leaves no trace);
+joined monitors share them, and one set up differently stops being joined.
 
 New in 0.15.27: name your screens (Rename, in a screen's menu); a screen is remembered by its name
 and settings, never by what was on it. Settings → Menu size makes the menu bigger or smaller.

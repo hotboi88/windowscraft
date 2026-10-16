@@ -94,6 +94,7 @@ final class DisplayStore {
                 if (o.has("name") && !o.get("name").getAsString().isBlank()) d.name = o.get("name").getAsString();
                 if (o.has("ownCopies")) d.ownCopies = o.get("ownCopies").getAsBoolean();
                 if (o.has("followDesk")) d.followDesk = o.get("followDesk").getAsBoolean();
+                if (o.has("filesHere")) d.filesHere = o.get("filesHere").getAsBoolean();
                 if (o.has("overrides")) for (var e : o.getAsJsonObject("overrides").entrySet()) d.overrides.put(e.getKey(), e.getValue().getAsString());
                 if (o.has("monitorW")) {
                     d.monitorW = o.get("monitorW").getAsInt();
@@ -136,6 +137,7 @@ final class DisplayStore {
             if (d.name != null && !d.name.isBlank()) o.addProperty("name", d.name);
             if (!d.ownCopies) o.addProperty("ownCopies", false);
             if (!d.followDesk) o.addProperty("followDesk", false);
+            if (d.filesHere) o.addProperty("filesHere", true);
             if (!d.overrides.isEmpty()) {
                 JsonObject ov = new JsonObject();
                 d.overrides.forEach(ov::addProperty);

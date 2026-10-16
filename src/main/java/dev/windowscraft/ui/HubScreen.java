@@ -672,6 +672,15 @@ public final class HubScreen extends Screen {
 
     private List<MonitorBackend.Win> copies = List.of();
     private String copiesNote;
+    /** A change to a joined monitor's own copies, waiting for "the whole group or just this one". */
+    private record GroupAsk(Display d, java.util.function.Consumer<Display> change) {}
+    private GroupAsk groupAsk;
+
+    /** A change to a monitor's own copies: for a joined monitor, asked first (the group, or just it — then it leaves the group). */
+    private void changeBox(Display d, java.util.function.Consumer<Display> change) {
+        if (InGameMonitors.groupOf(d).size() > 1) groupAsk = new GroupAsk(d, change);
+        else InGameMonitors.changeBox(List.of(d), change);
+    }
     private long resetArmedAt;
 
     /** "Own copies of apps": this monitor's own Sandboxie box — on/off, set up, another copy, exceptions, reset. */
@@ -700,16 +709,49 @@ public final class HubScreen extends Screen {
                     + "(Windows asks for permission once; it never shows itself)." + (st.equals("stopped") ? " It's installed but not running: restart your PC." : ""),
                     x, y + 2, w, UiKit.TEXT_MUTED) + 2;
         }
+        List<Display> group = InGameMonitors.groupOf(d);
+        if (groupAsk != null && groupAsk.d() == d) {
+            // joined with others: the change for all of them, or just this one (then it's a PC of its own)
+            GroupAsk ask = groupAsk;
+            int top = y;
+            y = wrap(g, "This monitor is joined with " + (group.size() - 1) + (group.size() == 2 ? " other" : " others")
+                    + ": change all of them, or just this one? (Just this one: it stops being joined with them, a PC of its own.)", x + 6, y + 5, w - 12, UiKit.TEXT);
+            int bx = x + 6;
+            String all = "All " + group.size();
+            bx += button(g, mx, my, all, bx + textRenderer.getWidth(all) + 16, y + 3, 16, UiKit.ACCENT, UiKit.ACCENT_HOVER, () -> {
+                groupAsk = null;
+                InGameMonitors.changeBox(InGameMonitors.groupOf(ask.d()), ask.change());
+            }) + 4;
+            bx += button(g, mx, my, "Just this one", bx + textRenderer.getWidth("Just this one") + 16, y + 3, 16, UiKit.SURFACE_HOVER, UiKit.ACCENT_HOVER, () -> {
+                groupAsk = null;
+                InGameMonitors.changeBox(List.of(ask.d()), ask.change());
+            }) + 4;
+            button(g, mx, my, "Cancel", bx + textRenderer.getWidth("Cancel") + 16, y + 3, 16, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> groupAsk = null);
+            y += 26;
+            g.fill(x, top, x + 2, y - 4, UiKit.ACCENT); // (marks the question)
+        }
         y = toggleRow(g, mx, my, x, y, w, "Apps you start here are its own copies",
-                d.ownCopies ? "Its own sound, logins and data; never mixed with your desk or another monitor. Sign in to a site once here, it stays."
+                d.ownCopies ? "Its own sound, never mixed with your desk or another monitor." + (group.size() > 1 ? " One box for it and the " + (group.size() - 1) + " joined with it." : "")
                         : "Off: apps here are the same ones as on your desk (their sound plays where you last used them).",
-                d.ownCopies, on -> InGameMonitors.setOwnCopies(d, on));
+                d.ownCopies, on -> changeBox(d, o -> o.ownCopies = on));
         if (d.ownCopies) {
-            y = toggleRow(g, mx, my, x, y, w, "Logins follow my desk",
-                    d.followDesk ? "Its apps start signed in like your desk is, every time; what you change in them here goes once they're all closed. "
-                            + "Your Desktop, Documents and Downloads are your desk's: what you save is kept."
-                            : "Off: its apps keep their own sign-ins and settings here (a second account just for this monitor).",
-                    d.followDesk, on -> InGameMonitors.setFollowDesk(d, on));
+            // quick picks, then the two choices they're made of
+            int pick = d.followDesk && !d.filesHere ? 0 : !d.followDesk && d.filesHere ? 1 : d.followDesk ? 2 : -1;
+            String[] picks = {"Like your desk", "Its own PC", "Leaves no trace"};
+            String pickText = switch (pick) {
+                case 0 -> "Its apps start signed in like your desk, every time; what they change here is forgotten once they've all closed. Files you save go to your own folders.";
+                case 1 -> "Its apps keep their own sign-ins, settings and files here, separate from your desk (a second account just for this monitor).";
+                case 2 -> "Its apps start like your desk, and nothing they do stays: their changes and the files saved here are gone once they've all closed.";
+                default -> "Its apps keep what they change here; files you save go to your own folders.";
+            };
+            y = pickRow(g, mx, my, x, y, w, "Set up like", pickText, picks, pick, i -> changeBox(d, o -> {
+                o.followDesk = i != 1;
+                o.filesHere = i != 0;
+            }));
+            y = pickRow(g, mx, my, x, y, w, "What its apps change (sign-ins, settings)", null,
+                    new String[]{"Forgotten when they close", "Kept here"}, d.followDesk ? 0 : 1, i -> changeBox(d, o -> o.followDesk = i == 0));
+            y = pickRow(g, mx, my, x, y, w, "Files you save there", d.filesHere && d.followDesk ? "(gone with its apps' changes, once they've all closed)" : null,
+                    new String[]{"Your own folders", "This monitor only"}, d.filesHere ? 1 : 0, i -> changeBox(d, o -> o.filesHere = i == 1));
         }
         if (!copies.isEmpty()) {
             java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();

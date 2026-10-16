@@ -40,6 +40,8 @@ public final class Display {
     public boolean ownCopies = true;
     /** With own copies: its apps start from your desk's sign-ins each time (its box emptied once they've all closed). */
     public boolean followDesk = true;
+    /** With own copies: files saved there stay on this monitor (in its box) instead of going to your own folders. */
+    public boolean filesHere;
     /**
      * This screen's own performance picks, where it isn't like all screens (setting key →
      * "true"/"false"; see ClientSettings.on(Auto, Display)). Absent: like all screens.

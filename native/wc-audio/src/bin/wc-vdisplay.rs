@@ -3277,10 +3277,25 @@ fn box_name(idx: i32) -> String {
 
 fn isolated(idx: i32) -> bool { ISOLATE.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(false) }
 
-/// "Logins follow my desk" per monitor (on unless the game says otherwise): see follow_desk.
-static FOLLOW: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
+/// A monitor's own copies, as set up in its menu: `follow` — what its apps change is forgotten once
+/// they've all closed (see follow_desk); `desk_files` — files saved there go to your own folders.
+#[derive(Clone, Copy)]
+struct BoxOpts {
+    follow: bool,
+    desk_files: bool,
+}
 
-fn follows(idx: i32) -> bool { FOLLOW.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(true) }
+static OPTS: Mutex<Option<HashMap<i32, BoxOpts>>> = Mutex::new(None);
+
+fn box_opts(idx: i32) -> BoxOpts { OPTS.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(BoxOpts { follow: true, desk_files: true }) }
+
+fn follows(idx: i32) -> bool { box_opts(idx).follow }
+
+/// Is that monitor's box also another live monitor's (joined monitors share their group's)?
+fn box_shared(idx: i32) -> bool {
+    let b = box_name(idx);
+    AREAS.get().map_or(false, |a| a.lock().unwrap().keys().any(|i| *i != idx && box_name(*i).eq_ignore_ascii_case(&b)))
+}
 
 /// Runs Sandboxie's launcher (never while a force rule could box it: only for "open another copy",
 /// closing and wiping a box). Its output isn't kept: a program it starts would hold that open.
@@ -3739,6 +3754,9 @@ fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     if !has_sbie_update() {
         // (an older Sandboxie, the file written straight: everything in the box's own section)
         s.extend(shared_settings());
+        if monitor_of_box(name).map_or(true, |i| box_opts(i).desk_files) {
+            s.extend(desk_files_settings());
+        }
         if forced {
             s.extend(force_settings());
         }
@@ -3748,7 +3766,9 @@ fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     if forced {
         s.push(("Template".into(), FORCE_TEMPLATE.into()));
     }
-    let _ = name;
+    if monitor_of_box(name).map_or(true, |i| box_opts(i).desk_files) {
+        s.extend(desk_files_settings());
+    }
     s
 }
 
@@ -3764,12 +3784,17 @@ fn shared_settings() -> Vec<(String, String)> {
     for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
     }
-    // your own folders (Desktop, Documents, Downloads, Pictures, Music, Videos) are your desk's:
-    // a file you download or save on a monitor is right there, and stays (it's never emptied
-    // with the box); only apps' own data is the box's
+    s
+}
+
+/// Your own folders (Desktop, Documents, Downloads, Pictures, Music, Videos) as your desk's, for a
+/// box whose monitor sends files there: a file you download or save on it is right there, and
+/// stays (never emptied with the box); only apps' own data is the box's.
+fn desk_files_settings() -> Vec<(String, String)> {
+    let mut s = Vec::new();
     for d in own_folders() {
-        s.push(("OpenFilePath".into(), format!("{d}\\*")));
-        s.push(("OpenFilePath".into(), d));
+        s.push(("OpenFilePath".to_string(), format!("{d}\\*")));
+        s.push(("OpenFilePath".to_string(), d));
     }
     s
 }
@@ -3852,7 +3877,9 @@ static IDLE: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
 fn follow_desk(procs: &[(u32, u32, String)]) {
     let Some(areas) = AREAS.get() else { return };
     let ids: Vec<i32> = areas.lock().unwrap().keys().copied().collect();
-    let boxes: Vec<String> = ids.iter().filter(|i| isolated(**i) && follows(**i)).map(|i| box_name(*i)).collect();
+    let mut boxes: Vec<String> = ids.iter().filter(|i| isolated(**i) && follows(**i)).map(|i| box_name(*i)).collect();
+    boxes.sort_by_key(|b| b.to_ascii_lowercase());
+    boxes.dedup_by_key(|b| b.to_ascii_lowercase()); // (joined monitors: one box)
     if boxes.is_empty() {
         return;
     }
@@ -5280,9 +5307,17 @@ fn main() {
                     }
                 }
             }
-            Some("follow") => {
-                // "logins follow my desk" for a monitor on or off
-                FOLLOW.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, p.get(2) != Some(&"0"));
+            Some("boxopts") => {
+                // a monitor's own copies, as set up in its menu (its box written again if they changed)
+                let idx = n(1) as i32;
+                let o = BoxOpts { follow: p.get(2) != Some(&"0"), desk_files: p.get(3) != Some(&"0") };
+                let old = OPTS.lock().unwrap().get_or_insert_with(HashMap::new).insert(idx, o);
+                if old.map_or(true, |x| x.follow != o.follow || x.desk_files != o.desk_files) && sbie_dir().is_some() && BOXES_MADE.lock().unwrap().iter().any(|b| b.eq_ignore_ascii_case(&box_name(idx))) {
+                    std::thread::spawn(move || {
+                        ensure_box(&box_name(idx));
+                        reload_conf();
+                    });
+                }
             }
             Some("isoexclude") => {
                 // tab-separated: program names, then "|", then folders
@@ -5591,7 +5626,8 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
     let mut list: Vec<i32> = ids.to_vec();
     list.sort_by_key(|i| -i);
     list.dedup();
-    let boxed: Vec<i32> = list.iter().copied().filter(|i| isolated(*i)).collect();
+    // (a box another monitor still uses — a joined group's — stays: only this one's windows close)
+    let boxed: Vec<i32> = list.iter().copied().filter(|i| isolated(*i) && !(box_shared(*i) && list.iter().all(|j| j == i || box_name(*j) != box_name(*i)))).collect();
     if boxed.len() > 1 {
         let closing: Vec<_> = boxed.iter().map(|&i| std::thread::spawn(move || {
             close_box(i, Duration::from_secs(3));
@@ -5623,7 +5659,7 @@ fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, clos
         unpoint();
     }
     let since = added.lock().unwrap().get(&idx).map(|a| a.since);
-    if close_copies && isolated(idx) {
+    if close_copies && isolated(idx) && !box_shared(idx) {
         close_box(idx, Duration::from_secs(3)); // (its own copies close, as you'd close them; what's left is ended)
         if follows(idx) {
             empty_box(&box_name(idx), "its monitor turned off");

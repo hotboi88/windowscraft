@@ -68,8 +68,9 @@ public final class Sandbox {
     static void push(MonitorBackend.Mon m, Display d) {
         MonitorBackend b = InGameMonitors.backend();
         if (b == null || m == null || d == null) return;
-        b.profileKey(m, d.tablet ? "tablet" : d.id.toString().substring(0, 8));
-        b.followDesk(m, d.followDesk); // (before isolate: the box is never emptied for the wrong reason)
+        // (joined monitors are one PC with several screens: one box, the group's)
+        b.profileKey(m, InGameMonitors.groupKey(d));
+        b.boxOptions(m, d.followDesk, !d.filesHere); // (before isolate: the box is never emptied for the wrong reason)
         b.isolate(m, d.ownCopies);
     }
 

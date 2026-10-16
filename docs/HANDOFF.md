@@ -115,6 +115,29 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.28 (16 Oct): own copies set up per monitor; joined monitors share one box
+
+- **"a set of advanced settings … per monitor … do you even want files to save"** and **"when a
+  conjoined monitor gets this i would want it to not function as a conjoined monitor anymore"**.
+  Per monitor (with own copies on): "What its apps change" — forgotten when they close
+  (`followDesk`, default) / kept here; "Files you save there" — your own folders (default) / this
+  monitor only (`Display.filesHere`). Quick picks: Like your desk (forgotten + your folders), Its
+  own PC (kept + here), Leaves no trace (forgotten + here: files go with the box). Helper:
+  `boxopts <idx> <follow> <deskFiles>` (replaces `follow`); a box gets the `OpenFilePath` lines for
+  your folders only when its monitor sends files there (`desk_files_settings`, no longer in the
+  shared template).
+- "Starts with nothing" isn't offered: Sandboxie's `UsePrivacyMode` runs nothing without a
+  supporter certificate (probe: in a privacy box not even cmd.exe ran; a normal box saw the file
+  and ran an app from %LOCALAPPDATA%).
+- Joined monitors = one PC: two monitors are joined only when their own copies are set up alike
+  (`InGameMonitors.sameBox` in `joinedSide`), and a group's apps go in one box — the group's
+  first screen's (`groupKey` → `profilekey`). Changing a joined monitor asks: all of them, or just
+  this one (it stops being joined: its cursor and windows no longer cross over). The layout
+  follows (`arrangeIfChanged` pushes the boxes again on a change). A monitor turning off closes and
+  empties its box only when no other monitor still uses it (`box_shared`).
+- WinGameTest: joined monitors are one group; one set up differently stops being joined (its own
+  root in the layout); alike again, joined again.
+
 ## 0.15.27 (16 Oct): screens have names; remembered by name and settings only; the menu has its own size
 
 - **"make it so that monitors are renameable, and remembered by their name and settings. not the
