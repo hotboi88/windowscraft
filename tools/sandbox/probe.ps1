@@ -204,6 +204,31 @@ Note "a second plain copy of the single-instance app: exit $($b2.ExitCode) (7 = 
 $code = $LASTEXITCODE
 Check "an app that only runs once runs again inside a box (a second copy)" ($b2.ExitCode -eq 7 -and $code -ne 7) "outside: $($b2.ExitCode), in box: $code"
 
+# ---- 7. privacy mode: a box that starts fresh — your own files (a browser's logins) not seen in it
+#         (a normal box is copy-on-write: it reads your real profile, so it starts signed in)
+Section '7. privacy mode: a box that starts fresh'
+New-Item -ItemType Directory -Force "$env:APPDATA\wcprivacy" | Out-Null
+Set-Content "$env:APPDATA\wcprivacy\probe.txt" "desk"
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\wcprivapp" | Out-Null
+Copy-Item "$env:WINDIR\System32\whoami.exe" "$env:LOCALAPPDATA\wcprivapp\wcapp.exe" -Force   # (an app installed in your own folder, like Discord)
+foreach ($k in @(@("Enabled", "y"), @("UsePrivacyMode", "y"), @("AutoDelete", "n"), @("ConfigLevel", "10"))) { & $ini set WCPriv $k[0] $k[1] | Out-Null }
+& "$dir\Start.exe" /reload | Out-Null
+Start-Sleep 2
+Set-Content "$env:RUNNER_TEMP\priv.cmd" '@if exist "%APPDATA%\wcprivacy\probe.txt" (exit /b 3) else (exit /b 4)'
+& "$dir\Start.exe" /box:WCPriv /silent /wait cmd.exe /c "$env:RUNNER_TEMP\priv.cmd"
+$seen = $LASTEXITCODE
+& "$dir\Start.exe" /box:WCPriv /silent /wait cmd.exe /c "exit /b 5"
+$cmdc = $LASTEXITCODE
+& "$dir\Start.exe" /box:WCPriv /silent /wait "$env:LOCALAPPDATA\wcprivapp\wcapp.exe"
+$appc = $LASTEXITCODE
+& "$dir\Start.exe" /box:WCMon1 /silent /wait cmd.exe /c "$env:RUNNER_TEMP\priv.cmd"
+$plain = $LASTEXITCODE
+Note "a normal box sees your own files: exit $plain (3 = it saw the file)"
+Check "privacy mode: a boxed app doesn't see your own files (a box starts fresh, signed out)" ($seen -eq 4) "exit $seen (3 = it saw the file, 4 = it didn't)"
+Check "…and programs still run in it: Windows' own, and one installed in your own folder (like Discord)" ($cmdc -eq 5 -and $appc -eq 0) "cmd exit $cmdc · app in your folder exit $appc"
+Note "WCPriv as Sandboxie has it: UsePrivacyMode = $(& $ini query WCPriv UsePrivacyMode)"
+& "$dir\Start.exe" /box:WCPriv /terminate | Out-Null
+
 # ---- 8. "force" rules: anything started while you sit at monitor 1 lands in its box by itself
 Section '8. "force" rules: anything started while you sit at m'
 #         (switched on and off as you sit down and get up)
