@@ -15,8 +15,9 @@ import java.util.Set;
 /**
  * The sound of an in-game monitor: the apps that have a window on it, each captured on its own and
  * mixed into one stream — other apps (a call in Discord on your desk) aren't heard. An app counts
- * as a whole (Windows can't split one app's sound by window): one with windows in several places
- * — another monitor, your desk — is heard where it was last used (see SoundHome). With
+ * as a whole (Windows can't split one app's sound by window): it's heard from the wall even while
+ * you use its window on your desk, and one on several monitors from where it was last used there
+ * (see SoundHome). With
  * "hear it in the game", those apps go quiet on your speakers and play from the wall instead.
  */
 final class MonitorAudio extends AudioCapture {
@@ -68,11 +69,8 @@ final class MonitorAudio extends AudioCapture {
                             titles.putIfAbsent(w.pid(), w.title());
                         }
                     }
-                    // an app with windows in several places — monitors, your desk — is heard where it
-                    // was last used (Windows can't split one program's sound by window)
-                    Set<Long> onDesk = new HashSet<>();
-                    for (MonitorBackend.Win w : b.deskWindows().get(5, java.util.concurrent.TimeUnit.SECONDS)) onDesk.add(w.pid());
-                    SoundHome.seenOnDesk(onDesk);
+                    // an app on several monitors is heard where it was last used on one (Windows
+                    // can't split one program's sound by window); your desk never takes it
                     SoundHome.seen(source.id(), pids);
                     pids.removeIf(pid -> !SoundHome.playsHere(source.id(), pid));
                     update(pids);

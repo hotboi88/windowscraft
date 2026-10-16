@@ -17,7 +17,8 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
     Rules are written straight into C:\Windows\Sandboxie.ini (our [WC…] sections only) and
     applied through SbieDll's SbieApi_ReloadConf, then confirmed with SbieApi_QueryConf
     (helper command "forcestate"). Never by starting Sandboxie's tools while a rule is on.
-  - Without it: an app's sound plays where it was last used (SoundHome, incl. DESK).
+  - Without it: an app with a window on a monitor is heard only from the wall, also while used
+    on your desk (SoundHome; the owner's ask, 16 Oct); on several monitors, where last used on one.
 - Things learned the hard way (keep them):
   - Never force a whole drive (it boxes Sandboxie's own tools; the rule can't be undone).
   - Sandboxie has NO exceptions inside a forced folder (driver source: process_force.c).
@@ -113,6 +114,44 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 "rewind" issue); extra render frame; A/V sync off 100–350 ms; 10 Mb/s cap and periodic IDR
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
+
+## 0.15.14 (16 Oct): sound stays on the wall, Roblox and Steam stay on the monitor, joined monitors after a drag
+
+Four things the owner hit while playing (his game open; nothing tested on his screen):
+- **"it keeps playing audio on my main desktop whenever i click on brave on my desktop … if music is
+  being streamed on the wall or any audio then it should only go there."** SoundHome made your desk
+  a place too: using Brave's desk window moved Brave's sound to your speakers (and away from the
+  wall and its viewers). Now a program with a window on an in-game monitor is heard only from the
+  wall, also while you use its window on your desk; on several monitors, from where it was last
+  used on one. Off every monitor it's normal again. (`SoundHome`, `SoundHomeTest`; the desk-window
+  listing every 0.7 s is gone from `MonitorAudio`.) This is the owner's own exception to "only its
+  own monitors": the desk Brave's sound goes to the wall, by his ask.
+- **"roblox doesn't pop up on the ingame monitor it pops up on my main desktop … this should never
+  happen."** Log: Roblox opened on monitor 0 (00:48:50, right), he got up (00:49:04), and 3 s later
+  `on_desk_activated` "brought it over to your desk": a window on a monitor coming forward within
+  8 s of the desk's shell being in front counted as "you started it from your desk". Roblox brings
+  itself forward once loaded, right after its launcher closes and Windows puts the desktop in front.
+  Now only a window that came over *from* your desk (it has a HOMES entry: bring_over / Bring here)
+  goes back; one that opened on a monitor stays ("…stays (it opened there)" in the log). Self-test
+  6b checks it (born on the monitor, own taskbar clicked, it comes forward: stays).
+- **"multi-monitor setups don't allow me to move my mouse over to the next monitor unless i'm
+  dragging a window" / "that happens only after i've already dragged a window".** Moving to a
+  joined monitor holds the cursor on it for SWITCH_REST (1.2 s). During a drag the hold isn't set
+  (it makes the window jitter), so the timer's take-back set it as you let go — without NARROWED,
+  so when the rest ended the single-monitor clip looked like "an app's own tighter clip" and stayed
+  for good. Now that take-back marks NARROWED too, and the group opens again after the rest (not
+  mid-drag). Self-test: "after dragging a window across, the cursor still goes on to the joined
+  monitor without dragging".
+- **"apps like steam don't pop up on the ingame monitor they pop up on my main desktop."** Log:
+  sitting at monitor 2, Steam (already running in the tray) showed its window on monitor 0, where
+  it was last, and the last fallback in `on_window_shown` ("opened on an in-game monitor by
+  itself: moving it to your desk") sent it to the desk: rule 2 (cursor on a monitor → there) had
+  passed it over (too small when shown, or open when he sat down). Now, while you sit at a
+  monitor, that fallback puts it on your monitor instead; and a window rule 2 passed over only
+  for being small is looked at again 0.3 s and 1.2 s later (Steam sizes its window after showing
+  it) and comes to your monitor once it has its size. Self-test 6c.
+- wc-vdisplay.exe (GNU) and wc-selftest.exe (MSVC, static CRT) rebuilt with the path remaps: neither
+  carries the build PC's user folder any more.
 
 ## 0.15.13 (15 Oct): wc-audio 0.4.5 — nothing lost while the app is turned down
 

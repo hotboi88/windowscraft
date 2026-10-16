@@ -859,6 +859,18 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     let wr2 = rect_of(win);
     let (wx, wy) = center(&wr2);
     rep.check("a window drags from a monitor onto the one joined to it", inside(&rb, wx, wy), format!("window {} → {}", fmt(&wr), fmt(&wr2)));
+    // …and afterwards the cursor goes back across by itself, without dragging (the moment's hold
+    // on the new monitor began when the drag let go, and once stayed for good)
+    sleep(1500);
+    let t_after = Instant::now();
+    for _ in 0..40 {
+        move_by(-60, 0);
+        sleep(15);
+    }
+    wait_for(2000, || h.events_since(t_after).iter().any(|e| e == &format!("seatmove {}", a.idx)));
+    let (cx, cy) = cursor();
+    rep.check("after dragging a window across, the cursor still goes on to the joined monitor without dragging", inside(&ra, cx, cy),
+        format!("cursor {cx},{cy}; A {}; clip {}; events {:?}", fmt(&ra), fmt(&clip()), h.events_since(t_after)));
     close(win);
     let _ = h.call("unseat", "unseated", 8000);
     sleep(300);
@@ -1155,6 +1167,52 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // the same with a real browser gone full screen (Edge, like Brave or Chrome: F11 or a video's
     // full-screen button), and still a few seconds later
     edge_fullscreen(rep, &h, &ra, &a, game, shot);
+
+    // ---- 6b. a window that opened on a monitor stays there when it comes forward while you're at
+    // your desk, right after you used your own taskbar (Roblox brings itself forward once loaded)
+    play();
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
+    sleep(400);
+    let born = spawn_window("WindowsCraftTestWin", "Opened on the monitor (self-test)", RECT { left: ra.left + 100, top: ra.top + 100, right: ra.left + 700, bottom: ra.top + 500 }, false);
+    sleep(600);
+    let _ = h.call("unseat", "unseated", 8000);
+    sleep(4300); // (the monitor keeps a just-placed window there for a few seconds)
+    {
+        let tray = unsafe { FindWindowW(PCWSTR(wide("Shell_TrayWnd").as_ptr()), PCWSTR::null()) }.unwrap_or_default();
+        let trr = rect_of(tray);
+        unsafe {
+            let _ = SetCursorPos(trr.left + (trr.right - trr.left) * 3 / 4, (trr.top + trr.bottom) / 2);
+        }
+        sleep(100);
+        click(false); // (your own taskbar…)
+        sleep(400);
+        let took = unsafe {
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
+            SetForegroundWindow(born).as_bool() // (…and the app on the monitor brings itself forward)
+        };
+        sleep(1500);
+        let (x, y) = center(&rect_of(born));
+        rep.check("a window that opened on a monitor stays there when it comes forward while you're at your desk", inside(&ra, x, y),
+            format!("now at {} · Windows took the test's bring-forward: {took}", fmt(&rect_of(born))));
+    }
+    close(born);
+    sleep(300);
+    // ---- 6c. while you sit at a monitor, an app whose window shows small first and gets its size
+    // a moment later (Steam) still comes to the monitor, not left on your desk
+    play();
+    let _ = { unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); } h.call(&format!("seat {} 0.5 0.5 {}", a.idx, game.0 as isize), "seated", 8000) };
+    sleep(400);
+    let small = spawn_window("WindowsCraftTestWin", "Small first (self-test)", RECT { left: prim.left + 100, top: prim.top + 100, right: prim.left + 200, bottom: prim.top + 180 }, false);
+    sleep(100);
+    unsafe {
+        let _ = SetWindowPos(small, None, prim.left + 100, prim.top + 100, 600, 400, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    let came = wait_for(3000, || { let (x, y) = center(&rect_of(small)); inside(&ra, x, y) });
+    rep.check("while you sit at a monitor, an app whose window opens small and then grows comes to the monitor", came,
+        format!("now at {}", fmt(&rect_of(small))));
+    close(small);
+    let _ = h.call("unseat", "unseated", 8000);
+    sleep(300);
 
     // ---- 7. your own taskbar is still there
     let tray = unsafe { FindWindowW(PCWSTR(wide("Shell_TrayWnd").as_ptr()), PCWSTR::null()) }.unwrap_or_default();

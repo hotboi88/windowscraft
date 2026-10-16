@@ -1,4 +1,9 @@
-WindowsCraft 0.15.13 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.14 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.14: an app with a window on an in-game monitor is heard only from the wall, also
+when you click its window on your own desktop. Apps you open while sitting at a monitor (Steam…)
+open on it, and one that opened on a monitor (Roblox…) stays there when it comes to the front. On joined monitors, the mouse goes across again
+after you've dragged a window over.
 
 New in 0.15.13: with "You hear it from the wall too" on, the sound you share no longer loses
 little bits now and then on a busy PC (the helper that captures it checks the app's volume on a

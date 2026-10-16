@@ -1753,7 +1753,7 @@ fn hook_thread() {
                 let group = group_area(SEAT_IDX.load(Ordering::SeqCst)).unwrap_or(area);
                 let clip = if resting && !dragging_now { area } else { group };
                 *SEAT_CLIP.lock().unwrap() = clip;
-                if !resting && NARROWED.swap(false, Ordering::SeqCst) {
+                if !resting && !dragging_now && NARROWED.swap(false, Ordering::SeqCst) {
                     let _ = ClipCursor(Some(&group)); // (the rest is over: the joined monitors are open again)
                 }
                 // the cursor went on (a little way, not just onto the edge) to a monitor joined to
@@ -1844,6 +1844,12 @@ fn hook_thread() {
                     let inside = now.left >= clip.left && now.top >= clip.top && now.right <= clip.right && now.bottom <= clip.bottom;
                     if !inside {
                         let _ = ClipCursor(Some(&clip));
+                        // held on this one monitor for the rest after moving to it (a window dragged
+                        // across: the hold starts when you let go) — the joined ones open again
+                        // after it, not left for an app's own tighter clip
+                        if clip != group {
+                            NARROWED.store(true, Ordering::SeqCst);
+                        }
                         CLIP_RETAKEN.store(true, Ordering::SeqCst); // (and the cursor goes back where it was: see `seat`)
                     }
                 }
@@ -3069,8 +3075,31 @@ fn on_window_shown(h: HWND, fresh: bool) {
         if let Some(i) = at {
             let mut r = RECT::default();
             let big = unsafe { GetWindowRect(h, &mut r).is_ok() } && r.right - r.left >= 160 && r.bottom - r.top >= 120;
-            if big && h.0 as isize != GAME.load(Ordering::SeqCst) && !seat_known().lock().unwrap().contains(&(h.0 as isize)) && !is_shell(h) {
+            let mine = h.0 as isize != GAME.load(Ordering::SeqCst) && !seat_known().lock().unwrap().contains(&(h.0 as isize)) && !is_shell(h);
+            if big && mine {
                 target = Some(i);
+            } else if mine && SEATED.load(Ordering::SeqCst) {
+                // not its size yet (Steam shows its window small, then sizes it): looked at again
+                // in a moment, and then it comes to the monitor you sit at
+                let hv = h.0 as isize;
+                std::thread::spawn(move || {
+                    for wait in [300, 900] {
+                        std::thread::sleep(Duration::from_millis(wait));
+                        let h = HWND(hv as *mut _);
+                        let mut r = RECT::default();
+                        let shown = unsafe { IsWindow(Some(h)).as_bool() && IsWindowVisible(h).as_bool() && GetWindowRect(h, &mut r).is_ok() };
+                        if !shown || !SEATED.load(Ordering::SeqCst) || SEAT_IDX.load(Ordering::SeqCst) != i {
+                            return;
+                        }
+                        if r.right - r.left >= 160 && r.bottom - r.top >= 120 {
+                            if monitor_of_window(h) != Some(i) && app_windows().contains(&h) {
+                                eprintln!("info=new window \"{}\" ({}) has its size now: in-game monitor {i}", title(h), class_name(h));
+                                place_on(h, i);
+                            }
+                            return;
+                        }
+                    }
+                });
             }
         }
     }
@@ -3092,11 +3121,18 @@ fn on_window_shown(h: HWND, fresh: bool) {
         Some(idx) => place_on(h, idx),
         None => {
             // nothing says it belongs on an in-game monitor, yet it opened on one (an app putting
-            // itself back where it was last time): it goes to your desk
+            // itself back where it was last time): it goes to your desk — but while you sit at a
+            // monitor, to that one (you're there: Steam reopening on the monitor it was on last)
             if fresh && monitor_of_window(h).is_some() && !is_overlay(h) && !is_shell(h) {
-                let home = primary_area();
-                eprintln!("info=\"{}\" opened on an in-game monitor by itself: moving it to your desk", title(h));
-                place_window(h, &home);
+                let sitting = SEAT_IDX.load(Ordering::SeqCst);
+                if SEATED.load(Ordering::SeqCst) && at == Some(sitting) {
+                    eprintln!("info=\"{}\" opened on an in-game monitor by itself while you sit at in-game monitor {sitting}: it goes there", title(h));
+                    place_on(h, sitting);
+                } else {
+                    let home = primary_area();
+                    eprintln!("info=\"{}\" opened on an in-game monitor by itself: moving it to your desk", title(h));
+                    place_window(h, &home);
+                }
             }
         }
     }
@@ -3873,8 +3909,10 @@ fn bring_over(h: HWND, idx: i32) {
 static DESK_SHELL_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// You're at your real desktop: you start (from your own Start menu, taskbar or desktop) an app
-/// that only runs once and is open on an in-game monitor — it comes over to your desk, in the
-/// middle at a modest size (the same as the other way round).
+/// that only runs once and came over to an in-game monitor from your desk — it goes back to your
+/// desk, in the middle at a modest size (the same as the other way round). One that opened on a
+/// monitor stays there, whatever comes forward (Roblox brings itself forward once it has loaded,
+/// right after its launcher closes and Windows puts your desktop in front).
 fn on_desk_activated(h: HWND) {
     if cursor_monitor().is_some() {
         return; // (the cursor's on a monitor: not you at your desk)
@@ -3893,6 +3931,10 @@ fn on_desk_activated(h: HWND) {
     }
     let Some(idx) = monitor_of_window(h) else { return };
     if !app_windows().contains(&h) {
+        return;
+    }
+    if !HOMES.get().is_some_and(|homes| homes.lock().unwrap().contains_key(&(h.0 as isize))) {
+        eprintln!("info=\"{}\" came forward on in-game monitor {idx} while you're at your desk: stays (it opened there)", title(h));
         return;
     }
     *DESK_SHELL_AT.lock().unwrap() = None;
