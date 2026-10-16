@@ -10,24 +10,83 @@
 //! * after any volume change we make, output is held silent briefly while in-flight audio drains;
 //! * a session the user turns back up is ducked again (and silenced meanwhile).
 //!
+//! Looking for the app's sessions (on every device, by its process tree) runs on a thread of its
+//! own: on a busy PC one look took 25–60 ms, and done between reads of the sound it lost some of
+//! it, 5–20 ms at a time, about once a second. The sound thread still reads the state and volume
+//! of the sessions found (~0.05 ms) right before each decision, so a session turned back up in
+//! the mixer, or starting to play before it's turned down, is silenced before any of it can be
+//! amplified. When sound starts after silence or comes in too loud, what follows waits —
+//! undecided — until a look that began after it has finished (a new session may have just
+//! appeared), and then goes on: ~10 ms late, but whole. The list of every process (the slow part)
+//! is read only when a session we haven't seen before appears, so each new session is told apart
+//! by the app's process tree as it is right then.
+//!
 //! Restoring: a session goes back to its original volume as soon as it stops playing, on any
 //! exit, and — should this process ever die without cleaning up — from a small state file the
 //! mod replays with `--restore`. (Windows remembers per-app volumes, so this matters.)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, PWSTR};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Media::Audio::*;
-use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
 use windows::Win32::System::Diagnostics::ToolHelp::*;
 
 pub const DUCK: f32 = 0.001;
 const HOLD: Duration = Duration::from_millis(200);
+/// How often the sessions' state and volume are read (the sound thread used to, every packet).
+const STATE_EVERY: Duration = Duration::from_millis(10);
 const ENUM_EVERY: Duration = Duration::from_millis(250);
-const TREE_EVERY: Duration = Duration::from_millis(1000);
+/// Sound that has waited this long for a check goes on silenced (the check thread is stuck).
+const MAX_WAIT: Duration = Duration::from_millis(200);
 const GIVE_UP_AFTER: Duration = Duration::from_millis(2000);
+
+/// What the checks found, for the sound thread — and what it asks of them.
+struct Found {
+    /// At the last check, every playing session of the app was ducked and read back at DUCK.
+    all_ducked: bool,
+    /// One of our volume changes is draining: silent until then.
+    hold_until: Instant,
+    /// When the newest finished look at the sessions began.
+    checked_from: Option<Instant>,
+    /// Sound started (or came in too loud) then: a look at the sessions is wanted.
+    wanted: Option<Instant>,
+    /// The sound thread saw a session playing un-ducked: check (and duck it) now.
+    state_now: bool,
+    give_up: bool,
+    stop: bool,
+    reducks: u32,
+    /// The app's sessions as the check thread left them, for the sound thread to read.
+    watch: Vec<Watch>,
+    watch_version: u64,
+}
+
+/// One of the app's sessions, for the sound thread: read right before each decision.
+#[derive(Clone)]
+struct Watch {
+    ctl: IAudioSessionControl2,
+    vol: ISimpleAudioVolume,
+    ducked: bool,
+}
+
+// SAFETY: both threads are in the multithreaded apartment (main: initialize_mta, the check
+// thread: CoInitializeEx MTA), where audio session objects may be called from any thread.
+unsafe impl Send for Watch {}
+
+struct Shared {
+    found: Mutex<Found>,
+    wake: Condvar,
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, Found> {
+        self.found.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 struct Tracked {
     ctl: IAudioSessionControl2,
@@ -37,24 +96,39 @@ struct Tracked {
     ducked: bool,
 }
 
-pub struct Ducker {
+/// The check thread's side: finds the app's sessions, ducks the playing ones, restores the rest.
+struct Checks {
     root: u32,
     tree: HashSet<u32>,
     sessions: HashMap<String, Tracked>, // by session instance id
+    /// Sessions of other apps (by instance id), so they're told apart only once.
+    foreign: HashSet<String>,
     /// Every app volume we turned down and haven't confirmed restored: identifier → original.
     /// Written to the state file *before* ducking, cleared only after a verified restore.
     records: HashMap<String, f32>,
     enumerator: Option<IMMDeviceEnumerator>,
-    /// At the last poll, every playing session of the app was ducked and read back at DUCK.
-    all_ducked: bool,
-    last_forced: Instant,
+    state_path: PathBuf,
+    last_state: Instant,
+    last_enum: Instant,
+    /// What the sound thread was last given (instance id, ducked), to give it news only.
+    watched: Vec<(String, bool)>,
+    shared: Arc<Shared>,
+}
+
+/// The sound thread's side: amplifies what it knows is ducked, silences the rest.
+pub struct Ducker {
+    shared: Arc<Shared>,
+    done: mpsc::Receiver<()>,
     loud_blocks: Vec<Instant>,
     gain: f32,
-    state_path: PathBuf,
-    last_tree: Instant,
-    last_enum: Instant,
-    hold_until: Instant,
     was_silent: bool,
+    /// Blocks not decided yet, oldest first.
+    waiting: VecDeque<Block>,
+    /// Until a check is in: the newest moment one is wanted from.
+    want: Option<Instant>,
+    watch: Vec<Watch>,
+    watch_version: u64,
+    passthrough: bool,
     pub gave_up: Option<String>,
     /// One block held back, so that if the next one has to be muted this one can fade out first
     /// (cutting sound off mid-wave is a loud click).
@@ -63,7 +137,16 @@ pub struct Ducker {
     /// Counters for the log (reset by whoever prints them).
     pub muted_loud: u32,
     pub muted_wait: u32,
-    pub reducks: u32,
+    pub longest_wait_ms: u128,
+}
+
+struct Block {
+    samples: Vec<f32>,
+    peak: f32,
+    loud: bool,
+    at: Instant,
+    /// Decided only after a look at the sessions that began no earlier than this.
+    after: Option<Instant>,
 }
 
 fn pwstr_take(p: PWSTR) -> String {
@@ -134,50 +217,71 @@ fn process_tree(root: u32) -> HashSet<u32> {
     tree
 }
 
-impl Ducker {
-    pub fn new(root: u32, state_path: PathBuf) -> Ducker {
+impl Checks {
+    fn new(root: u32, state_path: PathBuf, shared: Arc<Shared>) -> Checks {
         let now = Instant::now();
-        Ducker {
+        Checks {
             root,
-            tree: process_tree(root),
+            tree: HashSet::from([root]),
             sessions: HashMap::new(),
+            foreign: HashSet::new(),
             records: load_records(&state_path),
             enumerator: None,
-            all_ducked: false,
-            last_forced: now - ENUM_EVERY,
-            loud_blocks: Vec::new(),
-            gain: 0.0,
             state_path,
-            last_tree: now,
+            last_state: now - STATE_EVERY,
             last_enum: now - ENUM_EVERY,
-            hold_until: now,
-            was_silent: true,
-            gave_up: None,
-            pending: Vec::new(),
-            pending_muted: true,
-            muted_loud: 0,
-            muted_wait: 0,
-            reducks: 0,
+            watched: Vec::new(),
+            shared,
         }
     }
 
-    /// Finds new sessions of the app, ducks the playing ones, restores the idle ones.
-    /// `force`: something looks off (sound appeared or is too loud) — re-scan now, at most 10×/s.
-    pub fn poll(&mut self, force: bool) {
-        if self.gave_up.is_some() {
-            return;
+    /// Checks every STATE_EVERY — looking at the sessions at once when the sound thread wants
+    /// that — until told to stop.
+    fn run(&mut self) {
+        let mut gave_up = false;
+        loop {
+            let full = {
+                let mut f = self.shared.lock();
+                loop {
+                    if f.stop {
+                        return;
+                    }
+                    if f.give_up && !gave_up {
+                        gave_up = true;
+                        drop(f);
+                        self.restore_all();
+                        f = self.shared.lock();
+                        continue;
+                    }
+                    if gave_up {
+                        f = self.shared.wake.wait_timeout(f, Duration::from_secs(1)).unwrap_or_else(|e| e.into_inner()).0;
+                        continue;
+                    }
+                    if f.state_now {
+                        f.state_now = false;
+                        break false;
+                    }
+                    // (one that began since the sound started already counts)
+                    let checked = f.checked_from;
+                    let wanted = f.wanted.take().is_some_and(|w| checked.map_or(true, |c| c < w));
+                    let since = Instant::now().saturating_duration_since(self.last_state);
+                    if wanted || since >= STATE_EVERY {
+                        break wanted;
+                    }
+                    f = self.shared.wake.wait_timeout(f, STATE_EVERY - since).unwrap_or_else(|e| e.into_inner()).0;
+                }
+            };
+            self.check(full);
         }
-        let now = Instant::now();
-        let forced = force && now - self.last_forced >= Duration::from_millis(100);
-        if forced {
-            self.last_forced = now;
-        }
-        if forced || now - self.last_tree >= TREE_EVERY {
-            self.tree = process_tree(self.root); // a new child process may have just started playing
-            self.last_tree = now;
-        }
-        if forced || now - self.last_enum >= ENUM_EVERY {
-            self.last_enum = now;
+    }
+
+    /// Finds new sessions of the app (`look`: now), ducks the playing ones, restores the idle ones.
+    fn check(&mut self, look: bool) {
+        let began = Instant::now();
+        self.last_state = began;
+        let looked = look || began - self.last_enum >= ENUM_EVERY;
+        if looked {
+            self.last_enum = began;
             if self.enumerator.is_none() {
                 self.enumerator = new_enumerator().ok();
             }
@@ -188,13 +292,22 @@ impl Ducker {
                     Vec::new()
                 }
             };
+            let mut tree_read = false;
+            let mut seen = HashSet::new();
             for c2 in list {
                 let Ok(pid) = (unsafe { c2.GetProcessId() }) else { continue };
-                if !self.tree.contains(&pid) {
+                let Ok(inst) = (unsafe { c2.GetSessionInstanceIdentifier() }).map(pwstr_take) else { continue };
+                seen.insert(inst.clone());
+                if self.sessions.contains_key(&inst) || self.foreign.contains(&inst) {
                     continue;
                 }
-                let Ok(inst) = (unsafe { c2.GetSessionInstanceIdentifier() }).map(pwstr_take) else { continue };
-                if self.sessions.contains_key(&inst) {
+                // one we haven't seen: whose is it? (a new child process may have just started playing)
+                if !tree_read {
+                    self.tree = process_tree(self.root);
+                    tree_read = true;
+                }
+                if !self.tree.contains(&pid) {
+                    self.foreign.insert(inst);
                     continue;
                 }
                 let Ok(vol) = c2.cast::<ISimpleAudioVolume>() else { continue };
@@ -204,6 +317,7 @@ impl Ducker {
                 let original = if near(current, DUCK) { self.records.get(&ident).copied().unwrap_or(1.0) } else { current };
                 self.sessions.insert(inst, Tracked { ctl: c2, vol, ident, original, ducked: false });
             }
+            self.foreign.retain(|i| seen.contains(i));
         }
         let mut changed = false;
         let mut all_ducked = true;
@@ -219,7 +333,13 @@ impl Ducker {
                     if t.ducked {
                         eprintln!("info=app volume was changed in the mixer; keeping it in the game");
                     }
-                    self.reducks += 1;
+                    // nothing is amplified from here until it reads back at DUCK and in-flight audio drained
+                    {
+                        let mut f = self.shared.lock();
+                        f.all_ducked = false;
+                        f.hold_until = Instant::now() + HOLD;
+                        f.reducks += 1;
+                    }
                     // note it down first, so even a crash right now can't lose the original volume
                     if !t.ident.is_empty() && !self.records.contains_key(&t.ident) {
                         self.records.insert(t.ident.clone(), t.original);
@@ -228,9 +348,8 @@ impl Ducker {
                     let ok = unsafe { t.vol.SetMasterVolume(DUCK, std::ptr::null()) }.is_ok();
                     t.ducked = ok;
                     changed |= ok;
-                    self.hold_until = Instant::now() + HOLD;
-                    self.gain = 0.0;
-                    all_ducked = false; // only trust it once it reads back at DUCK on a later poll
+                    self.shared.lock().hold_until = Instant::now() + HOLD;
+                    all_ducked = false; // only trust it once it reads back at DUCK on a later check
                 }
             } else if t.ducked {
                 // stopped playing (or the app is closing): give it its volume back now, while we still can
@@ -251,7 +370,20 @@ impl Ducker {
         for k in expired {
             self.sessions.remove(&k);
         }
-        self.all_ducked = all_ducked;
+        let mut watched: Vec<(String, bool)> = self.sessions.iter().map(|(k, t)| (k.clone(), t.ducked)).collect();
+        watched.sort();
+        {
+            let mut f = self.shared.lock();
+            f.all_ducked = all_ducked;
+            if looked {
+                f.checked_from = Some(began);
+            }
+            if watched != self.watched {
+                f.watch = self.sessions.values().map(|t| Watch { ctl: t.ctl.clone(), vol: t.vol.clone(), ducked: t.ducked }).collect();
+                f.watch_version += 1;
+            }
+        }
+        self.watched = watched;
         if changed {
             self.settle_records();
         }
@@ -286,51 +418,185 @@ impl Ducker {
         }
     }
 
-    /// Takes one captured block (f32 stereo) and returns the block before it, amplified — or
-    /// silenced if it isn't safe to amplify. The one-block hold (~10 ms) lets a block that comes
-    /// right before a muted one fade out smoothly instead of stopping dead.
-    pub fn process(&mut self, mut samples: Vec<f32>) -> Vec<f32> {
-        if self.gave_up.is_some() {
-            let mut out = std::mem::take(&mut self.pending);
-            out.extend_from_slice(&samples);
-            return out;
+    fn restore_all(&mut self) {
+        for t in self.sessions.values_mut() {
+            t.ducked = false;
         }
-        let muted = self.decide(&mut samples);
-        let mut out = std::mem::replace(&mut self.pending, samples);
-        if muted && !self.pending_muted {
-            fade_out_tail(&mut out);
+        self.settle_records(); // records that couldn't be confirmed stay in the file for --restore
+        if self.records.is_empty() {
+            let _ = std::fs::remove_file(&self.state_path);
         }
-        self.pending_muted = muted;
+    }
+}
+
+impl Drop for Checks {
+    fn drop(&mut self) {
+        self.restore_all();
+    }
+}
+
+impl Ducker {
+    pub fn new(root: u32, state_path: PathBuf) -> Ducker {
+        let found = Found {
+            all_ducked: false,
+            hold_until: Instant::now(),
+            checked_from: None,
+            wanted: None,
+            state_now: false,
+            give_up: false,
+            stop: false,
+            reducks: 0,
+            watch: Vec::new(),
+            watch_version: 0,
+        };
+        let shared = Arc::new(Shared { found: Mutex::new(found), wake: Condvar::new() });
+        let (finished, done) = mpsc::channel();
+        let theirs = shared.clone();
+        std::thread::Builder::new()
+            .name("app checks".into())
+            .spawn(move || {
+                let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+                let mut checks = Checks::new(root, state_path, theirs);
+                checks.run();
+                drop(checks); // the app gets its volume back
+                let _ = finished.send(());
+            })
+            .expect("the app checks thread");
+        Ducker {
+            shared,
+            done,
+            loud_blocks: Vec::new(),
+            gain: 0.0,
+            was_silent: true,
+            waiting: VecDeque::new(),
+            want: None,
+            watch: Vec::new(),
+            watch_version: 0,
+            passthrough: false,
+            gave_up: None,
+            pending: Vec::new(),
+            pending_muted: true,
+            muted_loud: 0,
+            muted_wait: 0,
+            longest_wait_ms: 0,
+        }
+    }
+
+    pub fn take_reducks(&mut self) -> u32 {
+        std::mem::take(&mut self.shared.lock().reducks)
+    }
+
+    /// Takes captured sound (f32 stereo, possibly none) and returns what can go on: amplified, or
+    /// silenced where it isn't safe to amplify. Sound waits here while a check it needs is under
+    /// way, and goes on one block (~10 ms) late, so that a block right before a muted one can
+    /// fade out smoothly instead of stopping dead.
+    pub fn process(&mut self, samples: Vec<f32>) -> Vec<f32> {
+        let now = Instant::now();
+        if !self.passthrough && !samples.is_empty() {
+            self.arrive(samples, now);
+            if !self.passthrough {
+                return self.release(now);
+            }
+            return self.pass(Vec::new());
+        }
+        if self.passthrough {
+            return self.pass(samples);
+        }
+        self.release(now)
+    }
+
+    /// After giving up: what waited goes on silenced (it was never checked), the rest as it came.
+    fn pass(&mut self, samples: Vec<f32>) -> Vec<f32> {
+        let mut out = std::mem::take(&mut self.pending);
+        for b in self.waiting.drain(..) {
+            out.resize(out.len() + b.samples.len(), 0.0);
+        }
+        out.extend_from_slice(&samples);
         out
     }
 
-    /// Amplifies the block in place, or silences it; returns true if it was silenced.
-    fn decide(&mut self, samples: &mut [f32]) -> bool {
+    fn arrive(&mut self, samples: Vec<f32>, now: Instant) {
         let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
-        let now = Instant::now();
-        if peak > 0.0 && self.was_silent {
-            self.poll(true); // sound just started: a new session may have appeared, duck it right away
+        // louder than a ducked app can be: something isn't ducked (yet) — never amplify this
+        let loud = peak > DUCK * 2.0;
+        if loud || (peak > 0.0 && self.was_silent) {
+            // sound just started (a new session may have appeared, to duck right away) or is too
+            // loud: look at once, and decide nothing from here on until a look begun since is in
+            self.want = Some(now);
+            let mut f = self.shared.lock();
+            f.wanted = Some(now);
+            drop(f);
+            self.shared.wake.notify_one();
         }
         self.was_silent = peak == 0.0;
-        if peak > DUCK * 2.0 {
-            // louder than a ducked app can be: something isn't ducked (yet) — never amplify this
-            samples.iter_mut().for_each(|s| *s = 0.0);
-            self.gain = 0.0;
+        if loud {
             self.muted_loud += 1;
             self.loud_blocks.push(now);
             self.loud_blocks.retain(|t| now - *t < GIVE_UP_AFTER);
-            self.poll(true);
             // most of the last 2 s too loud, despite re-ducking: Windows won't let us turn it down
             if self.loud_blocks.len() > 60 {
                 self.give_up("this app's sound couldn't be turned down in Windows");
             }
-            return true;
         }
-        // amplify only what we know is ducked: every playing session confirmed at DUCK, hold over
-        if !self.all_ducked || now < self.hold_until {
-            samples.iter_mut().for_each(|s| *s = 0.0);
+        self.waiting.push_back(Block { samples, peak, loud, at: now, after: self.want });
+    }
+
+    /// Decides every block whose check is in (or that waited too long), oldest first.
+    fn release(&mut self, now: Instant) -> Vec<f32> {
+        if self.waiting.is_empty() {
+            return Vec::new();
+        }
+        let (all_ducked, hold_until, checked_from) = {
+            let f = self.shared.lock();
+            if f.watch_version != self.watch_version {
+                self.watch = f.watch.clone();
+                self.watch_version = f.watch_version;
+            }
+            (f.all_ducked, f.hold_until, f.checked_from)
+        };
+        // read now, after this sound was: a session turned back up in the mixer (or playing
+        // before it's turned down) shows here before its sound can be amplified
+        let sessions_ok = self.watch.iter().all(|w| match unsafe { w.ctl.GetState() } {
+            Err(_) => false,
+            Ok(s) if s != AudioSessionStateActive => true,
+            Ok(_) => w.ducked && unsafe { w.vol.GetMasterVolume() }.is_ok_and(|v| near(v, DUCK)),
+        });
+        if !sessions_ok {
+            self.shared.lock().state_now = true;
+            self.shared.wake.notify_one();
+        }
+        let checked = |t: Instant| checked_from.is_some_and(|c| c >= t);
+        let mut out = Vec::new();
+        while let Some(after) = self.waiting.front().map(|b| b.after) {
+            let ready = after.map_or(true, checked);
+            if !ready && !after.is_some_and(|t| now.saturating_duration_since(t) > MAX_WAIT) {
+                break;
+            }
+            let mut b = self.waiting.pop_front().unwrap();
+            if after.is_some() {
+                self.longest_wait_ms = self.longest_wait_ms.max(now.saturating_duration_since(b.at).as_millis());
+            }
+            let muted = self.decide(&mut b, ready && sessions_ok && all_ducked && now >= hold_until);
+            let mut prev = std::mem::replace(&mut self.pending, b.samples);
+            if muted && !self.pending_muted {
+                fade_out_tail(&mut prev);
+            }
+            self.pending_muted = muted;
+            out.extend_from_slice(&prev);
+        }
+        if self.want.is_some_and(checked) {
+            self.want = None;
+        }
+        out
+    }
+
+    /// Amplifies the block in place, or silences it (`safe`: everything playing is known to be
+    /// ducked); returns true if it was silenced.
+    fn decide(&mut self, b: &mut Block, safe: bool) -> bool {
+        if b.loud || !safe {
+            b.samples.iter_mut().for_each(|s| *s = 0.0);
             self.gain = 0.0;
-            if peak > 0.0 {
+            if !b.loud && b.peak > 0.0 {
                 self.muted_wait += 1;
             }
             return true;
@@ -338,7 +604,7 @@ impl Ducker {
         // fade in over ~50 ms rather than jumping straight to x1000
         let full = 1.0 / DUCK;
         let step = full / (0.05 * 48_000.0);
-        for (i, s) in samples.iter_mut().enumerate() {
+        for (i, s) in b.samples.iter_mut().enumerate() {
             if i % 2 == 0 && self.gain < full {
                 self.gain = (self.gain + step).min(full);
             }
@@ -348,19 +614,20 @@ impl Ducker {
     }
 
     fn give_up(&mut self, why: &str) {
-        self.restore_all();
-        self.gave_up = Some(why.to_string());
         eprintln!("duck=failed: {why}");
+        self.gave_up = Some(why.to_string());
+        self.passthrough = true;
+        self.shared.lock().give_up = true; // (the check thread gives the app its volume back)
+        self.shared.wake.notify_one();
     }
+}
 
-    pub fn restore_all(&mut self) {
-        for t in self.sessions.values_mut() {
-            t.ducked = false;
-        }
-        self.settle_records(); // records that couldn't be confirmed stay in the file for --restore
-        if self.records.is_empty() {
-            let _ = std::fs::remove_file(&self.state_path);
-        }
+impl Drop for Ducker {
+    fn drop(&mut self) {
+        self.shared.lock().stop = true;
+        self.shared.wake.notify_all();
+        // the app gets its volume back on the check thread: wait for that, but never hang here
+        let _ = self.done.recv_timeout(Duration::from_secs(3));
     }
 }
 
@@ -410,12 +677,6 @@ fn save_records(path: &PathBuf, records: &HashMap<String, f32>) {
     let tmp = path.with_extension("tmp");
     if std::fs::write(&tmp, lines.join("\n")).is_ok() {
         let _ = std::fs::rename(&tmp, path);
-    }
-}
-
-impl Drop for Ducker {
-    fn drop(&mut self) {
-        self.restore_all();
     }
 }
 

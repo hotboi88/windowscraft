@@ -1,4 +1,8 @@
-WindowsCraft 0.15.12 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.13 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.13: with "You hear it from the wall too" on, the sound you share no longer loses
+little bits now and then on a busy PC (the helper that captures it checks the app's volume on a
+thread of its own now), so a film sounds whole for you and your friends.
 
 New in 0.15.12: sound and picture line up. Friends heard a shared screen's sound about a
 seventh of a second after the picture (your PC stamped it late, and their game never waited for

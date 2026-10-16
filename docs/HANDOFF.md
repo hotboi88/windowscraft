@@ -43,7 +43,9 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
   monitors play different audio at once.
 - No repeated sign-ins, no browser restarts, no profile cloning / restart-and-copy, no VMs,
   no paying for anything, no app-specific foundations.
-- No admin/UAC prompts for Task Manager; wc-audio.exe stays the 0.4.4 binary.
+- No admin/UAC prompts for Task Manager. wc-audio.exe is the 0.4.5 binary: changed once, with the
+  owner's OK (15 Oct, so nothing is lost while the app is turned down); never replace it without
+  asking him.
 - Don't copy WaylandCraft code. Keep Cobblemon key compatibility. No fake UI.
 - Diagnostics/measurement off by default. Small, measurable, reversible changes; no rewrites.
 - His PC is also his work machine: ask before anything that takes over the screen, mouse or
@@ -54,7 +56,13 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
 
 - Natives: native/wc-audio (Rust, target x86_64-pc-windows-gnu from Linux; on Windows the
   normal toolchain works). After rebuilding, copy wc-vdisplay.exe / wc-selftest.exe /
-  wc-input.exe / wc-capture.exe into src/main/resources/windowscraft/natives (NOT wc-audio.exe).
+  wc-input.exe / wc-capture.exe into src/main/resources/windowscraft/natives (NOT wc-audio.exe:
+  only with the owner's OK, built `cargo build --release --target x86_64-pc-windows-gnu --bin
+  wc-audio` like 0.4.4 and 0.4.5, and tested with tools/duck first).
+  Build anything that ships with `RUSTFLAGS="--remap-path-prefix=<home>\.cargo=cargo
+  --remap-path-prefix=<repo>=windowscraft"` (and a separate `--target-dir`): otherwise the
+  binary carries the build PC's user folder in its panic paths (wc-audio 0.4.5 is built that way;
+  wc-capture.exe and wc-vdisplay.exe from before still carry it).
   On Windows with the MSVC toolchain, build with `RUSTFLAGS="-C target-feature=+crt-static"`
   (else the helper needs VCRUNTIME140.dll, which not every PC has); wc-capture.exe since 0.15.3
   is built that way (`--target-dir target-static`).
@@ -98,6 +106,38 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 "rewind" issue); extra render frame; A/V sync off 100–350 ms; 10 Mb/s cap and periodic IDR
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
+
+## 0.15.13 (15 Oct): wc-audio 0.4.5 — nothing lost while the app is turned down
+
+The owner wants a film shared from Edge heard from the wall by both of them ("but I wanted us to
+both hear it from the wall": "You hear it from the wall too" stays on), and OK'd changing
+wc-audio for this one fix (his rule had it at 0.4.4). 0.4.4 looked for the app's sessions (every
+device, every 250 ms) and read the list of every process (every 1 s, and whenever sound started
+after silence) on the thread that reads the sound. With his game running one look took ~35 ms
+(process list 24 ms median, up to 45; sessions ~10 ms), and application loopback lost sound while
+held up — in spite of the 500 ms buffer asked for.
+- **Looks run on a thread of their own** ("app checks", `duck.rs` `Checks`). The sound thread
+  still reads the found sessions' state and volume (~0.05 ms) right before each decision
+  (`Watch`, shared between the two MTA threads): a first try without that let a session turned
+  back up in the mixer come through amplified (23 reads, up to 0.15 of full scale), which 0.4.4
+  never did.
+- **Sound after silence (or too loud) waits, undecided,** until a look begun since has finished
+  (~10 ms; after 200 ms it goes on silenced), as when the look ran in line. The process list is
+  read only when a session never seen before appears, so each new one is told apart by the app's
+  process tree as it is right then.
+- Measured with his game running (`tools/duck/compare.sh`, a windowless player, 24 s each):
+  | helper | steady sound | sound with dead-silent gaps |
+  |---|---|---|
+  | 0.4.4 | 988–995 ms per s, 23–25 hold-ups over 30 ms (up to 71) | 988–991 ms per s, 24 hold-ups (up to 113) |
+  | 0.4.5 | 999–1000 ms per s, none | 1000 ms per s, 5–13 waits for a look (up to 31) |
+- Safety (`tools/duck/safety.py`, test players only): a child process's session is turned down
+  and comes through amplified; another app playing meanwhile is left alone; turned back up in the
+  mixer 10 times, never through loud (a steady −63 dB tone, under the "too loud" guard, so any
+  slip would come out near full scale); its volume back on exit; killed, `--restore` puts it back.
+  0.4.4 passes the same.
+- `LostSound` stays, as a safety net. Not measured: under the bench's heavy load (three game
+  instances), as his game was running; 0.4.4 lost ~2 % there, and with the looks off the sound
+  thread it should behave like a plain capture, which lost nothing under that load.
 
 ## 0.15.12 (15 Oct): lip sync for real — the sound with its picture, also far away
 

@@ -55,8 +55,8 @@ players:
   for everyone; or "direct" sound; per-screen volume 0–500 %.
 - **Natives** (Rust, native/wc-audio/src/bin): `wc-vdisplay` (virtual monitors, seating,
   pointing, window placement, taskbars, input hooks, Sandboxie control — the big one),
-  `wc-capture` (capture), `wc-audio` (WASAPI per-process loopback / muting — **keep the 0.4.4
-  binary**, don't replace it), `wc-input` (input injection), `wc-apps`, `wc-selftest` (Windows
+  `wc-capture` (capture), `wc-audio` (WASAPI per-process loopback / muting — **keep the 0.4.5
+  binary**, changed once with the owner's OK; don't replace it without asking), `wc-input` (input injection), `wc-apps`, `wc-selftest` (Windows
   end-to-end tests). Java side: `src/main/java/dev/windowscraft/*` (monitor, capture.win, client,
   render, stream, relay, net, audio, ui, block).
 
@@ -116,7 +116,8 @@ players:
   app-specific foundations** (general mechanisms first).
 - Sandboxie-Plus bundling is approved (he likes multiple instances of apps and games); its
   settings live in the monitor manager UI. It must never show its own UI.
-- No admin/UAC prompt for Task Manager. `wc-audio.exe` stays the 0.4.4 binary.
+- No admin/UAC prompt for Task Manager. `wc-audio.exe` stays the 0.4.5 binary (0.4.4 until
+  15 Oct; the owner OK'd that one change).
 - Don't copy WaylandCraft code. Keep Cobblemon key compatibility. **No fake UI** (nothing in
   the UI that doesn't really work).
 - Diagnostics/measurement **off by default**.

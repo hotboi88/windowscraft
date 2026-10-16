@@ -82,9 +82,11 @@ fn open_and_init(target: &Target) -> Result<(AudioClient, &'static str), Box<dyn
     // Float in, converted to s16 below: every WASAPI mode accepts float with autoconvert, and
     // the in-game mode needs float (it amplifies a deliberately quiet signal back up).
     let format = WaveFormat::new(32, 32, &SampleType::Float, RATE, CHANNELS, None);
-    // 500 ms of room: if this loop is ever held up (e.g. scanning the app's sessions, or the
-    // game being slow to read our output), audio waits here instead of being lost — lost audio
-    // is an audible crackle. It adds no delay: we still read every packet as soon as it lands.
+    // 500 ms of room, asked for: if this loop is ever held up (e.g. the game being slow to read
+    // our output), audio should wait here instead of being lost — lost audio is an audible
+    // crackle. It adds no delay: we still read every packet as soon as it lands. (Application
+    // loopback lost sound all the same while this loop scanned the app's sessions on a busy PC;
+    // those scans now run on their own thread, see duck.rs.)
     let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 5_000_000 };
     // Capture direction on a render device = loopback.
     client.initialize_client(&format, &Direction::Capture, &mode)?;
@@ -173,12 +175,9 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         // silence on its own clock, so a timeout here is not an error.
         let _ = event.wait_for_event(20);
         let t0 = std::time::Instant::now();
-        if let Some(d) = ducker.as_mut() {
-            d.poll(false);
-            if let Some(why) = d.gave_up.take() {
-                eprintln!("info=sound stays in the app: {why}");
-                ducker = None;
-            }
+        if let Some(why) = ducker.as_mut().and_then(|d| d.gave_up.take()) {
+            eprintln!("info=sound stays in the app: {why}");
+            ducker = None;
         }
         loop {
             let frames = capture.get_next_packet_size()?.unwrap_or(0) as usize;
@@ -202,7 +201,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
             queue.extend(&packet[..bytes]);
         }
-        if queue.len() < 4 {
+        if queue.len() < 4 && ducker.is_none() {
             continue;
         }
         let mut samples: Vec<f32> = Vec::with_capacity(queue.len() / 4);
@@ -211,7 +210,11 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             samples.push(f32::from_le_bytes(b));
         }
         if let Some(d) = ducker.as_mut() {
+            // (sound may wait there a moment for a check, so it's asked even when none came)
             samples = d.process(samples);
+            if samples.is_empty() {
+                continue;
+            }
         }
         slowest_ms = slowest_ms.max(t0.elapsed().as_millis());
         out.clear();
@@ -222,18 +225,18 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             break; // the mod closed the pipe: we're done
         }
         if last_stats.elapsed().as_secs() >= 10 {
-            let (loud, wait, reducks) = match ducker.as_mut() {
+            let (loud, wait, reducks, waited) = match ducker.as_mut() {
                 Some(d) => {
-                    let r = (d.muted_loud, d.muted_wait, d.reducks);
+                    let r = (d.muted_loud, d.muted_wait, d.take_reducks(), d.longest_wait_ms);
                     d.muted_loud = 0;
                     d.muted_wait = 0;
-                    d.reducks = 0;
+                    d.longest_wait_ms = 0;
                     r
                 }
-                None => (0, 0, 0),
+                None => (0, 0, 0, 0),
             };
-            if glitches + loud + wait + reducks > 0 || slowest_ms > 50 {
-                eprintln!("stats=last 10 s: {glitches} capture glitch(es), {silent_packets} silent packet(s), {loud} block(s) muted as too loud, {wait} muted while turning the app down, {reducks} re-duck(s), slowest loop {slowest_ms} ms");
+            if glitches + loud + wait + reducks > 0 || slowest_ms > 50 || waited > 50 {
+                eprintln!("stats=last 10 s: {glitches} capture glitch(es), {silent_packets} silent packet(s), {loud} block(s) muted as too loud, {wait} muted while turning the app down, {reducks} re-duck(s), slowest loop {slowest_ms} ms, longest wait for a check {waited} ms");
             }
             silent_packets = 0;
             glitches = 0;

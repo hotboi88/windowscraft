@@ -144,6 +144,19 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## Sound while the app is turned down (15 Oct, 0.15.13: wc-audio 0.4.4 → 0.4.5)
+
+"You hear it from the wall too" on, his game running, a windowless player captured for 24 s
+(`tools/duck/compare.sh`), two rounds each:
+
+| helper | steady sound | sound with dead-silent gaps |
+|---|---|---|
+| 0.4.4 | 988–995 ms per s, 23–25 hold-ups over 30 ms (up to 71) | 988–991 ms per s, 24 hold-ups (up to 113) |
+| 0.4.5 | 999–1000 ms per s, none | 1000 ms per s, 5–13 waits for a look (up to 31) |
+
+Where 0.4.4's time went (one look, his game running): the list of every process 24 ms median
+(up to 45), the app's sessions on every device ~10 ms, their state and volume ~0.05 ms.
+
 ## Lip sync (15 Oct, 0.15.12, movie test: sound after picture, median and 10th–90th percentile)
 
 | line to the viewer | 0.15.11 | 0.15.12 |

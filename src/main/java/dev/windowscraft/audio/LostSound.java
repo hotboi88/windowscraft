@@ -3,11 +3,12 @@ package dev.windowscraft.audio;
 /**
  * Finds sound that was lost on its way in, by when it arrives. The capture hands it over in
  * batches about 10 ms apart, together as long as the time that passed. When a batch comes up
- * short and the ones after don't make up for it, that much sound never came: the capture helper
- * loses a little, now and then, while it turns the app down on a busy PC (wc-audio 0.4.4 looks
- * for the app's sessions on the thread that reads the sound: ~30 ms once a second). Silence of
- * the same length belongs where it went missing, so what comes after stays in step with the
- * picture — closed up, it played early by that much (and the cushion ran dry: a longer gap).
+ * short and the ones after don't make up for it, that much sound never came. wc-audio 0.4.4 lost
+ * a little, now and then, while it turned the app down on a busy PC (it looked for the app's
+ * sessions on the thread that reads the sound: ~30 ms once a second); 0.4.5 looks on a thread of
+ * its own and loses nothing, and this stays for anything else that drops sound. Silence of the
+ * same length belongs where it went missing, so what comes after stays in step with the picture
+ * — closed up, it played early by that much (and the cushion ran dry: a longer gap).
  */
 final class LostSound {
     private static final long BATCH_GAP_NANOS = 3_000_000L;
