@@ -132,6 +132,7 @@ full FFmpeg restart on quality change; no guest relative mouse.
   (`layout()` from `width / k`), draws under a `scale(k)`, takes the mouse divided by k, and scales
   its scissor rects itself (1.21.1's `enableScissor` ignores the pose matrix — checked with javap).
   The slider applies when you let go (the menu doesn't resize under your mouse).
+- Own copies, the first switch: written through Sandboxie's service setting by setting, the first force switch took 6.7 s on CI once 0.15.26 added 12 shared folders (the sandbox probe's "sitting at monitor A" checks failed: the rule wasn't there yet). `isolate <idx> 1` now writes the templates and that monitor's box in the background at once; sitting down is one change. Sandboxie settings changes over 1 s are logged.
 - WinGameTest: a screen renamed "Movies" is in displays.json, no "last" there; screenshots of the
   menu (named), at 150 %, and the settings page at 150 %.
 

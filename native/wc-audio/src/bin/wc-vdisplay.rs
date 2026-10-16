@@ -3411,9 +3411,11 @@ fn set_section(name: &str, settings: &[(String, String)]) {
         k
     };
     let values = |v: &[(String, String)], key: &str| -> Vec<String> { v.iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, x)| x.clone()).collect() };
+    let (t0, mut changes) = (Instant::now(), 0);
     for k in keys(&have) {
         if !settings.iter().any(|(x, _)| x.eq_ignore_ascii_case(&k)) {
             sbie_update('s', name, &k, "");
+            changes += 1;
         }
     }
     for k in keys(settings) {
@@ -3423,7 +3425,11 @@ fn set_section(name: &str, settings: &[(String, String)]) {
             for v in &want[1..] {
                 sbie_update('a', name, &k, v);
             }
+            changes += want.len();
         }
+    }
+    if t0.elapsed() > Duration::from_secs(1) {
+        eprintln!("info=Sandboxie's settings for [{name}]: {changes} changes took {} ms", t0.elapsed().as_millis());
     }
 }
 
@@ -5217,10 +5223,22 @@ fn main() {
             }
             Some("isolate") => {
                 // "own copies" for a monitor on or off
-                ISOLATE.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, p.get(2) == Some(&"1"));
+                let idx = n(1) as i32;
+                let on = p.get(2) == Some(&"1");
+                ISOLATE.lock().unwrap().get_or_insert_with(HashMap::new).insert(idx, on);
                 ISO_DIRTY.store(true, Ordering::SeqCst);
                 if sbie_dir().is_some() {
                     ensure_iso_thread();
+                    if on {
+                        // its box and the templates written now, before anyone sits down: written
+                        // through Sandboxie's service setting by setting, the first time took seconds,
+                        // and an app started meanwhile wasn't the monitor's own copy
+                        std::thread::spawn(move || {
+                            ensure_templates(true);
+                            ensure_box(&box_name(idx));
+                            reload_conf();
+                        });
+                    }
                 }
             }
             Some("follow") => {
