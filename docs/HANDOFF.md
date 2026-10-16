@@ -115,6 +115,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.24 (16 Oct): own copies for real — Sandboxie's settings through its own service
+
+- **"the own copies don't work at all they still have the same logins n everything theres no
+  sandboxing happening"**: on his PC there was no `C:\Windows\Sandboxie.ini` at all. The helper
+  wrote it straight (`write_ini`: a temp file next to it, then rename) — the Windows folder is
+  read-only for normal users, so every write failed silently since own copies came in: no box was
+  ever defined, no force rule ever existed (every "new programs now start in box …" said
+  "Sandboxie didn't take it"), "Open another copy here" started programs in undefined boxes. CI
+  never saw it: its runners are administrators. Now every change goes through Sandboxie's own
+  service, `SbieDll_UpdateConf` (as SbieIni.exe does; normal users may unless `EditAdminOnly`),
+  only what differs from the file (`section_of` → 's'/'a' per setting; the file is readable),
+  then `SbieApi_ReloadConf`. The breakouts live in `[Template_WCShared]`, the force folders in
+  `[Template_WCForce]`; a box has `Template=WCShared`, and `Template=WCForce` while you sit at it —
+  moving the force rule is one change, not ~170. Without `SbieDll_UpdateConf` (old Sandboxie) the
+  file is written straight as before. The "took it" check also accepts the template name; the
+  self-test's rule reader counts `Template=WCForce` in a [WC…] section.
+
 ## 0.15.23 (16 Oct): a guest's held button shows as held; a new monitor doesn't take an app's sound; 720p30 kept
 
 - **Guests' clicks, the safe upgrade** (he chose it over pen/touch injection, which takes the

@@ -1822,7 +1822,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let mut out = Vec::new();
         for l in t.lines() {
             let l = l.trim();
-            if l.starts_with('[') { sec = l.to_string(); } else if l.to_lowercase().starts_with("forcefolder") { out.push(format!("{sec} {l}")); }
+            let low = l.to_lowercase();
+            if l.starts_with('[') { sec = l.to_string(); } else if sec.starts_with("[WC") && (low.starts_with("forcefolder") || low == "template=wcforce") { out.push(format!("{sec} {l}")); }
         }
         out
     };

@@ -1,4 +1,7 @@
-WindowsCraft 0.15.23 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.24 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.24: "own copies" really work now — each monitor's apps get their own logins and
+sound (Sandboxie's settings were never saved on a PC without administrator rights).
 
 New in 0.15.23: a friend's clicks on your monitors count as held in more apps; turning on a new
 monitor no longer takes an app's sound from the monitor it plays on.

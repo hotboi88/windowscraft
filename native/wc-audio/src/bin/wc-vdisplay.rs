@@ -3297,9 +3297,12 @@ fn sbie_start(args: &[&str]) -> bool {
     true // (still starting the program: fine)
 }
 
-// The rules live in Sandboxie.ini, in our own sections only ([WC…]); they're written straight into
-// the file and applied through Sandboxie's own interface (SbieApi_ReloadConf). Its tools are never
-// started for this: a program started while a force rule is on could itself land in the box.
+// The rules live in Sandboxie.ini, in our own sections only ([WC…] boxes, [Template_WC…]). They're
+// changed through Sandboxie's own interface: SbieDll_UpdateConf (its service writes the file — it
+// lives in the Windows folder, which only an administrator may write: written straight, nothing
+// was ever saved on a normal PC, no box was ever made, and "the own copies don't work at all"),
+// then SbieApi_ReloadConf. Its tools are never started for this: a program started while a force
+// rule is on could itself land in the box. (Without SbieDll_UpdateConf: the file, straight.)
 
 fn ini_path() -> std::path::PathBuf {
     std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Sandboxie.ini")
@@ -3330,9 +3333,97 @@ fn write_ini(lines: &[String]) -> bool {
 /// Sandboxie.ini is read, changed and written back by more than one thread: one at a time.
 static INI_LOCK: Mutex<()> = Mutex::new(());
 
+/// Sandboxie's service changing one setting: op 's' sets it to this one value (an empty value
+/// removes it), 'a' adds another value. False: not done (or no such interface: an older Sandboxie).
+fn sbie_update(op: char, section: &str, setting: &str, value: &str) -> bool {
+    static UPDATE: OnceLock<Option<unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> i32>> = OnceLock::new();
+    let f = UPDATE.get_or_init(|| unsafe {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
+        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieDll_UpdateConf"))?;
+        Some(std::mem::transmute::<_, unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> i32>(p))
+    });
+    let Some(f) = *f else { return false };
+    let (sec, key, val) = (wide(section), wide(setting), wide(value));
+    let r = unsafe { f(op as u16, std::ptr::null(), sec.as_ptr(), key.as_ptr(), val.as_ptr()) };
+    if r != 0 {
+        eprintln!("info=Sandboxie refused {op} {section}/{setting} ({r:#x})");
+    }
+    r == 0
+}
+
+fn has_sbie_update() -> bool {
+    static HAS: OnceLock<bool> = OnceLock::new();
+    *HAS.get_or_init(|| sbie_dir().map_or(false, |d| {
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        unsafe {
+            windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()
+                .and_then(|h| windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieDll_UpdateConf")))
+                .is_some()
+        }
+    }))
+}
+
+/// A section's settings as the file has them now, in order.
+fn section_of(lines: &[String], name: &str) -> Vec<(String, String)> {
+    let header = format!("[{name}]");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for l in lines {
+        let t = l.trim();
+        if t.starts_with('[') {
+            inside = t.eq_ignore_ascii_case(&header);
+            continue;
+        }
+        if inside {
+            if let Some((k, v)) = t.split_once('=') {
+                out.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
 fn set_section(name: &str, settings: &[(String, String)]) {
     let _one = INI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    step("writing Sandboxie.ini");
+    step("changing Sandboxie's settings");
+    if !has_sbie_update() {
+        return set_section_file(name, settings);
+    }
+    // only what differs (each change is a request to Sandboxie's service, which saves the file)
+    let have = section_of(&read_ini(), name);
+    if have == settings {
+        return;
+    }
+    let keys = |v: &[(String, String)]| -> Vec<String> {
+        let mut k: Vec<String> = Vec::new();
+        for (x, _) in v {
+            if !k.iter().any(|y| y.eq_ignore_ascii_case(x)) {
+                k.push(x.clone());
+            }
+        }
+        k
+    };
+    let values = |v: &[(String, String)], key: &str| -> Vec<String> { v.iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, x)| x.clone()).collect() };
+    for k in keys(&have) {
+        if !settings.iter().any(|(x, _)| x.eq_ignore_ascii_case(&k)) {
+            sbie_update('s', name, &k, "");
+        }
+    }
+    for k in keys(settings) {
+        let want = values(settings, &k);
+        if want != values(&have, &k) {
+            sbie_update('s', name, &k, &want[0]);
+            for v in &want[1..] {
+                sbie_update('a', name, &k, v);
+            }
+        }
+    }
+}
+
+/// Straight into the file (an older Sandboxie without SbieDll_UpdateConf; needs the right to write the Windows folder).
+fn set_section_file(name: &str, settings: &[(String, String)]) {
     let lines = read_ini();
     let mut out = Vec::new();
     let mut i = 0;
@@ -3586,10 +3677,34 @@ fn refresh_carve() {
 
 /// A monitor's box: no border, no [#] in titles, kept (never wiped on its own), its exceptions —
 /// and, while you sit at it, its force rule.
+/// The template every monitor's box uses: what's let out of the box. And the one the box you sit at
+/// uses as well: the folders whose programs go into it. (Moving the force rule from one box to
+/// another is then one change to Sandboxie's settings, not ~170.)
+const SHARED_TEMPLATE: &str = "WCShared";
+const FORCE_TEMPLATE: &str = "WCForce";
+
 fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     let mut s: Vec<(String, String)> = [("Enabled", "y"), ("BorderColor", "#000000,off,0"), ("BoxNameTitle", "-"), ("AutoDelete", "n"), ("ConfigLevel", "10")]
         .iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-    // (these keep programs a boxed app starts out of the box; forced folders are carved around them)
+    if !has_sbie_update() {
+        // (an older Sandboxie, the file written straight: everything in the box's own section)
+        s.extend(shared_settings());
+        if forced {
+            s.extend(force_settings());
+        }
+        return s;
+    }
+    s.push(("Template".into(), SHARED_TEMPLATE.into()));
+    if forced {
+        s.push(("Template".into(), FORCE_TEMPLATE.into()));
+    }
+    let _ = name;
+    s
+}
+
+/// What's let out of every box: these keep programs a boxed app starts out of it (forced folders are carved around them).
+fn shared_settings() -> Vec<(String, String)> {
+    let mut s = Vec::new();
     let allow = LAUNCH_ALLOW.lock().unwrap().clone();
     for e in breakout_exes() {
         if allow.as_deref() != Some(e.as_str()) {
@@ -3599,13 +3714,22 @@ fn box_settings(name: &str, forced: bool) -> Vec<(String, String)> {
     for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
     }
-    if forced {
-        for d in force_folders() {
-            s.push(("ForceFolder".into(), d));
-        }
-    }
-    let _ = name;
     s
+}
+
+fn force_settings() -> Vec<(String, String)> {
+    force_folders().into_iter().map(|d| ("ForceFolder".to_string(), d)).collect()
+}
+
+/// The two templates as they should be now (only what changed is written).
+fn ensure_templates(force_too: bool) {
+    if !has_sbie_update() {
+        return;
+    }
+    set_section(&format!("Template_{SHARED_TEMPLATE}"), &shared_settings());
+    if force_too {
+        set_section(&format!("Template_{FORCE_TEMPLATE}"), &force_settings());
+    }
 }
 
 fn ensure_box(name: &str) {
@@ -3613,6 +3737,7 @@ fn ensure_box(name: &str) {
         BOXES_MADE.lock().unwrap().push(name.to_string());
     }
     let forced = FORCED.lock().map(|f| f.as_deref() == Some(name)).unwrap_or(false);
+    ensure_templates(forced);
     set_section(name, &box_settings(name, forced));
 }
 
@@ -3648,13 +3773,15 @@ fn set_force(to: Option<String>) {
         if !BOXES_MADE.lock().unwrap().iter().any(|x| x == b) {
             BOXES_MADE.lock().unwrap().push(b.clone());
         }
+        ensure_templates(true);
         set_section(b, &box_settings(b, true));
     }
     let ok = reload_conf();
     // (only once Sandboxie itself goes by it does it count: a program started a moment too early
     //  would otherwise slip past)
     let t1 = Instant::now();
-    let live = |b: &str| sbie_query(b, "ForceFolder", 0).is_some();
+    // (its folders, or — if Sandboxie only names the template — the force template)
+    let live = |b: &str| sbie_query(b, "ForceFolder", 0).is_some() || (0..4).any(|i| sbie_query(b, "Template", i).as_deref() == Some(FORCE_TEMPLATE));
     let took = loop {
         let done = to.as_ref().map_or(true, |b| live(b)) && old.as_ref().filter(|o| Some(*o) != to.as_ref()).map_or(true, |o| !live(o));
         if done {
@@ -3702,6 +3829,25 @@ fn end_box_leftovers() {
 /// No force rule left behind (after a crash, at the start, at the end): every WindowsCraft box.
 fn clear_all_force() {
     if sbie_dir().is_none() {
+        return;
+    }
+    if has_sbie_update() {
+        let lines = read_ini();
+        let boxes: Vec<String> = lines.iter().map(|l| l.trim()).filter(|t| t.starts_with("[WC") && t.ends_with(']')).map(|t| t[1..t.len() - 1].to_string()).collect();
+        let mut any = false;
+        for b in boxes {
+            let have = section_of(&lines, &b);
+            let forced = have.iter().any(|(k, v)| k.eq_ignore_ascii_case("ForceFolder") || (k.eq_ignore_ascii_case("Template") && v == FORCE_TEMPLATE));
+            if forced {
+                any = true;
+                set_section(&b, &box_settings(&b, false));
+            }
+        }
+        if any {
+            reload_conf();
+            eprintln!("info=a leftover rule that boxed new programs was removed");
+        }
+        *FORCED.lock().unwrap() = None;
         return;
     }
     let _one = INI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
