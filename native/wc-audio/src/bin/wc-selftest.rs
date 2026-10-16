@@ -1856,7 +1856,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
     rep.check("…an app you start there runs in A's box", wa.is_some() && ina.contains(&wa.map_or(0, pid)) && !inb.contains(&wa.map_or(0, pid)),
         format!("window {:?} · A's box {ina:?} · B's box {inb:?}", wa.map(pid)));
-    rep.check("…and opens on monitor A", on(wa, &ra), format!("at {} (A {})", wa.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
+    // (the helper moves it there as it shows: give the move a moment to land)
+    let on_a = wait_for(3000, || on(wa, &ra));
+    rep.check("…and opens on monitor A", on_a, format!("at {} (A {})", wa.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
     rep.check("…looking like itself: no Sandboxie [#] marker in its title", wa.map_or(false, |w| !title(w).contains("[#]")), format!("title {:?}", wa.map(title)));
     // 3. exceptions stay out, while sitting there
     let wx = start(&app("wcapp_x"));
