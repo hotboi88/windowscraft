@@ -212,21 +212,33 @@ Set-Content "$env:APPDATA\wcprivacy\probe.txt" "desk"
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\wcprivapp" | Out-Null
 Copy-Item "$env:WINDIR\System32\whoami.exe" "$env:LOCALAPPDATA\wcprivapp\wcapp.exe" -Force   # (an app installed in your own folder, like Discord)
 foreach ($k in @(@("Enabled", "y"), @("UsePrivacyMode", "y"), @("AutoDelete", "n"), @("ConfigLevel", "10"))) { & $ini set WCPriv $k[0] $k[1] | Out-Null }
+# (each box writes what it found to a folder that's open to it: what's written there is on the real disk)
+New-Item -ItemType Directory -Force C:\wcprivout | Out-Null
+Remove-Item C:\wcprivout\* -ErrorAction SilentlyContinue
+foreach ($b in "WCPriv", "WCMon1") { & $ini set $b OpenFilePath "C:\wcprivout" | Out-Null; & $ini append $b OpenFilePath "C:\wcprivout\*" | Out-Null }
 & "$dir\Start.exe" /reload | Out-Null
 Start-Sleep 2
-Set-Content "$env:RUNNER_TEMP\priv.cmd" '@if exist "%APPDATA%\wcprivacy\probe.txt" (exit /b 3) else (exit /b 4)'
-& "$dir\Start.exe" /box:WCPriv /silent /wait cmd.exe /c "$env:RUNNER_TEMP\priv.cmd"
-$seen = $LASTEXITCODE
-& "$dir\Start.exe" /box:WCPriv /silent /wait cmd.exe /c "exit /b 5"
-$cmdc = $LASTEXITCODE
-& "$dir\Start.exe" /box:WCPriv /silent /wait "$env:LOCALAPPDATA\wcprivapp\wcapp.exe"
-$appc = $LASTEXITCODE
-& "$dir\Start.exe" /box:WCMon1 /silent /wait cmd.exe /c "$env:RUNNER_TEMP\priv.cmd"
-$plain = $LASTEXITCODE
-Note "a normal box sees your own files: exit $plain (3 = it saw the file)"
-Check "privacy mode: a boxed app doesn't see your own files (a box starts fresh, signed out)" ($seen -eq 4) "exit $seen (3 = it saw the file, 4 = it didn't)"
-Check "…and programs still run in it: Windows' own, and one installed in your own folder (like Discord)" ($cmdc -eq 5 -and $appc -eq 0) "cmd exit $cmdc · app in your folder exit $appc"
+foreach ($n in "priv", "plain") {
+    Set-Content "$env:RUNNER_TEMP\$n.cmd" @"
+@echo off
+if exist "%APPDATA%\wcprivacy\probe.txt" (echo SEEN>C:\wcprivout\$n.txt) else (echo HIDDEN>C:\wcprivout\$n.txt)
+"%LOCALAPPDATA%\wcprivapp\wcapp.exe" >nul 2>&1 && (echo APPOK>>C:\wcprivout\$n.txt) || (echo APPFAIL>>C:\wcprivout\$n.txt)
+echo RAN>>C:\wcprivout\$n.txt
+"@
+}
+& "$dir\Start.exe" /box:WCPriv /silent cmd.exe /c "$env:RUNNER_TEMP\priv.cmd"
+& "$dir\Start.exe" /box:WCMon1 /silent cmd.exe /c "$env:RUNNER_TEMP\plain.cmd"
+$t = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $t -and -not ((Test-Path C:\wcprivout\priv.txt) -and (Test-Path C:\wcprivout\plain.txt) -and (Get-Content C:\wcprivout\priv.txt) -contains "RAN" -and (Get-Content C:\wcprivout\plain.txt) -contains "RAN")) { Start-Sleep -Milliseconds 300 }
+$priv = (Get-Content C:\wcprivout\priv.txt -ErrorAction SilentlyContinue) -join ","
+$plain = (Get-Content C:\wcprivout\plain.txt -ErrorAction SilentlyContinue) -join ","
+Note "a normal box (copy-on-write): $plain"
+Note "a privacy-mode box: $priv"
+Check "privacy mode: a boxed app doesn't see your own files (a box starts fresh, signed out)" ($priv -match "HIDDEN" -and $plain -match "SEEN") "privacy box: '$priv' · normal box: '$plain'"
+Check "…and an app installed in your own folder (like Discord) still runs in it" ($priv -match "APPOK") "'$priv'"
 Note "WCPriv as Sandboxie has it: UsePrivacyMode = $(& $ini query WCPriv UsePrivacyMode)"
+foreach ($b in "WCPriv", "WCMon1") { & $ini delete $b OpenFilePath | Out-Null }
+& "$dir\Start.exe" /reload | Out-Null
 & "$dir\Start.exe" /box:WCPriv /terminate | Out-Null
 
 # ---- 8. "force" rules: anything started while you sit at monitor 1 lands in its box by itself
