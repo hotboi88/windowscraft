@@ -63,10 +63,13 @@ public final class MultiplayerTest implements ClientModInitializer {
         // small test machine has room for the encoder and decoder
         if (!lightened && new java.io.File(mc.runDirectory.getParentFile(), "run-bob/movie.txt").exists()) {
             lightened = true;
-            mc.options.getMaxFps().setValue(10);
+            // (the viewer at 60: lip sync is timed as the flash goes on screen, a frame at 10 fps is 100 ms;
+            // -Dwindowscraft.movie.viewerFps=10 on a small machine)
+            int fps = role.equals("viewer") ? Integer.getInteger("windowscraft.movie.viewerFps", 60) : 10;
+            mc.options.getMaxFps().setValue(fps);
             mc.options.getViewDistance().setValue(2);
             dev.windowscraft.client.BusyGuard.enabled = false; // (the low frame rate here is on purpose)
-            log("movie test: game drawing kept light (10 fps, view distance 2)");
+            log("movie test: game drawing kept light (" + fps + " fps, view distance 2)");
         }
         if (role.equals("sharer")) sharer(mc); else viewer(mc);
     }
@@ -219,7 +222,9 @@ public final class MultiplayerTest implements ClientModInitializer {
 
     // ---- "watching a movie over a home internet link" (run-bob/movie.txt: kbps queueMs delayMs jitterMs loss freeze)
     private long movieStart, movieMeasure;
-    private long movieSkipped0, movieFrames0;
+    private long movieSkipped0, movieFrames0, movieUnderruns0, movieFlashSeen, movieOnsetSeen;
+    // lip sync while watching: each flash and beep the viewer shows and plays, paired at the end
+    private final List<Long> movieFlashes = new ArrayList<>(), movieOnsets = new ArrayList<>();
 
     private void movieViewer(MinecraftClient mc, java.io.File cfg) {
         RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
@@ -242,7 +247,8 @@ public final class MultiplayerTest implements ClientModInitializer {
             try {
                 String[] v = java.nio.file.Files.readString(cfg.toPath()).trim().split("\\s+");
                 StreamSubscriber.FREEZE_ON_LOSS = Boolean.parseBoolean(v[5]);
-                dev.windowscraft.relay.UdpReceiver.testLink = new dev.windowscraft.relay.UdpReceiver.TestLink(
+                // (kbps 0: no imitation link here — the server's relay.NetSim makes the line)
+                if (Integer.parseInt(v[0]) > 0) dev.windowscraft.relay.UdpReceiver.testLink = new dev.windowscraft.relay.UdpReceiver.TestLink(
                         Integer.parseInt(v[0]), Integer.parseInt(v[1]), Integer.parseInt(v[2]), Integer.parseInt(v[3]), Double.parseDouble(v[4]));
                 log("movie: link " + dev.windowscraft.relay.UdpReceiver.testLink + ", freeze on loss " + StreamSubscriber.FREEZE_ON_LOSS);
             } catch (Exception e) {
@@ -251,13 +257,32 @@ public final class MultiplayerTest implements ClientModInitializer {
             sub.resetStallStats();
             movieSkipped0 = sub.skippedPieces();
             movieFrames0 = sub.framesDecoded();
+            movieUnderruns0 = sub.audio().underruns();
+            movieFlashes.clear();
+            movieOnsets.clear();
             movieMeasure = now;
+        }
+        if (movieMeasure != 0 && movieMeasure < Long.MAX_VALUE / 4) {
+            long flash = sub.lastFlashNanos(), onset = sub.audio().lastOnsetNanos();
+            if (flash != 0 && flash != movieFlashSeen) { movieFlashes.add(flash); movieFlashSeen = flash; }
+            if (onset != 0 && onset != movieOnsetSeen) { movieOnsets.add(onset); movieOnsetSeen = onset; }
         }
         if (movieMeasure != 0 && now - movieMeasure > 60_000_000_000L) {
             double secs = (now - movieMeasure) / 1e9;
             log(String.format(java.util.Locale.ROOT, "MOVIE RESULT: %.0f s · pictures %.1f/s · pauses over 1/4 s: %d (%.1f s in all, longest %d ms) · damaged pictures %d · pieces lost for good %d · catch-ups %d · %s · stream %dx%d",
                     secs, (sub.framesDecoded() - movieFrames0) / secs, sub.stalls, sub.stallMs / 1000.0, sub.longestStallMs, sub.damagedFrames,
                     sub.skippedPieces() - movieSkipped0, sub.catchUps(), sub.transport(), r.info.width(), r.info.height()));
+            List<Double> av = new ArrayList<>();
+            for (long on : movieOnsets) { // each beep with the flash nearest to it (+ = sound heard after the picture shows)
+                long best = Long.MAX_VALUE;
+                for (long fl : movieFlashes) if (Math.abs(on - fl) < Math.abs(best)) best = on - fl;
+                if (best != Long.MAX_VALUE && Math.abs(best) < 500_000_000L) av.add(best / 1e6);
+            }
+            java.util.Collections.sort(av);
+            log(av.isEmpty() ? "MOVIE LIP SYNC: no beeps heard" : String.format(java.util.Locale.ROOT,
+                    "MOVIE LIP SYNC: sound after picture, median %.0f ms (10th-90th pct %.0f..%.0f, worst %.0f) over %d beeps · sound ran dry %d times",
+                    av.get(av.size() / 2), av.get(av.size() / 10), av.get(av.size() * 9 / 10), av.stream().mapToDouble(Math::abs).max().orElse(0), av.size(),
+                    sub.audio().underruns() - movieUnderruns0));
             shot(mc, "mp_viewer_movie");
             dev.windowscraft.relay.UdpReceiver.testLink = null;
             try { new java.io.File(mc.runDirectory, "viewer-done").createNewFile(); } catch (java.io.IOException ignored) {}

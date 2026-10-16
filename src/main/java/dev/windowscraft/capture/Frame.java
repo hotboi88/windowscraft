@@ -19,6 +19,10 @@ public final class Frame {
     public final ByteBuffer data;
     public boolean alphaValid;
     public long captureNanos;
+    /** Someone else's screen: not before this (lip sync after the decoder: it waits for its sound). */
+    public long showAtNanos;
+    /** (measuring) it carries the test pattern's once-a-second flash. */
+    public boolean flash;
 
     Frame(int width, int height, boolean nv12) {
         this.width = width;

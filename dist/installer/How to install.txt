@@ -1,4 +1,10 @@
-WindowsCraft 0.15.11 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.12 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.12: sound and picture line up. Friends heard a shared screen's sound about a
+seventh of a second after the picture (your PC stamped it late, and their game never waited for
+it); now they come together, also for a friend 100 ms away whose line goes up and down. Sound the
+capture loses for a moment (a busy PC, while it turns the app down for you) is filled with an
+equal bit of silence instead of making everything after it run early.
 
 New in 0.15.11: watching someone far away (about 100 ms, going up and down) no longer smears
 the picture: when a piece of it is lost on the way, the screen holds its last picture for a

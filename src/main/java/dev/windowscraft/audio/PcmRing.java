@@ -8,6 +8,7 @@ public final class PcmRing {
     private final byte[] buf;
     private int read, size;
     private boolean closed;
+    private long lastWriteNanos;
 
     public PcmRing(int capacityBytes) {
         buf = new byte[capacityBytes - capacityBytes % 4];
@@ -29,6 +30,7 @@ public final class PcmRing {
         System.arraycopy(src, off, buf, w, first);
         System.arraycopy(src, off + first, buf, 0, len - first);
         size += len;
+        lastWriteNanos = System.nanoTime();
         notifyAll();
     }
 
@@ -71,6 +73,45 @@ public final class PcmRing {
     }
 
     public synchronized int available() { return size; }
+
+    /**
+     * How long ago, ns, the oldest sound waiting here came in: what's queued plus the time since
+     * the newest arrived (it keeps ageing while nothing comes). It doesn't jump with the uneven
+     * bursts sound arrives in, as the amount queued does. 0 when empty.
+     */
+    public synchronized long oldestAgeNanos(int bytesPerSecond) {
+        if (size == 0) return 0;
+        return size * 1_000_000_000L / bytesPerSecond + (System.nanoTime() - lastWriteNanos);
+    }
+
+    /**
+     * Puts {@code len} bytes of silence {@code back} bytes before the end (at the front, if that
+     * part was read already), fading the sound either side of it in and out (no clicks).
+     */
+    public synchronized void insertSilence(int back, int len) {
+        len -= len % 4;
+        if (len <= 0) return;
+        back = Math.max(0, Math.min(back - back % 4, size));
+        byte[] all = new byte[size + len];
+        int at = size - back;
+        int first = Math.min(size, buf.length - read);
+        System.arraycopy(buf, read, all, 0, first);
+        System.arraycopy(buf, 0, all, first, size - first);
+        System.arraycopy(all, at, all, at + len, back);
+        java.util.Arrays.fill(all, at, at + len, (byte) 0);
+        int fade = Math.min(at, 576) & ~3;
+        byte[] edge = java.util.Arrays.copyOfRange(all, at - fade, at);
+        PcmFades.fadeOut(edge, fade);
+        System.arraycopy(edge, 0, all, at - fade, fade);
+        fade = Math.min(back, 576) & ~3;
+        edge = java.util.Arrays.copyOfRange(all, at + len, at + len + fade);
+        PcmFades.fadeIn(edge, fade);
+        System.arraycopy(edge, 0, all, at + len, fade);
+        int keep = Math.min(all.length, buf.length); // (over the top: the newest stays)
+        System.arraycopy(all, all.length - keep, buf, 0, keep);
+        read = 0;
+        size = keep;
+    }
 
     /** Drops audio beyond {@code maxBytes} (oldest first). */
     public synchronized void trimTo(int maxBytes) {

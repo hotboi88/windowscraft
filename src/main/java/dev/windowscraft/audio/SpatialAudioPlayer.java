@@ -20,6 +20,8 @@ public final class SpatialAudioPlayer {
     private final UUID id;
     private final AudioRenderChain chain;
     private volatile double volume = 1.0;
+    /** Tests ({@code -Dwindowscraft.test.silentSpeakers=true}): the sound is played and timed as always, but silent. */
+    private static final boolean SILENT = Boolean.getBoolean("windowscraft.test.silentSpeakers");
     private volatile boolean direct;
     private volatile boolean deviceMissing;
     // stats (also used by the automated A/V sync check)
@@ -121,6 +123,7 @@ public final class SpatialAudioPlayer {
                 else chain.process(buf, CHUNK, volume);
                 measure(buf, line);
                 clicks.feed(buf, 0, CHUNK);
+                if (SILENT) java.util.Arrays.fill(buf, (byte) 0); // (tests: measured as it would be heard, nothing out of the speakers)
                 if (line != null) {
                     int queued = line.getBufferSize() - line.available();
                     if (!primed || queued < LOW) {

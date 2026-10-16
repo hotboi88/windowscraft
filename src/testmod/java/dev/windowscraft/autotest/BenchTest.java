@@ -101,10 +101,31 @@ public final class BenchTest implements ClientModInitializer {
             if (role.equals("sharer")) for (Display d : DisplayManager.get().all())
                 if (d.publisher() != null) log("publisher: " + d.publisher().status());
         }
+        if (role.equals("viewer") && started && measureUntil > 0) {
+            RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
+            var sub = r == null ? null : r.subscriber();
+            if (sub != null) {
+                if (underruns0 < 0) underruns0 = sub.audio().underruns();
+                long flash = sub.lastFlashNanos(), onset = sub.audio().lastOnsetNanos();
+                if (flash != 0 && flash != flashSeen) { flashes.add(flash); flashSeen = flash; }
+                if (onset != 0 && onset != onsetSeen) { onsets.add(onset); onsetSeen = onset; }
+            }
+        }
         if (measureUntil > 0 && now >= measureUntil && Measure.ON) {
             if (role.equals("viewer")) {
                 RemoteDisplays.Remote r = RemoteDisplays.all().stream().findFirst().orElse(null);
                 if (r != null && r.subscriber() != null) log("viewer: " + r.subscriber().status() + " · " + r.subscriber().transport());
+                java.util.List<Double> av = new java.util.ArrayList<>();
+                for (long on : onsets) { // each beep with the flash nearest to it (+ = sound heard after the picture shows)
+                    long best = Long.MAX_VALUE;
+                    for (long fl : flashes) if (Math.abs(on - fl) < Math.abs(best)) best = on - fl;
+                    if (best != Long.MAX_VALUE && Math.abs(best) < 500_000_000L) av.add(best / 1e6);
+                }
+                java.util.Collections.sort(av);
+                if (!av.isEmpty() && r != null && r.subscriber() != null)
+                    log(String.format(java.util.Locale.ROOT, "BENCH LIP SYNC: sound after picture, median %.0f ms (10th-90th pct %.0f..%.0f) over %d beeps · sound ran dry %d times",
+                            av.get(av.size() / 2), av.get(av.size() / 10), av.get(av.size() * 9 / 10), av.size(), r.subscriber().audio().underruns() - Math.max(0, underruns0)));
+                else log("BENCH LIP SYNC: no flashes/beeps paired (" + flashes.size() + " flashes, " + onsets.size() + " beeps)");
             }
             var p = Measure.stop();
             log("BENCH REPORT " + p);
@@ -124,6 +145,11 @@ public final class BenchTest implements ClientModInitializer {
     /** The viewers' game folders, next to the sharer's (run-bob; "run-bob,run-carol" for two; tools/prodclient's copies have their own). */
     private static final String VIEWER_DIR = System.getProperty("windowscraft.bench.viewerDir", "run-bob");
     private static final String PAD = System.getProperty("windowscraft.bench.pad", "");
+    /** The window the sharer shares ({@code windowscraft.bench.windowTitle}, part of its title): the bench window, or e.g. a browser playing tools/movie's flash-and-beep film. */
+    private static final String WINDOW_TITLE = System.getProperty("windowscraft.bench.windowTitle", "WindowsCraft bench window");
+    // lip sync while measuring (viewer): each flash going on screen and each beep heard, paired at the end
+    private final java.util.List<Long> flashes = new java.util.ArrayList<>(), onsets = new java.util.ArrayList<>();
+    private long flashSeen, onsetSeen, underruns0 = -1;
     private static final boolean INPUT = Boolean.getBoolean("windowscraft.bench.input") || "1".equals(System.getProperty("windowscraft.bench.input")); // (run.sh passes BENCH_INPUT=1)
     private boolean allowed, seated;
     private Display monitorWall;
@@ -210,10 +236,10 @@ public final class BenchTest implements ClientModInitializer {
         }
         SourceInfo src = SourceInfo.testPattern();
         if (source.equals("window")) {
-            src = CaptureBackends.get().listWindows().stream().filter(s -> s.title().equals("WindowsCraft bench window")).findFirst().orElse(null);
+            src = CaptureBackends.get().listWindows().stream().filter(s -> s.title().contains(WINDOW_TITLE)).findFirst().orElse(null);
             if (src == null) { log("BENCH FAILED: the bench window isn't open (tools/bench)"); return true; }
         }
-        DisplayManager.get().start(d, src, new CaptureSettings(height, fps, true, source.equals("pattern")));
+        DisplayManager.get().start(d, src, new CaptureSettings(height, fps, true, source.equals("pattern") || Boolean.getBoolean("windowscraft.bench.audio"))); // (windowscraft.bench.audio: a window's sound too)
         log("went live: " + src.title() + " at " + height + "p" + fps);
         return true;
     }

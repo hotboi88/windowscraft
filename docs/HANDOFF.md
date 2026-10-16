@@ -99,6 +99,51 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.12 (15 Oct): lip sync for real — the sound with its picture, also far away
+
+The owner: "so there is proof via the tests that this is movie-watching tier". Measured with the
+movie test (`tools/movie/windows.sh [netsim]`: the test pattern's flash and beep, both test players
+on one PC, measurement off as in normal play) and a real film in a browser (`flashbeep.mp4` — a
+white flash and a 1 kHz beep at the start of every second — shared from Edge with
+`-Dwindowscraft.bench.windowTitle=… -Dwindowscraft.bench.audio=true`; the stream dumped with
+`-Dwindowscraft.exp.dumpTs`, beep minus flash by the stream's own timestamps). Five things, found
+in this order:
+- **The sharer stamped its sound ~150 ms late.** Its clock started at FFmpeg's `RTCSTART` — when
+  the sound filter is set up, after the encoder and the rest have started. Now it starts at a
+  moment fixed in Java just before FFmpeg starts (`asetpts=N/SR/TB+<start>/TB`); `feedAudio` counts
+  samples from then and writes silence for the time FFmpeg takes to start. The real film, beep
+  minus flash in the stream: median 166 ms → −2.5 ms.
+- **The cushion is held steady** (it's part of the timestamps): `PcmRing.oldestAgeNanos` (what's
+  queued plus the time since the newest arrived: steady through uneven bursts) is kept at
+  `CUSHION_MS` by playing a hair faster or slower (`PcmStretch`: 4-point cubic, at most 2 frames in
+  480 = 0.4 %), and it jumps when 50 ms off. Before, it could sit anywhere from 40 to 160 ms.
+- **Sound the capture lost is put back as silence where it went missing** (`LostSound`, in
+  `AudioHub`): wc-audio 0.4.4 looks for the app's sessions on the thread that reads the sound
+  while it turns the app down ("hear it in the game"): on a busy PC, a ~25–40 ms stall once a
+  second, 5–20 ms of sound lost. Read by a fast reader under the bench's load: turned down 981–995
+  ms of sound per second, not turned down 1000 (no gaps over 15 ms). Closed up, everything after a
+  hole played early, and the cushion ran dry (2–8 times per 10 s, each an 80 ms gap); now 0–1.
+  A film with exact digital silence between sounds is far worse (the helper re-checks the sessions
+  whenever sound starts after silence: ~25 % lost under load) — the test film has a faint hiss now.
+  The real fix belongs in wc-audio (sessions on their own thread), which stays 0.4.4 (owner's rule).
+- **FFmpeg held the pictures back for the sound.** It reads its inputs in step by their
+  timestamps, holding back whichever gets 100 ms ahead (`SCHEDULE_TOLERANCE`); the sound, stamped
+  when it was heard, is ~130 ms behind (cushion + AAC). Pictures came in bursts every ~90 ms
+  (GPU path) or half were dropped (CPU path: 13.8/s). The sound now goes in `AUDIO_SCHEDULE_MS`
+  later and `-bsf:a setts` takes that back after FFmpeg's scheduling.
+- **Viewers never waited for the sound in normal play** (since lip sync came in, 8f883bc):
+  `AvSync` timed arrivals with `Chunk.madeNanos`, which is only set while measuring — 0 everywhere
+  else, so the gap between sound and picture came out as nonsense (~−500 ms) and pictures were
+  never held for the sound's longer way. Now the time the data was read. Bench runs (measuring)
+  never showed it. And `AvSync.PICTURE_AFTER_MS` 28 → 150, measured end to end (28: sound 90 ms
+  before its picture, 70: 83, 150: 5; `-Dwindowscraft.exp.pictureAfterMs`).
+Also: `-Dwindowscraft.test.silentSpeakers=true` (test players time their sound as always, but
+nothing comes out of the speakers; the test options.txt files have Minecraft's own sounds at 0),
+dev logs `[audio in]` / `[audio out]` while measuring, `-Dwindowscraft.exp.dumpTsMB`.
+Not fixed: the test pattern's own pictures are stamped ~45 ms late (CPU path: stamped when FFmpeg
+reads them), so real pictures land a little the other way (sound a hair after the picture); Edge
+itself shows the flash ±40 ms unevenly when the PC is loaded with three game instances.
+
 ## 0.15.11 (15 Oct): a friend 100 ms away (the owner's girlfriend: ~100 ms that goes up and down); screens flush
 
 New dev tool: `relay.NetSim` — a bad line between the relay and its viewers, both ways, on the

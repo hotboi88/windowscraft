@@ -18,6 +18,7 @@ public final class AudioHub implements AudioCapture.Sink {
     private volatile long lastSoundNanos;
     private volatile double peak;
     private final ClickDetector clicks = new ClickDetector("captured");
+    private final LostSound lost = new LostSound();
 
     public AudioHub(SourceInfo source) { this.source = source; }
 
@@ -83,8 +84,40 @@ public final class AudioHub implements AudioCapture.Sink {
         double p = max / 32768.0;
         peak = Math.max(p, peak * 0.85);
         if (max > 40) lastSoundNanos = System.nanoTime(); // above -58 dBFS: real sound, not dither
+        LostSound.Hole hole = lost.arrived(System.nanoTime(), len);
+        if (hole != null) {
+            for (PcmRing r : taps) r.insertSilence(hole.back(), hole.bytes());
+            holes++;
+            holeBytes += hole.bytes();
+        }
         for (PcmRing r : taps) r.write(pcm, off, len);
         clicks.feed(pcm, off, len);
+        if (dev.windowscraft.measure.Measure.ON) note(len);
+    }
+
+    // (measuring) how the sound comes in: its bursts and the gaps between them
+    private long noteAt, lastWriteNanos, bytes, maxGap, holeBytes;
+    private int writes, gaps30, holes;
+
+    private synchronized void note(int len) {
+        long now = System.nanoTime();
+        if (noteAt == 0) noteAt = now;
+        if (lastWriteNanos != 0) {
+            long gap = now - lastWriteNanos;
+            maxGap = Math.max(maxGap, gap);
+            if (gap > 30_000_000L) gaps30++;
+        }
+        lastWriteNanos = now;
+        bytes += len;
+        writes++;
+        if (now - noteAt > 10_000_000_000L) {
+            dev.windowscraft.WindowsCraftClient.LOGGER.info("[audio in] {} ms of sound per s in {} bursts/s · gaps over 30 ms: {} · longest {} ms · lost and put back as silence: {} ms in {} holes",
+                    bytes * 1000 / AudioCapture.BYTES_PER_SECOND * 1_000_000_000L / (now - noteAt), writes * 1_000_000_000L / (now - noteAt), gaps30, maxGap / 1_000_000, holeBytes * 1000 / AudioCapture.BYTES_PER_SECOND, holes);
+            noteAt = now;
+            bytes = writes = gaps30 = holes = 0;
+            holeBytes = 0;
+            maxGap = 0;
+        }
     }
 
     private java.util.concurrent.CompletableFuture<?> stopCapture() {

@@ -9,6 +9,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public final class FramePool {
     private static final int MAX_POOLED = 3;
     private final ConcurrentLinkedQueue<Frame> free = new ConcurrentLinkedQueue<>();
+    private volatile int keep = MAX_POOLED;
+
+    /** Keeps up to this many spare frames (pictures waiting for their sound need more than 3), at most 64. */
+    public void keep(int n) { keep = Math.max(MAX_POOLED, Math.min(64, n)); }
 
     public Frame acquire(int width, int height) {
         return acquire(width, height, false);
@@ -26,7 +30,7 @@ public final class FramePool {
     }
 
     public void release(Frame frame) {
-        if (frame != null && free.size() < MAX_POOLED) free.offer(frame);
+        if (frame != null && free.size() < keep) free.offer(frame);
     }
 
     public void clear() {

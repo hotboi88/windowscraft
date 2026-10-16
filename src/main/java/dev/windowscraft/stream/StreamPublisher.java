@@ -5,6 +5,7 @@ import dev.windowscraft.audio.AudioCapture;
 import dev.windowscraft.audio.AudioHub;
 import dev.windowscraft.audio.PcmFades;
 import dev.windowscraft.audio.PcmRing;
+import dev.windowscraft.audio.PcmStretch;
 import dev.windowscraft.capture.CaptureSession;
 import dev.windowscraft.capture.CaptureSettings;
 import dev.windowscraft.capture.Frame;
@@ -39,6 +40,17 @@ import java.util.concurrent.locks.LockSupport;
  */
 public final class StreamPublisher {
     private static final SecureRandom RANDOM = new SecureRandom();
+    /** How long captured sound waits before FFmpeg gets it (feedAudio holds it there). (Step 0 experiment, dev only) */
+    static final int CUSHION_MS = Integer.getInteger("windowscraft.exp.audioCushion", 80);
+    /**
+     * How long before its timestamp the sound was heard on this PC: the cushion, and the capture's
+     * own delay before it gets here (measured: a film's flash and beep, shared from a browser).
+     */
+    static final int AUDIO_LEAD_MS = CUSHION_MS + Integer.getInteger("windowscraft.exp.audioLate", 10);
+    /** How much later the sound goes into FFmpeg than its real times, for FFmpeg's scheduling only (see "-bsf:a"). */
+    private static final int AUDIO_SCHEDULE_MS = AUDIO_LEAD_MS + 50;
+    /** (in FFmpeg's command until the moment its sound clock starts is known) */
+    private static final String AUDIO_TIME_SLOT = "asetpts=(start)";
 
     // measurements (off by default)
     private static final dev.windowscraft.measure.Measure.Metric OUT_AGE = dev.windowscraft.measure.Measure.ms("enc.out_age",
@@ -481,12 +493,15 @@ public final class StreamPublisher {
         // second; viewers heard nothing) and FFmpeg logged thousands of warnings a second. Instead
         // its clock is its own sample count, started at the wall clock when its first sound comes
         // in (it's fed at exactly 48 kHz in real time, so the two clocks stay together).
-        // ...and back by the cushion it waited in before FFmpeg got it (feedAudio: ~80 ms + the one
-        // chunk held back), so its time is when it was heard on this PC, like the pictures' — viewers
-        // line picture and sound up by these times (lip sync); stamped at the cushion's end, the
-        // sound looked ~90 ms earlier than it was and stayed that much behind the picture
-        double lead = (Integer.getInteger("windowscraft.exp.audioCushion", 80) + 10) / 1000.0;
-        List<String> audioTime = List.of("-af", String.format(java.util.Locale.ROOT, "asetpts=N/SR/TB+RTCSTART/(TB*1000000)-%.3f/TB", lead));
+        // ...and back by how long it waits in the cushion before FFmpeg gets it (feedAudio holds
+        // that steady), so its time is when it was heard on this PC, like the pictures': viewers
+        // line picture and sound up by these times (lip sync).
+        // Its clock starts at a moment fixed just before FFmpeg starts: feedAudio counts its
+        // samples from then (silence for the time FFmpeg takes to start). It started at FFmpeg's
+        // own RTCSTART before — when its sound filter was set up, after the encoder and the rest
+        // had started: later than the first sample by that much, so all of the sound was stamped
+        // ~150 ms late and viewers heard it that much after the picture.
+        List<String> audioTime = List.of("-af", AUDIO_TIME_SLOT);
         ServerSocket previewListen = null;
         int[] pv = {ew, eh};
         if (gpu) { // give direct GPU sharing a moment to start, so we know if a preview is needed
@@ -543,6 +558,12 @@ public final class StreamPublisher {
         cmd.addAll(enc.args());
         cmd.addAll(List.of("-b:v", kb + "k", "-maxrate", kb + "k", "-bufsize", (kb / 2) + "k", "-g", Integer.toString(Math.max(1, (int) Math.round(fps * keyEvery()))), "-bf", "0",
                 "-c:a", "aac", "-b:a", "192k",
+                // FFmpeg reads its inputs in step by these times, holding back whichever gets 100 ms
+                // ahead — and the sound, stamped when it was heard, is behind it by the cushion and
+                // the AAC encoder's own delay (~130 ms): the pictures were held back for it (judder,
+                // half of them dropped on the CPU path). So the sound goes in that much later and
+                // comes back to its real times here, after FFmpeg's scheduling, on the way out.
+                "-bsf:a", String.format(Locale.ROOT, "setts=ts=TS-%.3f/TB", AUDIO_SCHEDULE_MS / 1000.0),
                 // never let the muxer hold pictures back waiting for sound (FFmpeg's default: up to
                 // 10 s; 100 ms here before). With the sound's timing fixed, that wait was most of the
                 // delay to the encoder's output: 17.6/55/61 ms → 3.3/6.6/12.5 ms (CPU path), and
@@ -559,6 +580,10 @@ public final class StreamPublisher {
             // only when the next one comes in — a picture late on your wall)
             cmd.addAll(List.of("-map", "[pv]", "-fps_mode", "passthrough", "-threads:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "tcp://127.0.0.1:" + previewListen.getLocalPort()));
         }
+        long audioStart = System.nanoTime();
+        java.time.Instant wall = java.time.Instant.now();
+        double audioStartS = wall.getEpochSecond() + wall.getNano() / 1e9 - (AUDIO_LEAD_MS - AUDIO_SCHEDULE_MS) / 1000.0;
+        cmd.set(cmd.indexOf(AUDIO_TIME_SLOT), String.format(Locale.ROOT, "asetpts=N/SR/TB+%.6f/TB", audioStartS));
         Process ff = Proc.start(cmd, "ffmpeg-enc");
         ffmpeg = ff;
         pipelineGpu = gpu;
@@ -571,7 +596,7 @@ public final class StreamPublisher {
                 daemon("preview in", () -> readPreview(pl, pv[0], pv[1], gen));
             }
             Socket audioSock = track(acceptWhileAlive(audioListen, ff));
-            daemon("audio in", () -> feedAudio(audioSock, audio));
+            daemon("audio in", () -> feedAudio(audioSock, audio, audioStart));
         } else {
             // FFmpeg opens its inputs in order and reads a little of each: video must already be
             // flowing before it will connect to the audio socket.
@@ -579,7 +604,7 @@ public final class StreamPublisher {
             videoSock.setSendBufferSize(4 << 20);
             daemon("video in", () -> feedVideo(videoSock, w, h, fps));
             Socket audioSock = track(acceptWhileAlive(audioListen, ff));
-            daemon("audio in", () -> feedAudio(audioSock, audio));
+            daemon("audio in", () -> feedAudio(audioSock, audio, audioStart));
         }
         gpuActive = gpu;
         String how = enc.label() + (gpu ? " · GPU capture" : "") + (level > 0 ? " · " + ew + "×" + eh + "@" + fps + " " + kb + " kb/s, lowered: " + levelWhy : "");
@@ -642,7 +667,7 @@ public final class StreamPublisher {
                 }
             }
         });
-        // (dev only, for looking into a stream: windowscraft.exp.dumpTs=<file> keeps its first 4 MB)
+        // (dev only, for looking into a stream: windowscraft.exp.dumpTs=<file> keeps its first 4 MB, or windowscraft.exp.dumpTsMB)
         java.io.OutputStream dump = null;
         String dumpTo = System.getProperty("windowscraft.exp.dumpTs");
         if (dumpTo != null) try { dump = new java.io.FileOutputStream(dumpTo); } catch (IOException ignored) {}
@@ -651,7 +676,7 @@ public final class StreamPublisher {
         while (running && (n = out.read(buf)) > 0) {
             if (dump != null) {
                 try { dump.write(buf, 0, n); dumped += n; } catch (IOException ignored) {}
-                if (dumped > (4 << 20)) { try { dump.close(); } catch (IOException ignored) {} dump = null; }
+                if (dumped > ((long) Integer.getInteger("windowscraft.exp.dumpTsMB", 4) << 20)) { try { dump.close(); } catch (IOException ignored) {} dump = null; }
             }
             long w0 = System.nanoTime();
             synchronized (net) {
@@ -880,55 +905,74 @@ public final class StreamPublisher {
     }
 
     /**
-     * Writes audio on a real-time clock. Captured sound arrives in slightly uneven ~10 ms bursts,
-     * so keep a cushion (~80 ms) and only ever send whole chunks: never pad a half-filled
-     * chunk with silence (that cuts tiny holes into the sound, heard as crackles). If the cushion
-     * drifts (the sound card's clock vs. ours), drop or repeat a single sample per chunk — inaudible.
+     * Writes audio on a real-time clock, counted from {@code start} (where the stream's sound
+     * timestamps start). Captured sound arrives in slightly uneven ~10 ms bursts, so keep a cushion
+     * (~80 ms) and only ever send whole chunks: never pad a half-filled chunk with silence (that
+     * cuts tiny holes into the sound, heard as crackles). The cushion is part of the sound's
+     * timestamps (lip sync), so it's held steady: when the sound waiting in it drifts older or
+     * younger (the sound card's clock vs. ours, a hiccup), it plays a hair faster or slower until
+     * it's back (a frame or two in 480: inaudible); far off, it jumps.
      */
-    private void feedAudio(Socket sock, PcmRing audio) {
+    private void feedAudio(Socket sock, PcmRing audio, long start) {
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
         final int chunkFrames = 480; // 10 ms
         final int chunkBytes = chunkFrames * 4;
-        final int cushionMs = Integer.getInteger("windowscraft.exp.audioCushion", 80); // (Step 0 experiment, dev only)
-        final int target = AudioCapture.BYTES_PER_SECOND * cushionMs / 1000;
-        final int high = AudioCapture.BYTES_PER_SECOND * cushionMs * 2 / 1000;
+        final int target = AudioCapture.BYTES_PER_SECOND * CUSHION_MS / 1000;
         final int max = AudioCapture.BYTES_PER_SECOND / 4;
+        final long targetAge = CUSHION_MS * 1_000_000L;
         // One chunk is held back before sending, so that whenever sound has to stop (it arrived
         // late, or we jump ahead after a stall) the chunk before the gap can fade out and the one
         // after it fade in — a gap then is a soft dip instead of a pop.
-        byte[] held = new byte[chunkBytes], next = new byte[chunkBytes];
+        byte[] held = new byte[chunkBytes], next = new byte[chunkBytes], in = new byte[(chunkFrames + 2) * 4];
+        PcmStretch stretch = new PcmStretch();
         boolean heldSound = false, primed = false;
+        long age = 0; // how old the sound going out is, smoothed (ns): the cushion, when all is well
+        long noteAt = System.nanoTime();
+        int hurried = 0, slowed = 0, jumps = 0, dry = 0;
         try (OutputStream out = sock.getOutputStream()) {
-            long start = System.nanoTime(), written = 0;
+            // FFmpeg took a moment to start: silence for it (the sound's clock runs from start),
+            // and what came in meanwhile is old now
+            long written = (System.nanoTime() - start) * AudioCapture.RATE / 1_000_000_000L / chunkFrames * chunkFrames;
+            for (long f = 0; f < written; f += chunkFrames) out.write(held);
+            if (audio != null) audio.trimTo(0);
             while (running) {
                 long due = (System.nanoTime() - start) * AudioCapture.RATE / 1_000_000_000L;
                 while (written + chunkFrames <= due) {
                     int avail = audio == null ? 0 : audio.available();
+                    // the chunk read now goes out after the held one: the sound's clock says it's
+                    // heard at `at` — and how old its first sound was then
+                    long at = start + (written + chunkFrames) * 1_000_000_000L / AudioCapture.RATE;
+                    long oldest = audio == null ? 0 : audio.oldestAgeNanos(AudioCapture.BYTES_PER_SECOND) - (System.nanoTime() - at);
                     boolean jumped = false;
-                    if (audio != null && avail > max) { // way behind (e.g. after a stall): jump
+                    if (audio != null && (avail > max || primed && oldest > targetAge + 50_000_000L)) {
+                        // way behind (e.g. after a stall): jump
                         audio.trimTo(target);
                         avail = audio.available();
+                        oldest = audio.oldestAgeNanos(AudioCapture.BYTES_PER_SECOND) - (System.nanoTime() - at);
                         jumped = true;
+                        jumps++;
                     }
                     boolean sound;
                     if (audio == null || (!primed && avail < target) || (primed && avail < chunkBytes)) {
                         // nothing (or not enough yet): silence, then wait for the cushion again
+                        if (primed) dry++;
                         primed = false;
                         sound = false;
                         java.util.Arrays.fill(next, (byte) 0);
                     } else {
                         sound = true;
-                        if (avail > high) {
-                            // a little too much queued: skip one sample (drop one frame first)
-                            audio.read(next, 0, 4);
-                            audio.read(next, 0, chunkBytes);
-                        } else if (avail < target / 2) {
-                            // a little too little: repeat one sample (read one frame less, duplicate the last)
-                            int n = audio.read(next, 0, chunkBytes - 4);
-                            System.arraycopy(next, Math.max(0, n - 4), next, n, 4);
+                        if (!primed || jumped) {
+                            age = oldest;
+                            stretch.reset();
                         } else {
-                            audio.read(next, 0, chunkBytes);
+                            age += (oldest - age) / 32; // (~1/3 s)
                         }
+                        long off = age - targetAge;
+                        int faster = off > 12_000_000L ? 2 : off > 3_000_000L ? 1 : off < -12_000_000L ? -2 : off < -3_000_000L ? -1 : 0;
+                        if (faster > 0) hurried++;
+                        else if (faster < 0) slowed++;
+                        int n = audio.read(in, 0, Math.min(chunkFrames + faster, avail / 4) * 4) / 4;
+                        stretch.stretch(in, n, next, chunkFrames);
                         if (!primed || jumped) PcmFades.fadeIn(next, chunkBytes);
                         primed = true;
                     }
@@ -937,6 +981,12 @@ public final class StreamPublisher {
                     byte[] t = held; held = next; next = t;
                     heldSound = sound;
                     written += chunkFrames;
+                }
+                if (dev.windowscraft.measure.Measure.ON && System.nanoTime() - noteAt > 10_000_000_000L) {
+                    noteAt = System.nanoTime();
+                    WindowsCraftClient.LOGGER.info("[audio out] the sound going out is {} ms old (cushion {} ms) · faster {}, slower {} of 1000 chunks · jumped {}, ran dry {}",
+                            age / 1_000_000, CUSHION_MS, hurried, slowed, jumps, dry);
+                    hurried = slowed = jumps = dry = 0;
                 }
                 LockSupport.parkNanos(2_000_000L);
             }

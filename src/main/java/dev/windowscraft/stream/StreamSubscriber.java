@@ -182,10 +182,39 @@ public final class StreamSubscriber implements FrameSource {
     public long latencyMax() { return latencyMax; }
     public SpatialAudioPlayer audio() { return audio; }
 
+    /**
+     * Lip sync after the decoder: decoded pictures wait here until their sound is heard. (Holding
+     * the picture before the decoder can't work: one FFmpeg decodes both and lets the sound out
+     * with the picture of its timestamp — holding one held the other. Measured: sound ~290 ms
+     * after the picture, holding before the decoder made it ~340.) {@code
+     * -Dwindowscraft.lipSyncAfterDecode=false}: before the decoder, as up to 0.15.11.
+     */
+    static final boolean AFTER_DECODE = !"false".equals(System.getProperty("windowscraft.lipSyncAfterDecode"));
+    private final java.util.ArrayDeque<Frame> waiting = new java.util.ArrayDeque<>();
+    private volatile long showDelayNanos;
+    private boolean shownFlash;
+
     @Override
     public Frame takeFrame() {
-        lastTakenNanos = System.nanoTime();
-        return latest.getAndSet(null);
+        long now = System.nanoTime();
+        lastTakenNanos = now;
+        Frame due = null;
+        synchronized (waiting) {
+            while (!waiting.isEmpty() && waiting.peekFirst().showAtNanos <= now) {
+                if (due != null) pool.release(due);
+                due = waiting.pollFirst();
+            }
+        }
+        if (due != null) {
+            Frame old = latest.getAndSet(due);
+            if (old != null) pool.release(old);
+        }
+        Frame f = latest.getAndSet(null);
+        if (f != null) { // (the test pattern's flash, as it goes on screen: lip sync is measured from here)
+            if (f.flash && !shownFlash) lastFlashNanos = now;
+            shownFlash = f.flash;
+        }
+        return f;
     }
 
     // ---- a screen nobody looks at: only its sound is decoded ----
@@ -374,7 +403,7 @@ public final class StreamSubscriber implements FrameSource {
                         ptsWatch.feed(buf, 0, n, onPts);
                     }
                     List<RelayServer.Chunk> chunks = splitter.feed(buf, n);
-                    noteArrivals(chunks, splitter.videoPid(), splitter.audioPid(), sync);
+                    noteArrivals(chunks, splitter.videoPid(), splitter.audioPid(), sync, lastDataNanos);
                     synchronized (lock) {
                         for (RelayServer.Chunk c : chunks) { queue.add(c); queuedBytes[0] += c.data().length; }
                         lock.notifyAll();
@@ -449,6 +478,10 @@ public final class StreamSubscriber implements FrameSource {
                                 && (mode == LIP_WITH_SOUND || !streamId.equals(dev.windowscraft.client.ScreenControl.workingStream()));
                         double hold = sync.step(wanted, audio.soundQueuedMs(), now);
                         holdNanos = (long) (hold * 1e6);
+                        if (AFTER_DECODE) { // (the hold goes to the decoded pictures, not before the decoder)
+                            showDelayNanos = holdNanos;
+                            holdNanos = 0;
+                        }
                         // (in the log when it changes, at most every 10 s: why it holds what it holds)
                         if (now - lipLoggedAt > 10_000_000_000L && (Math.abs(hold - lipLogged) > 20 || wanted != lipLoggedWanted)) {
                             lipLoggedAt = now;
@@ -538,7 +571,7 @@ public final class StreamSubscriber implements FrameSource {
                         int vpid = splitter.videoPid();
                         byte[] rest = TsSplitter.without(c.data(), vpid), pictures = TsSplitter.only(c.data(), vpid);
                         if (rest.length > 0) ffIn.write(rest);
-                        if (pictures.length > 0) held.add(new Held(c.madeNanos(), pictures));
+                        if (pictures.length > 0) held.add(new Held(System.nanoTime(), pictures)); // (madeNanos: only while measuring)
                         ffIn.flush();
                         continue;
                     }
@@ -635,8 +668,14 @@ public final class StreamSubscriber implements FrameSource {
     private static final dev.windowscraft.measure.Measure.Metric LIP_HOLD = dev.windowscraft.measure.Measure.ms("view.lip_hold",
             "someone else's screen: how long its pictures are held back so they show with their sound (0 while you use it)");
 
-    /** Net thread: when each picture and sound packet started arriving, with its timestamp (lip sync). */
-    private static void noteArrivals(List<RelayServer.Chunk> chunks, int vpid, int apid, AvSync sync) {
+    /**
+     * Net thread: when each picture and sound packet started arriving, with its timestamp (lip
+     * sync). {@code now}: when they were read — not the pieces' own {@code madeNanos}, which is
+     * only set while measuring: everywhere else it was 0, the arrivals all "at 0", and the gap
+     * between sound and picture came out as nonsense (~-500 ms, so pictures were never held for
+     * the sound's longer way: it was heard ~150 ms after them).
+     */
+    private static void noteArrivals(List<RelayServer.Chunk> chunks, int vpid, int apid, AvSync sync, long now) {
         if (vpid < 0 || apid < 0) return;
         for (RelayServer.Chunk ch : chunks) {
             byte[] d = ch.data();
@@ -645,7 +684,7 @@ public final class StreamSubscriber implements FrameSource {
                 int pid = ((d[o + 1] & 0x1F) << 8) | (d[o + 2] & 0xFF);
                 if (pid != vpid && pid != apid) continue;
                 long pts = AvSync.ptsIfStart(d, o);
-                if (pts >= 0) sync.arrived(pid == vpid, pts, ch.madeNanos());
+                if (pts >= 0) sync.arrived(pid == vpid, pts, now);
             }
         }
     }
@@ -701,8 +740,23 @@ public final class StreamSubscriber implements FrameSource {
             f.data.put(buf, 0, size).flip();
             f.alphaValid = !nv12; // (FFmpeg's BGRA is opaque with a real alpha; NV12 has none)
             f.captureNanos = System.nanoTime();
-            Frame old = latest.getAndSet(f);
-            if (old != null) pool.release(old);
+            f.flash = measureTestPattern(buf, w, h, nv12);
+            long delay = AFTER_DECODE ? showDelayNanos : 0;
+            Frame old = null;
+            boolean queued;
+            synchronized (waiting) {
+                queued = delay > 0 || !waiting.isEmpty();
+                if (queued) { // (lip sync: it waits for its sound)
+                    f.showAtNanos = f.captureNanos + delay;
+                    waiting.addLast(f);
+                    while (waiting.size() > 60) pool.release(waiting.pollFirst()); // (at most ~1 s)
+                    pool.keep(waiting.size() + 4);
+                }
+            }
+            if (!queued) {
+                old = latest.getAndSet(f);
+                if (old != null) pool.release(old);
+            }
             framesDecoded++;
             if (firstPictureNanos == 0) firstPictureNanos = System.nanoTime();
             if (connectStarted != 0) { // (the first picture since connecting: always cleared, recorded only while measuring)
@@ -727,7 +781,6 @@ public final class StreamSubscriber implements FrameSource {
             }
             if (damaged) { damagedFrames++; DAMAGED.inc(); }
             lastFrameNanos = gapNow;
-            measureTestPattern(buf, w, h, nv12);
             long now = System.nanoTime();
             if (now - windowStart > 1_000_000_000L) {
                 status = String.format(Locale.ROOT, "Live · %.0f fps%s", windowFrames / ((now - windowStart) / 1e9), udp != null ? " · UDP" : "");
@@ -754,8 +807,8 @@ public final class StreamSubscriber implements FrameSource {
         if (arrived != null && !light && matchDecode) DECODE.record(now - arrived);
     }
 
-    /** The test pattern carries a timing strip and a once-a-second flash (with a beep). */
-    private void measureTestPattern(byte[] px, int width, int height, boolean nv12) {
+    /** The test pattern carries a timing strip and a once-a-second flash (with a beep): true while the flash is on. */
+    private boolean measureTestPattern(byte[] px, int width, int height, boolean nv12) {
         long ts = nv12 ? TestPatternProducer.readTimestampLuma(px, width, height) : TestPatternProducer.readTimestamp(px, width, height);
         if (ts > 0) {
             long lat = System.currentTimeMillis() - ts;
@@ -772,8 +825,8 @@ public final class StreamSubscriber implements FrameSource {
             int o = (y * width + x) * 4;
             white = (px[o] & 0xFF) > 220 && (px[o + 1] & 0xFF) > 220 && (px[o + 2] & 0xFF) > 220;
         }
-        if (white && !flashing) lastFlashNanos = System.nanoTime();
         flashing = white;
+        return white;
     }
 
     private static Thread daemon(String name, Runnable r) {

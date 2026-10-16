@@ -20,8 +20,14 @@ package dev.windowscraft.stream;
  */
 final class AvSync {
     static final boolean ENABLED = !"off".equals(System.getProperty("windowscraft.lipSync"));
-    /** The picture's own way after it's let through: decode + upload + the frame it shows in (Step 0: ~8 + 12 + ~8 ms). */
-    static final double PICTURE_AFTER_MS = 28;
+    /**
+     * The picture's own way after it's let through: decode + upload + the frame it shows in (Step 0
+     * guessed ~8 + 12 + ~8 ms). Measured end to end once the sharer stamped its sound right (0.15.12,
+     * movie test): 28 → sound 90 ms before its picture, 70 → 83 ms, 150 → 5 ms (the test pattern's
+     * pictures are stamped a little late themselves, so real ones land a little the other way:
+     * sound a hair after the picture, the side nobody notices).
+     */
+    static final double PICTURE_AFTER_MS = Double.parseDouble(System.getProperty("windowscraft.exp.pictureAfterMs", "150"));
     private static final double MAX_MS = 600, RAMP_MS_PER_S = 20;
     private static final int WINDOW = 96;
 
@@ -62,8 +68,13 @@ final class AvSync {
     synchronized double step(boolean wanted, double soundQueuedMs, long now) {
         double target = 0;
         double gap = arrivalGapMs();
+        // (sound arriving ahead of its picture doesn't come out of the decoder ahead of it: one
+        // FFmpeg decodes both and lets sound out about when the picture with its timestamp comes —
+        // measured: sound packets arriving ~480 ms early came out ~30 ms after their pictures. Taking
+        // that early arrival at its word, nothing was held, and sound was heard ~290 ms late: the
+        // time it waits at the sound card)
         if (ENABLED && wanted && !Double.isNaN(gap) && !Double.isNaN(soundQueuedMs))
-            target = Math.max(0, Math.min(MAX_MS, gap + soundQueuedMs - PICTURE_AFTER_MS));
+            target = Math.max(0, Math.min(MAX_MS, Math.max(0, gap) + soundQueuedMs - PICTURE_AFTER_MS));
         double dt = lastStepNanos == 0 ? 0 : Math.min(1, (now - lastStepNanos) / 1e9);
         lastStepNanos = now;
         if (target < holdMs) holdMs = target; // (less: at once — someone started using it)

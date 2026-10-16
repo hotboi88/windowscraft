@@ -31,7 +31,7 @@ echo "{\"relayPort\": $RELAY, \"relayEnabled\": true}" > run-mp-server/config/wi
 echo "eula=true" > run-mp-server/eula.txt
 for d in run-alice run-bob run-carol; do [ -f $d/options.txt ] || cp tools/movie/options.txt $d/options.txt; done
 ROLE_SRC=$SRC; [ "$SRC" = idle ] && ROLE_SRC=pattern
-COMMON="-Dwindowscraft.bench.input=${BENCH_INPUT:-0} -Dwindowscraft.bench.source=$ROLE_SRC -Dwindowscraft.bench.height=$H -Dwindowscraft.bench.fps=$F -Dwindowscraft.bench.seconds=$S -Dwindowscraft.bench.warmup=$WARM -Dwindowscraft.bench.name=$NAME -Dwindowscraft.bench.gameFps=$GAMEFPS"
+COMMON="-Dwindowscraft.test.silentSpeakers=true -Dwindowscraft.bench.input=${BENCH_INPUT:-0} -Dwindowscraft.bench.source=$ROLE_SRC -Dwindowscraft.bench.height=$H -Dwindowscraft.bench.fps=$F -Dwindowscraft.bench.seconds=$S -Dwindowscraft.bench.warmup=$WARM -Dwindowscraft.bench.name=$NAME -Dwindowscraft.bench.gameFps=$GAMEFPS"
 BW=
 if [ "$SRC" = window ] || [ "$SRC" = monitor ]; then
   java tools/bench/BenchWindow.java "$F" 0 0 $((H * 16 / 9)) "$H" > "$OUT/window-$NAME.log" 2>&1 &

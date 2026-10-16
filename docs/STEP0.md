@@ -144,6 +144,18 @@ picture resumes at the next keyframe — FFmpeg ~1.3 → ~0.05 cores while hidde
 Idle cost (mod loaded, nothing on): walls 0.01/0.02/0.04 ms a frame, client tick 0.02 ms, no
 WindowsCraft thread CPU or allocations; the idle wc-vdisplay helper holds ~8 MB.
 
+## Lip sync (15 Oct, 0.15.12, movie test: sound after picture, median and 10th–90th percentile)
+
+| line to the viewer | 0.15.11 | 0.15.12 |
+|---|---|---|
+| none (one PC) | 138 ms | −5 ms (−21..23) |
+| steady 100 ms | 149 ms | 21 ms (3..41) |
+| swinging (100 ms ±30 each way, 0.5 % loss) | 198 ms | 17 ms (−37..64) |
+
+30 pictures/s, no damaged pictures, on all three. A real film shared from Edge, by the stream's own
+timestamps (beep minus flash): 166 ms → −2.5 ms. People notice sound ~45 ms before its picture or
+~125 ms after it.
+
 ## A friend 100 ms away (15 Oct, 0.15.11, relay.NetSim on the server, 1080p60 window, one PC)
 
 Spiky line (rtt=100, ±15 ms each way, 1 % loss, +250 ms for 2 s every ~12 s), the same run, before / after:
