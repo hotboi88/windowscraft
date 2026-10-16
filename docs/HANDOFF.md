@@ -115,6 +115,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.26 (16 Oct): "Logins follow my desk"; your own folders shared with every monitor
+
+- **"is there any way at all to preserve the sign ins while keeping sound separate on each one"**,
+  and then "if it's generalized or 'just for brave' which is a theme i really want to avoid":
+  sound needs a separate process per monitor (Windows splits sound by process), sign-ins are
+  files. A box is copy-on-write, so it already starts with the desk's sign-ins; it then keeps its
+  own changes. New per monitor, on by default: **"Logins follow my desk"** (`Display.followDesk`,
+  `follow <idx> 0|1`). The helper looks every ~1 s (with `quiet_sbie_ui`, one process snapshot,
+  `box_of` per process): a following monitor's box with nothing running in it for 3 looks in a row
+  is emptied (`Start.exe /box:X delete_sandbox_silent`); also when the monitor turns off. Whole-box,
+  so any app — nothing knows where an app keeps its sign-ins. Off: the box keeps its own accounts.
+- **Files saved on a monitor went into its box**, not your folders (and would now be emptied with
+  it): `[Template_WCShared]` gets `OpenFilePath` for Desktop, Documents, Downloads, Pictures,
+  Music, Videos (`SHGetKnownFolderPath`, wherever they are on that PC): saved straight to them.
+- The probe's privacy-mode check (be5a0f6) is the other direction (every copy signed out): kept
+  only as information, not used.
+
 ## 0.15.25 (16 Oct): Sandboxie's own window never pops up
 
 - Own copies worked on his PC for the first time with 0.15.24 (13:37: "new programs now start in

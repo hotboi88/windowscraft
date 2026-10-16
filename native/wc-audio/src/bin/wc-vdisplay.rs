@@ -3277,6 +3277,11 @@ fn box_name(idx: i32) -> String {
 
 fn isolated(idx: i32) -> bool { ISOLATE.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(false) }
 
+/// "Logins follow my desk" per monitor (on unless the game says otherwise): see follow_desk.
+static FOLLOW: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
+
+fn follows(idx: i32) -> bool { FOLLOW.lock().unwrap().as_ref().and_then(|m| m.get(&idx).copied()).unwrap_or(true) }
+
 /// Runs Sandboxie's launcher (never while a force rule could box it: only for "open another copy",
 /// closing and wiping a box). Its output isn't kept: a program it starts would hold that open.
 fn sbie_start(args: &[&str]) -> bool {
@@ -3714,6 +3719,13 @@ fn shared_settings() -> Vec<(String, String)> {
     for d in breakout_dirs() {
         s.push(("BreakoutFolder".into(), d));
     }
+    // your own folders (Desktop, Documents, Downloads, Pictures, Music, Videos) are your desk's:
+    // a file you download or save on a monitor is right there, and stays (it's never emptied
+    // with the box); only apps' own data is the box's
+    for d in own_folders() {
+        s.push(("OpenFilePath".into(), format!("{d}\\*")));
+        s.push(("OpenFilePath".into(), d));
+    }
     s
 }
 
@@ -3744,11 +3756,12 @@ fn quiet_sbie_settings() {
 /// Sandboxie's window, started by its service by itself (not by you): closed. Looked at every second
 /// or so while own copies are in use (the settings above keep it from starting; this is for the
 /// first time, before Sandboxie has a section for you).
-fn quiet_sbie_ui() {
+/// Every process now: (pid, parent pid, program file name, lower-case).
+fn process_list() -> Vec<(u32, u32, String)> {
     use windows::Win32::System::Diagnostics::ToolHelp::*;
     let mut procs: Vec<(u32, u32, String)> = Vec::new();
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return };
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return procs };
         let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         if Process32FirstW(snap, &mut e).is_ok() {
             loop {
@@ -3761,7 +3774,11 @@ fn quiet_sbie_ui() {
         }
         let _ = CloseHandle(snap);
     }
-    for (pid, parent, name) in &procs {
+    procs
+}
+
+fn quiet_sbie_ui(procs: &[(u32, u32, String)]) {
+    for (pid, parent, name) in procs {
         if (name == "sbiectrl.exe" || name == "sandman.exe") && procs.iter().any(|(p, _, n)| p == parent && n == "sbiesvc.exe") {
             unsafe {
                 if let Ok(h) = OpenProcess(PROCESS_TERMINATE, false, *pid) {
@@ -3778,6 +3795,62 @@ fn quiet_sbie_ui() {
             quiet_sbie_settings(); // (once more, now that Sandboxie may have made your section)
         }
     }
+}
+
+/// "Logins follow my desk": a monitor's box keeps what its apps changed only while one of them
+/// runs. Once the last one has closed (for a few seconds: an app restarting itself to update isn't
+/// closed), the box is emptied, and the next start reads your desk's again — any app's sign-ins,
+/// settings and caches, whatever the app (nothing here knows where an app keeps them). Your own
+/// folders are shared with your desk (`shared_settings`), so nothing you saved is in there.
+static IDLE: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
+
+fn follow_desk(procs: &[(u32, u32, String)]) {
+    let Some(areas) = AREAS.get() else { return };
+    let ids: Vec<i32> = areas.lock().unwrap().keys().copied().collect();
+    let boxes: Vec<String> = ids.iter().filter(|i| isolated(**i) && follows(**i)).map(|i| box_name(*i)).collect();
+    if boxes.is_empty() {
+        return;
+    }
+    let busy: std::collections::HashSet<String> = procs.iter().map(|(p, _, _)| box_of(*p).to_ascii_lowercase()).filter(|b| !b.is_empty()).collect();
+    let mut idle = IDLE.lock().unwrap();
+    let idle = idle.get_or_insert_with(HashMap::new);
+    for b in boxes {
+        let key = b.to_ascii_lowercase();
+        if busy.contains(&key) {
+            idle.insert(key, 0);
+            continue;
+        }
+        let n = idle.entry(key).or_insert(0);
+        *n += 1;
+        if *n == 3 {
+            std::thread::spawn(move || empty_box(&b, "nothing runs in it any more"));
+        }
+    }
+}
+
+/// A monitor's box emptied: what its apps changed goes; the next start is your desk's again.
+fn empty_box(b: &str, why: &str) {
+    sbie_start(&[&format!("/box:{b}"), "delete_sandbox_silent"]);
+    eprintln!("info={b} emptied ({why}): its apps start from your desk's sign-ins and settings again");
+}
+
+/// Your own folders, wherever Windows keeps them: shared with every monitor's box.
+fn own_folders() -> Vec<String> {
+    use windows::Win32::UI::Shell::*;
+    let mut out = Vec::new();
+    for id in [&FOLDERID_Desktop, &FOLDERID_Documents, &FOLDERID_Downloads, &FOLDERID_Pictures, &FOLDERID_Music, &FOLDERID_Videos] {
+        unsafe {
+            if let Ok(p) = SHGetKnownFolderPath(id, KNOWN_FOLDER_FLAG(0), None) {
+                if let Ok(s) = p.to_string() {
+                    if !s.is_empty() {
+                        out.push(s);
+                    }
+                }
+                windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as *const _));
+            }
+        }
+    }
+    out
 }
 
 /// The two templates as they should be now (only what changed is written).
@@ -3870,7 +3943,9 @@ fn ensure_iso_thread() {
             set_force(want);
             ticks += 1;
             if ticks % 16 == 0 && has_sbie_update() {
-                quiet_sbie_ui();
+                let procs = process_list();
+                quiet_sbie_ui(&procs);
+                follow_desk(&procs);
             }
         }
     });
@@ -5148,6 +5223,10 @@ fn main() {
                     ensure_iso_thread();
                 }
             }
+            Some("follow") => {
+                // "logins follow my desk" for a monitor on or off
+                FOLLOW.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, p.get(2) != Some(&"0"));
+            }
             Some("isoexclude") => {
                 // tab-separated: program names, then "|", then folders
                 let f: Vec<&str> = line.splitn(2, '\t').nth(1).unwrap_or("").split('\t').collect();
@@ -5457,7 +5536,12 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
     list.dedup();
     let boxed: Vec<i32> = list.iter().copied().filter(|i| isolated(*i)).collect();
     if boxed.len() > 1 {
-        let closing: Vec<_> = boxed.iter().map(|&i| std::thread::spawn(move || close_box(i, Duration::from_secs(3)))).collect();
+        let closing: Vec<_> = boxed.iter().map(|&i| std::thread::spawn(move || {
+            close_box(i, Duration::from_secs(3));
+            if follows(i) {
+                empty_box(&box_name(i), "its monitor turned off");
+            }
+        })).collect();
         for t in closing {
             let _ = t.join();
         }
@@ -5484,6 +5568,9 @@ fn remove_one_with(vdd: &Driver, added: &AddedMap, homes: &Homes, idx: i32, clos
     let since = added.lock().unwrap().get(&idx).map(|a| a.since);
     if close_copies && isolated(idx) {
         close_box(idx, Duration::from_secs(3)); // (its own copies close, as you'd close them; what's left is ended)
+        if follows(idx) {
+            empty_box(&box_name(idx), "its monitor turned off");
+        }
     }
     if let Some((_, a)) = our_area(added, idx) {
         let left = evacuate(idx, &a, homes);

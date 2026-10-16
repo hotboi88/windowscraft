@@ -69,6 +69,7 @@ public final class Sandbox {
         MonitorBackend b = InGameMonitors.backend();
         if (b == null || m == null || d == null) return;
         b.profileKey(m, d.tablet ? "tablet" : d.id.toString().substring(0, 8));
+        b.followDesk(m, d.followDesk); // (before isolate: the box is never emptied for the wrong reason)
         b.isolate(m, d.ownCopies);
     }
 

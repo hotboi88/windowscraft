@@ -411,6 +411,13 @@ public final class InGameMonitors {
 
     // ---- own copies of apps (each monitor's own Sandboxie box) ----
 
+    public static void setFollowDesk(Display d, boolean on) {
+        d.followDesk = on;
+        DisplayManager.get().save();
+        Mon m = monitorOf(d);
+        if (m != null) Sandbox.push(m, d);
+    }
+
     public static void setOwnCopies(Display d, boolean on) {
         d.ownCopies = on;
         DisplayManager.get().save();

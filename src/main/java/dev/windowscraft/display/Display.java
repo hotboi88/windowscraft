@@ -36,6 +36,8 @@ public final class Display {
     public int monitorW, monitorH;
     /** In-game monitor: apps started at it run as its own copies (its own Sandboxie box). */
     public boolean ownCopies = true;
+    /** With own copies: its apps start from your desk's sign-ins each time (its box emptied once they've all closed). */
+    public boolean followDesk = true;
     /**
      * This screen's own performance picks, where it isn't like all screens (setting key →
      * "true"/"false"; see ClientSettings.on(Auto, Display)). Absent: like all screens.

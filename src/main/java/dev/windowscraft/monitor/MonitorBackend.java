@@ -103,6 +103,8 @@ public interface MonitorBackend {
     // ---- own copies of apps (Sandboxie boxes, one per monitor) ----
     /** "Own copies" for that monitor on or off. */
     default void isolate(Mon m, boolean on) {}
+    /** "Logins follow my desk" for that monitor's own copies. */
+    default void followDesk(Mon m, boolean on) {}
     /** Programs (file names) and folders that never go in a box, and extra folders apps are installed in (game libraries). */
     default void isolationExceptions(List<String> programs, List<String> folders, List<String> appFolders) {}
     /** "ok", "missing" or "stopped". */

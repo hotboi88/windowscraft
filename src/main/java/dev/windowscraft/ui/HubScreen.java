@@ -652,6 +652,13 @@ public final class HubScreen extends Screen {
                 d.ownCopies ? "Its own sound, logins and data; never mixed with your desk or another monitor. Sign in to a site once here, it stays."
                         : "Off: apps here are the same ones as on your desk (their sound plays where you last used them).",
                 d.ownCopies, on -> InGameMonitors.setOwnCopies(d, on));
+        if (d.ownCopies) {
+            y = toggleRow(g, mx, my, x, y, w, "Logins follow my desk",
+                    d.followDesk ? "Its apps start signed in like your desk is, every time; what you change in them here goes once they're all closed. "
+                            + "Your Desktop, Documents and Downloads are your desk's: what you save is kept."
+                            : "Off: its apps keep their own sign-ins and settings here (a second account just for this monitor).",
+                    d.followDesk, on -> InGameMonitors.setFollowDesk(d, on));
+        }
         if (!copies.isEmpty()) {
             java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
             for (MonitorBackend.Win c : copies) names.add(appName(c.pid()));

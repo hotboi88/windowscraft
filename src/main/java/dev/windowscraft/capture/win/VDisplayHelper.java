@@ -260,6 +260,7 @@ public final class VDisplayHelper implements MonitorBackend {
     @Override public void beat() { send("beat"); }
     @Override public void profileKey(Mon m, String key) { send("profilekey " + m.index() + " " + key); }
     @Override public void isolate(Mon m, boolean on) { send("isolate " + m.index() + " " + (on ? 1 : 0)); }
+    @Override public void followDesk(Mon m, boolean on) { send("follow " + m.index() + " " + (on ? 1 : 0)); }
     @Override
     public void isolationExceptions(List<String> programs, List<String> folders, List<String> appFolders) {
         StringBuilder sb = new StringBuilder("isoexclude");
