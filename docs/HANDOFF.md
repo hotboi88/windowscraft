@@ -115,6 +115,31 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.16 (16 Oct): a guest sitting still sends your apps nothing; a slow viewer no longer blurs the stream
+
+- **"whenever i leave a show / movie running the time bar keeps popping up … it only happens in
+  fullscreen"** and **"hovering … just flashes and flashes the hover ui"** (while he sat at the
+  monitor). His guest may use all four of his monitors (`displays.json` controllers). Sitting at one,
+  her game sends a heartbeat every second (`flushRemote`: `OP_POINT`, "still here"), and
+  `guestOnMonitor` passed each one to the app as a move (`slot N move x y` → a posted
+  WM_MOUSEMOVE at her pointer). A video in full screen shows its controls on any move; under his
+  own mouse the hover went to her spot and back once a second (seen: Brave's link bubble hiding and
+  showing every ~1.02 s with his cursor still). In a window her pointer is usually off the video,
+  hence "only in fullscreen". Now a heartbeat is passed on only if the pointer moved since the
+  last move sent (`Guest.movedX/movedY`). Windows game test 1745: three heartbeats at one spot →
+  no move; a real move → a move. (Likely also the lichess drags that "lag": the piece was pulled
+  to her spot once a second.)
+- **The guest's laptop: "youtube at 720p60 is blurry"; Spotify choppy.** His log: 10 of 24 stream restarts were
+  "a viewer's PC can't play it fast enough", walking the stream down to step 4 (1080×720@30,
+  1200 kb/s) and back up every 5 min — each a restart (a gap in the sound). Fewer bits barely
+  lighten a decoder's work (per picture), they only blur; so decode trouble now lowers no further
+  than step 2 (720p, 30 fps), the viewer's own light playback does the rest. Network trouble still
+  goes all the way down. Her own log is still needed to see why her PC falls behind at 720p30
+  (`[pause]`, "was behind; skipped", "can't keep up" lines): 8 GB with a nearly full C: means
+  paging is the first suspect.
+- Passive window/cursor recorder used for this (WinEvent hooks + polling, changes nothing):
+  `scratchpad/watch/fgwatch3.ps1` (not in the repo).
+
 ## 0.15.15 (16 Oct): a monitor's sound never leaves it; viewers' cost capped; shaders on screens for everyone
 
 - **"the audio still goes straight to my main desktop when i create a new monitor. i dont want a
@@ -134,7 +159,7 @@ full FFmpeg restart on quality change; no guest relative mouse.
 - **Own copies (Sandboxie) per monitor** are on by default already (`Display.ownCopies = true`),
   but Sandboxie-Plus was never set up on his PC (not installed; no "new programs now start in
   box" in his log). That needs his one click (U → Own copies of apps → Set up; Windows asks once).
-- **vnill at 15 fps "just by me having my screens up".** His log: streams of 3840×2024@60 (two)
+- **His guest at 15 fps "just by me having my screens up".** His log: streams of 3840×2024@60 (two)
   and 1800×1200@60 to her laptop at once; her PC reported it couldn't keep up, and quality came
   down one step, one stream at a time, minutes later. Each 4K picture is ~12 MB through her game
   (NV12 after the decoder) — ~1.2 GB/s for three. Now: streams at most 1080 lines

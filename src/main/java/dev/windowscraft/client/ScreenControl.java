@@ -371,6 +371,8 @@ public final class ScreenControl {
         volatile boolean seated;
         /** Their own pointer on an in-game monitor (0..1), the window under it, and where their press went. */
         volatile double x = 0.5, y = 0.5;
+        /** Where their last move went to the app (NaN: none yet). */
+        double movedX = Double.NaN, movedY = Double.NaN;
         volatile WinGeom.At under;
         WinGeom.At pressedAt;
         int buttons;
@@ -412,6 +414,14 @@ public final class ScreenControl {
 
     private static volatile Map<UUID, Route> routes = Map.of();
     private static volatile long lookedNow;
+
+    /** Tests: waits until the lane has handled everything sent to it so far. */
+    public static void testDrainLane() {
+        try {
+            LANE.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+        }
+    }
 
     /** Game thread: what the lane knows about your walls (each tick, and when it asks). */
     private static void refreshRoutes() {
@@ -648,11 +658,17 @@ public final class ScreenControl {
             }
             case Payloads.OP_MOVE, Payloads.OP_POINT, Payloads.OP_SIT -> {
                 lookUpSoon(d, g);
+                // their once-a-second "still here" is no move: sent to the app as one, a video in
+                // full screen showed its time bar every second while they sat watching it, and the
+                // hover under your own mouse flashed to their spot and back
+                if (c.op() == Payloads.OP_POINT && x == g.movedX && y == g.movedY) return;
                 WinGeom.At at = g.buttons != 0 && g.pressedAt != null ? g.pressedAt : g.under;
                 if (at == null) return;
                 double[] n = clientSpot(d, at, x, y);
                 guestAim(g, at.handle());
                 g.send(String.format(Locale.ROOT, "move %.5f %.5f", n[0], n[1]));
+                g.movedX = x;
+                g.movedY = y;
             }
             default -> {}
         }

@@ -730,6 +730,11 @@ public final class StreamPublisher {
                 viewerTrouble = 0;
                 if (vt == dev.windowscraft.net.Payloads.TROUBLE_NETWORK) lossyViewer = true;
                 long gate = level < 2 ? 5_000_000_000L : 15_000_000_000L;
+                // (a viewer's PC that can't play it: 30 pictures a second and 720 lines lighten its
+                // work — fewer bits per picture barely do, they only blur it: YouTube at 1.2 Mbit/s
+                // for a laptop, and each step restarts the stream, a gap in the sound for everyone.
+                // So for that no lower than step 2; its own light playback does the rest)
+                if (vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE && level >= 2) vt = 0;
                 if (vt != 0 && now - levelSince > gate && now - pipelineStart > 3_000_000_000L)
                     lower(vt == dev.windowscraft.net.Payloads.TROUBLE_DECODE ? "a viewer's PC can't play it fast enough" : "it doesn't reach a viewer fast enough");
                 // a while without trouble: try one step better (once; if that fails it stays down)

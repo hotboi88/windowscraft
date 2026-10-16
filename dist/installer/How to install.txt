@@ -1,4 +1,8 @@
-WindowsCraft 0.15.15 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.16 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.16: someone sitting at your monitor without moving no longer wakes the video's
+time bar or flickers your hovers. A viewer whose PC can't keep up gets 720p at 30 pictures a
+second, not an ever blurrier picture.
 
 New in 0.15.15: a monitor's sound stays on its wall, also from Store apps like Media Player and
 while monitors are being added. Screens you watch cost your PC much less (the nearest plays full,

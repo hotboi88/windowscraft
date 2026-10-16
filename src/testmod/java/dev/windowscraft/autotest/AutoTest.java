@@ -737,6 +737,22 @@ public final class AutoTest implements ClientModInitializer {
                 check(got.stream().noneMatch(l -> l.equals(sb + " release") || l.equals(sb + " blur")), "Carol clicking never lets go of Bob's held button");
                 check(got.contains(sb + " key down 30") && got.contains(sc + " key down 30"), "each one's keys go to their own window");
                 check(got.stream().allMatch(l -> l.startsWith("slot ")), "guests never use your own input");
+                // sitting still, their "still here" (once a second) is no move for the app: a video in
+                // full screen showed its time bar every second while someone sat watching it, and the
+                // hover under your own mouse flashed to their spot and back
+                java.util.function.BiConsumer<Integer, Float> at = (o, x) -> dev.windowscraft.client.ScreenControl.fromGuest(mc,
+                        new dev.windowscraft.net.Payloads.ControlFrom(bob, "Bob", new dev.windowscraft.net.Payloads.Control(a.id, o, x, 0.5f, 0, 0)));
+                at.accept(dev.windowscraft.net.Payloads.OP_POINT, 0.5f);
+                dev.windowscraft.client.ScreenControl.testDrainLane();
+                int before = sent.size();
+                for (int i = 0; i < 3; i++) at.accept(dev.windowscraft.net.Payloads.OP_POINT, 0.5f);
+                dev.windowscraft.client.ScreenControl.testDrainLane();
+                java.util.List<String> still = new java.util.ArrayList<>(sent.subList(before, sent.size()));
+                check(still.stream().noneMatch(l -> l.startsWith(sb + " move")), "a guest sitting still sends the app no moves: " + still);
+                at.accept(dev.windowscraft.net.Payloads.OP_MOVE, 0.6f);
+                dev.windowscraft.client.ScreenControl.testDrainLane();
+                java.util.List<String> moved = new java.util.ArrayList<>(sent.subList(before, sent.size()));
+                check(moved.stream().anyMatch(l -> l.startsWith(sb + " move")), "…and their real moves still go: " + moved);
                 dev.windowscraft.client.ScreenControl.dropGuest(a, bob);
                 dev.windowscraft.client.ScreenControl.dropGuest(b, carol);
                 dev.windowscraft.capture.win.WinGeom.testWindowAt = null;
