@@ -70,6 +70,13 @@ He hosts; a friend joins remotely. The long-term goal is docs/VISION.md.
 - Package: zip of dist/installer/*, the jar, and a "Windows self-test" folder (wc-selftest.exe,
   wc-input.exe, wc-vdisplay.exe, wc-capture.exe, dist/selftest/Run self-test.bat) →
   dist/WindowsCraft-<ver>.zip (forward slashes in the zip: made with Python's zipfile).
+- One-file installer for friends (since 0.15.13): `sh tools/installer/build.sh <jar> <folder>` →
+  "Install WindowsCraft <ver>.exe" with the jar inside (std-only Rust, built with the path
+  remaps). Double-click: finds Cobbleverse game folders (the official launcher's custom game
+  folders from launcher_profiles.json, Modrinth, CurseForge, Prism/MultiMC, ATLauncher, or a
+  played folder near the user's files), takes older WindowsCraft jars out, waits while the game
+  holds them, asks for the folder if none is found. Another Cobblemon pack, a backup or a server
+  is left alone. `--list` shows what it would touch, changing nothing.
 - CI (GitHub Actions, Windows runners, no real GPU): windows-selftest, windows-game-test,
   sandbox-probe (Sandboxie probe + `wc-selftest --sandbox` end-to-end, 23 checks), movie-test,
   windows-stress.

@@ -1,0 +1,17 @@
+[package]
+name = "wc-install"
+version = "1.0.0"
+edition = "2021"
+description = "WindowsCraft one-file installer: carries the mod jar and puts it in every Cobbleverse game folder it finds"
+license = "LGPL-3.0-or-later"
+
+[[bin]]
+name = "wc-install"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
