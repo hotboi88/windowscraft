@@ -3640,16 +3640,52 @@ fn force_folders() -> Vec<String> {
         }
     }
     refresh_carve();
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(3) {
-        std::thread::sleep(Duration::from_millis(20));
-        if let Some((s, _, v)) = CARVED.lock().unwrap().as_ref() {
-            if *s == sig {
-                return v.clone();
-            }
-        }
+    // never waited for: working the folders out reads every app folder (seconds on a slow disk), and
+    // meanwhile an app you start wasn't the monitor's own copy. The last list worked out for these
+    // same exceptions (kept on disk), else at once the app folders with no exception in or above
+    // them; the worked-out list follows as soon as it's there
+    if let Some(v) = carve_cache(&sig) {
+        *CARVED.lock().unwrap() = Some((sig, Instant::now() - Duration::from_secs(290), v.clone()));
+        return v;
     }
-    carve(1, 400) // (still not there: a shallow look now)
+    coarse_folders()
+}
+
+/// The app folders that have no exception in or above them: right at once, never too much.
+fn coarse_folders() -> Vec<String> {
+    let ex: Vec<String> = breakout_dirs().iter().map(|d| norm_dir(d)).filter(|d| !d.is_empty()).collect();
+    app_folders()
+        .into_iter()
+        .filter(|r| {
+            let rl = norm_dir(r);
+            !ex.iter().any(|e| rl == *e || rl.starts_with(&format!("{e}\\")) || e.starts_with(&format!("{rl}\\")))
+        })
+        .map(|r| r.trim_end_matches('\\').to_string())
+        .collect()
+}
+
+/// Where the last worked-out list is kept (with what it was worked out for), between runs.
+fn carve_cache_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("LOCALAPPDATA").ok()?;
+    Some(std::path::Path::new(&base).join("WindowsCraft").join("own-copies-folders.txt"))
+}
+
+fn carve_cache(sig: &str) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(carve_cache_path()?).ok()?;
+    let mut lines = text.lines();
+    if lines.next()? != sig {
+        return None;
+    }
+    let v: Vec<String> = lines.filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
+    (!v.is_empty()).then_some(v)
+}
+
+fn save_carve_cache(sig: &str, v: &[String]) {
+    let Some(p) = carve_cache_path() else { return };
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(p, format!("{sig}\n{}\n", v.join("\n")));
 }
 
 /// Works the folders out (again) in the background, at low priority: a quick look first, then a
@@ -3672,10 +3708,13 @@ fn refresh_carve() {
                 }
                 let mut c = CARVED.lock().unwrap();
                 let changed = c.as_ref().map_or(true, |(s, _, old)| *s != sig || *old != v);
-                *c = Some((sig.clone(), Instant::now(), v));
+                *c = Some((sig.clone(), Instant::now(), v.clone()));
                 drop(c);
                 if changed {
                     ISO_DIRTY.store(true, Ordering::SeqCst);
+                }
+                if depth > 2 {
+                    save_carve_cache(&sig, &v); // (the full look: the next run starts with it)
                 }
             }
             if carve_sig() == sig {

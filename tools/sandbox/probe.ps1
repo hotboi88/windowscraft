@@ -234,8 +234,8 @@ $priv = (Get-Content C:\wcprivout\priv.txt -ErrorAction SilentlyContinue) -join 
 $plain = (Get-Content C:\wcprivout\plain.txt -ErrorAction SilentlyContinue) -join ","
 Note "a normal box (copy-on-write): $plain"
 Note "a privacy-mode box: $priv"
-Check "privacy mode: a boxed app doesn't see your own files (a box starts fresh, signed out)" ($priv -match "HIDDEN" -and $plain -match "SEEN") "privacy box: '$priv' · normal box: '$plain'"
-Check "…and an app installed in your own folder (like Discord) still runs in it" ($priv -match "APPOK") "'$priv'"
+Note "(information: nothing ran in the privacy-mode box here; it is a supporter feature of Sandboxie-Plus) privacy box: '$priv' · normal box: '$plain'"
+Check "a normal box sees your own files and runs an app installed in your own folder (like Discord)" ($plain -match "SEEN" -and $plain -match "APPOK") "'$plain'"
 Note "WCPriv as Sandboxie has it: UsePrivacyMode = $(& $ini query WCPriv UsePrivacyMode)"
 foreach ($b in "WCPriv", "WCMon1") { & $ini delete $b OpenFilePath | Out-Null }
 & "$dir\Start.exe" /reload | Out-Null

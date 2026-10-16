@@ -1887,7 +1887,15 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     finish(w);
     // 2. each monitor its own box: sitting at A → A's box, on A
     let s = seat(&h, ma.idx);
-    let rules = ini_forced();
+    // (the folders are worked out in the background — seconds on a slow disk; until then the rule
+    //  covers the app folders that need no carving: wait for the carved one, and note how long)
+    let t_rule = Instant::now();
+    let mut rules = ini_forced();
+    let _ = wait_for(20000, || {
+        rules = ini_forced();
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))) && rules.iter().any(|l| l.to_lowercase().replace('/', "\\").ends_with("\\wcapps\\a"))
+    });
+    rep.note(format!("(the rule at A, carved: {} ms)", t_rule.elapsed().as_millis()));
     rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {} folders", rules.len()));
     let mine: Vec<&String> = rules.iter().filter(|l| l.to_lowercase().contains("wcapps")).collect();
     let low = |l: &String| l.to_lowercase().replace('/', "\\");
@@ -1914,7 +1922,11 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     // 4. over to B: B's box, on B — and A's app stays A's
     let _ = h.call("unseat", "unseated", 8000);
     let s = seat(&h, mb.idx);
-    let rules = ini_forced();
+    let mut rules = ini_forced();
+    let _ = wait_for(8000, || {
+        rules = ini_forced();
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
+    });
     rep.check("sitting at monitor B: the rule moved to B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {rules:?}"));
     let wb = start(&app("wcapp_b"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
@@ -1927,7 +1939,11 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     h.send(&format!("isolate {} 0", ma.idx));
     h.send(&format!("isolate {} 0", mb.idx));
     sleep(600);
-    let rules = ini_forced();
+    let mut rules = ini_forced();
+    let _ = wait_for(8000, || {
+        rules = ini_forced();
+        rules.is_empty()
+    });
     let w = start(&app("wcapp_c"));
     rep.check("own copies turned off on every monitor: no rule left, even sitting there; apps start normally", rules.is_empty() && w.is_some() && !in_box(&h, mb.idx).contains(&w.map_or(0, pid)),
         format!("rules {rules:?} · {:?}", w.map(pid)));
@@ -1935,7 +1951,11 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     // 6. the helper stopped (the game closing it) while sitting at a monitor with own copies on
     h.send(&format!("isolate {} 1", mb.idx));
     sleep(600);
-    let before = ini_forced();
+    let mut before = ini_forced();
+    let _ = wait_for(8000, || {
+        before = ini_forced();
+        !before.is_empty()
+    });
     rep.note(format!("(sitting at B, own copies back on: {} folders)", before.len()));
     h.stop();
     sleep(1500);
