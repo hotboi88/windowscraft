@@ -115,6 +115,22 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.25 (16 Oct): Sandboxie's own window never pops up
+
+- Own copies worked on his PC for the first time with 0.15.24 (13:37: "new programs now start in
+  box WCcc591e8a (1038 ms)", no "didn't take it"; `C:\Windows\Sandboxie.ini` made by its service)
+  — and with the first boxed program, SbieSvc started Sandboxie Control (parent SbieSvc.exe): its
+  "Software Compatibility" question, then "Messages from Sandboxie" (SBIE2112, a boxed app
+  denied a named pipe `\Device\NamedPipe\uv\…` of an unboxed one). Now `SbieCtrl_EnableAutoStart=n`
+  in [GlobalSettings] and every [UserSettings_…] (`quiet_sbie_settings`, with the templates), and
+  the force thread closes SbieCtrl.exe / SandMan.exe started by SbieSvc.exe (`quiet_sbie_ui`,
+  ~1 s; one you start yourself has Explorer as its parent and stays).
+- **"signed into my browser"** in its own copy: Sandboxie boxes are copy-on-write — a boxed app
+  reads your real files (its profile, its logins) and only its changes stay in the box. So a box
+  starts as a copy of your desk. To start fresh, the box must hide your data: Sandboxie's
+  `UsePrivacyMode` (in his SbieDrv.sys) — to be tried in the sandbox probe (does a boxed app still
+  see a file in %APPDATA%; is it free without a supporter certificate; do apps still run).
+
 ## 0.15.24 (16 Oct): own copies for real — Sandboxie's settings through its own service
 
 - **"the own copies don't work at all they still have the same logins n everything theres no

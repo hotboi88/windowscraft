@@ -1,4 +1,6 @@
-WindowsCraft 0.15.24 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.25 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.25: Sandboxie's own window and messages no longer pop up.
 
 New in 0.15.24: "own copies" really work now — each monitor's apps get their own logins and
 sound (Sandboxie's settings were never saved on a PC without administrator rights).

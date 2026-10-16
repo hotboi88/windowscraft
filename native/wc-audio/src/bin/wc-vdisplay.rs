@@ -3721,11 +3721,71 @@ fn force_settings() -> Vec<(String, String)> {
     force_folders().into_iter().map(|d| ("ForceFolder".to_string(), d)).collect()
 }
 
+/// Sandboxie's own window never starts by itself: its service starts it (Sandboxie Control, with
+/// a "Software Compatibility" question) as the first program goes into a box — off, for you and
+/// for everyone ([GlobalSettings] and every [UserSettings_…]). One you open yourself still opens.
+fn quiet_sbie_settings() {
+    let lines = read_ini();
+    let mut sections: Vec<String> = vec!["GlobalSettings".into()];
+    for l in &lines {
+        let t = l.trim();
+        if t.starts_with("[UserSettings_") && t.ends_with(']') {
+            sections.push(t[1..t.len() - 1].to_string());
+        }
+    }
+    for sec in sections {
+        let off = section_of(&lines, &sec).iter().any(|(k, v)| k.eq_ignore_ascii_case("SbieCtrl_EnableAutoStart") && v.eq_ignore_ascii_case("n"));
+        if !off {
+            sbie_update('s', &sec, "SbieCtrl_EnableAutoStart", "n");
+        }
+    }
+}
+
+/// Sandboxie's window, started by its service by itself (not by you): closed. Looked at every second
+/// or so while own copies are in use (the settings above keep it from starting; this is for the
+/// first time, before Sandboxie has a section for you).
+fn quiet_sbie_ui() {
+    use windows::Win32::System::Diagnostics::ToolHelp::*;
+    let mut procs: Vec<(u32, u32, String)> = Vec::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return };
+        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        if Process32FirstW(snap, &mut e).is_ok() {
+            loop {
+                let end = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+                procs.push((e.th32ProcessID, e.th32ParentProcessID, String::from_utf16_lossy(&e.szExeFile[..end]).to_ascii_lowercase()));
+                if Process32NextW(snap, &mut e).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+    for (pid, parent, name) in &procs {
+        if (name == "sbiectrl.exe" || name == "sandman.exe") && procs.iter().any(|(p, _, n)| p == parent && n == "sbiesvc.exe") {
+            unsafe {
+                if let Ok(h) = OpenProcess(PROCESS_TERMINATE, false, *pid) {
+                    let _ = TerminateProcess(h, 0);
+                    let _ = CloseHandle(h);
+                    eprintln!("info=closed {name}: Sandboxie's service started it by itself (its window never shows)");
+                }
+            }
+        }
+    }
+    if !procs.is_empty() {
+        static TOLD: AtomicBool = AtomicBool::new(false);
+        if !TOLD.swap(true, Ordering::SeqCst) {
+            quiet_sbie_settings(); // (once more, now that Sandboxie may have made your section)
+        }
+    }
+}
+
 /// The two templates as they should be now (only what changed is written).
 fn ensure_templates(force_too: bool) {
     if !has_sbie_update() {
         return;
     }
+    quiet_sbie_settings();
     set_section(&format!("Template_{SHARED_TEMPLATE}"), &shared_settings());
     if force_too {
         set_section(&format!("Template_{FORCE_TEMPLATE}"), &force_settings());
@@ -3802,10 +3862,17 @@ fn ensure_iso_thread() {
     if ISO_THREAD.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_millis(60));
-        let want = wanted_force();
-        set_force(want);
+    std::thread::spawn(|| {
+        let mut ticks = 0u32;
+        loop {
+            std::thread::sleep(Duration::from_millis(60));
+            let want = wanted_force();
+            set_force(want);
+            ticks += 1;
+            if ticks % 16 == 0 && has_sbie_update() {
+                quiet_sbie_ui();
+            }
+        }
     });
 }
 
