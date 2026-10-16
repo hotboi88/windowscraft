@@ -143,6 +143,10 @@ full FFmpeg restart on quality change; no guest relative mouse.
   play light (30 pictures a second, at most 720 lines; `StreamSubscriber.playLight`, held 3 s
   before changing). Screens not drawn for 2 s already decoded their sound only (as he asked:
   "if someone doesn't have a monitor on their screen … it just needs to stream audio").
+- **"the music was laggy skipping for her."** 18 stream restarts in ~20 min; 9 were "upload shared
+  differently" — the viewer count blinked 1 → 2 → 1 as a viewer reconnected, each blink re-split
+  the upload and restarted the stream (a moment without sound for everyone watching). A new share
+  now has to hold for 30 s first.
 - **Shader pack on screens: one setting for everyone, on by default.** `Payloads.ScreensShaded`
   (both ways); the server keeps it (`windowscraft-server.json` "screensShaded", default true),
   sends it on join and to everyone when anyone flips it. Off a WindowsCraft server it's your own

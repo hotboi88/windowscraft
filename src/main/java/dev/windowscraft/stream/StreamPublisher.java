@@ -121,6 +121,9 @@ public final class StreamPublisher {
     private volatile int videoSkips; // CPU path: the encoder couldn't take the frames in time
     private static final int MAX_LEVEL = 4;
     private static final int STREAM_MAX_H = Integer.getInteger("windowscraft.streamMaxHeight", 1080);
+    /** A different share of your upload, and since when it has held (0: none waiting). */
+    private long reshareSince;
+    private int reshareKb;
     // GPU mode: FFmpeg sends back a small preview for your own wall (newest frame wins)
     private final AtomicReference<Frame> preview = new AtomicReference<>();
     private final dev.windowscraft.capture.FramePool previewPool = new dev.windowscraft.capture.FramePool();
@@ -738,9 +741,18 @@ public final class StreamPublisher {
                     quickRestart = true;
                     throw new IOException("trying better quality");
                 }
-                // your upload is shared differently now (a screen more or less being watched): re-fit
+                // your upload is shared differently now (a screen more or less being watched): re-fit —
+                // once the new share has held for 30 s. Every re-fit restarts the stream (a moment
+                // without sound for everyone watching), and the count blinks 1 → 2 → 1 whenever a
+                // viewer reconnects: that restarted streams 9 times in 20 minutes, music skipping
                 int want = Math.min(ownKb, budgetKb());
-                if (now - pipelineStart > 20_000_000_000L && Math.abs(want - kb) > kb * 0.35) {
+                if (Math.abs(want - kb) <= kb * 0.35) {
+                    reshareSince = 0;
+                } else if (reshareSince == 0 || Math.abs(want - reshareKb) > reshareKb * 0.35) {
+                    reshareSince = now;
+                    reshareKb = want;
+                } else if (now - reshareSince > 30_000_000_000L && now - pipelineStart > 20_000_000_000L) {
+                    reshareSince = 0;
                     WindowsCraftClient.LOGGER.info("Stream '{}': its part of your upload is now {} kb/s (was {})", source.title(), want, kb);
                     quickRestart = true;
                     throw new IOException("upload shared differently");
