@@ -3378,9 +3378,6 @@ fn on_window_shown(h: HWND, fresh: bool) {
             return;
         }
     }
-    if close_veiled(h) {
-        return; // (made invisible to be closed: it never goes anywhere)
-    }
     let p = pid(h);
     let mut target: Option<i32> = None;
     let at = cursor_monitor();
@@ -3466,14 +3463,6 @@ fn on_window_shown(h: HWND, fresh: bool) {
             app_windows().into_iter().any(|o| o != h && pid(o) == p && on_area(o, &area)).then_some(mine)
         });
     }
-    // an app you picked, opened from the monitor but as your desk's copy: the monitor's own instead
-    if fresh {
-        if let Some(i) = target {
-            if own_copy_instead(h, i, true) {
-                return;
-            }
-        }
-    }
     if fresh && monitor_of_window(h).is_some() != target.is_some() {
         eprintln!("info=new window \"{}\" ({}): {} (cursor on {:?}, seated {}, pointing {}, game in front {}, on your desk {})", title(h), class_name(h),
             target.map_or("your desk".to_string(), |i| format!("in-game monitor {i}")), at, SEATED.load(Ordering::SeqCst),
@@ -3513,16 +3502,58 @@ static ISOLATE: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
 /// What never goes in a box: program names, and folders (WindowsCraft's own, games with anti-cheat…).
 static ISO_EXES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_DIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// The apps you picked to have their own copy on every in-game monitor (their programs, as full
-/// paths when known). Nothing else ever goes in a box by itself: games, their launchers, Store apps
-/// and everything you didn't pick run normally ("configurable per app and off by default … while
-/// not being automatically blocked from games n stuff").
+/// The apps you switched on to have their own copy on every in-game monitor (their programs, as
+/// full paths when known). Nothing else ever goes in a box by itself: games, their launchers, Store
+/// apps and everything you didn't switch on run normally ("not all apps are affected
+/// automatically and it can be switched on or off for all detected apps on the computer").
 static ISO_APPS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Of those, the ones running outside any box when the force rule was last written (see force_settings).
-static UNBOXED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn file_name(path: &str) -> String {
     path.rsplit(['\\', '/']).next().unwrap_or(path).to_ascii_lowercase()
+}
+
+/// The apps on this PC, as the Start menu's "All apps" has them: its desktop programs, each once —
+/// (name, program) by name (a Store app can't run in a box; uninstallers aren't apps).
+fn installed_apps() -> Vec<(String, String)> {
+    const PKEY_TARGET: PROPERTYKEY = PROPERTYKEY { fmtid: windows::core::GUID::from_u128(0xB9B4B3FC_2B51_4A42_B5D8_324146AFCF25), pid: 2 };
+    // (on a thread of its own: the Shell wants COM, set up there and nowhere else)
+    std::thread::spawn(|| {
+        use windows::core::Interface;
+        use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED};
+        let take = |p: PWSTR| -> String {
+            let s = unsafe { p.to_string() }.unwrap_or_default();
+            unsafe { CoTaskMemFree(Some(p.0 as *const _)) };
+            s
+        };
+        let mut out: Vec<(String, String)> = Vec::new();
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            if let Ok(folder) = SHGetKnownFolderItem::<IShellItem>(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, None) {
+                if let Ok(items) = folder.BindToHandler::<_, IEnumShellItems>(None, &BHID_EnumItems) {
+                    loop {
+                        let mut batch = [None];
+                        let mut got = 0u32;
+                        if items.Next(&mut batch, Some(&mut got)).is_err() || got == 0 {
+                            break;
+                        }
+                        let Some(item) = batch[0].take() else { break };
+                        let name = item.GetDisplayName(SIGDN_NORMALDISPLAY).map(take).unwrap_or_default();
+                        let Ok(item2) = item.cast::<IShellItem2>() else { continue };
+                        let exe = item2.GetString(&PKEY_TARGET).map(take).unwrap_or_default();
+                        let file = file_name(&exe);
+                        if name.is_empty() || !file.ends_with(".exe") || file.starts_with("unins") || name.to_lowercase().contains("uninstall")
+                            || !std::path::Path::new(&exe).is_file() || out.iter().any(|(_, e)| e.eq_ignore_ascii_case(&exe)) {
+                            continue;
+                        }
+                        out.push((name, exe));
+                    }
+                }
+            }
+            CoUninitialize();
+        }
+        out.sort_by_key(|(n, _)| n.to_lowercase());
+        out
+    }).join().unwrap_or_default()
 }
 
 /// Program names (lower-case) of the apps you picked.
@@ -3539,21 +3570,6 @@ fn chosen(exe: &str) -> bool {
     chosen_names().iter().any(|c| *c == n)
 }
 
-/// The apps you picked that are running outside any box right now (your desk's), by name.
-fn unboxed_chosen() -> Vec<String> {
-    let names = chosen_names();
-    if names.is_empty() {
-        return Vec::new();
-    }
-    let mut out: Vec<String> = Vec::new();
-    for (pid, _, exe) in process_list() {
-        if names.contains(&exe) && !out.contains(&exe) && box_of(pid).is_empty() {
-            out.push(exe);
-        }
-    }
-    out.sort();
-    out
-}
 /// The box the force rule is on right now (where new programs land), if any.
 static FORCED: Mutex<Option<String>> = Mutex::new(None);
 /// The boxes made so far. Only through `note_box` and `boxes_made`: never locked while anything
@@ -3998,15 +4014,12 @@ fn desk_files_settings() -> Vec<(String, String)> {
     s
 }
 
-/// While you sit at a monitor, the apps you picked start in its box — by program name, nothing
-/// else. Not one of them that's running outside a box (your desk's): Sandboxie's rule would also
-/// take the new processes your desk's copy starts meanwhile (a page, a helper) into the box, and
-/// break it there — the Claude app's window went gray that way. Opened on the monitor, one of
-/// those gets the monitor's own copy instead (see own_copy_instead).
+/// While you sit at (or point at) a monitor, the apps you switched on start in its box, by program
+/// name — as own copies always worked, for just those apps ("EXACTLY how it did before with
+/// sandboxie. BUT not all apps are affected"). Whatever starts one of them meanwhile — your
+/// desk's copy of it too — starts it there.
 fn force_settings() -> Vec<(String, String)> {
-    let outside = unboxed_chosen();
-    *UNBOXED.lock().unwrap() = outside.clone();
-    chosen_names().into_iter().filter(|n| !outside.contains(n)).map(|n| ("ForceProcess".to_string(), n)).collect()
+    chosen_names().into_iter().map(|n| ("ForceProcess".to_string(), n)).collect()
 }
 
 /// Sandboxie's own window never starts by itself: its service starts it (Sandboxie Control, with
@@ -4217,17 +4230,10 @@ fn ensure_iso_thread() {
             let want = wanted_force();
             set_force(want);
             ticks += 1;
-            if ticks % 16 == 0 {
-                // (one of the apps you picked opened or closed outside a box: the rule follows)
-                let forcing = FORCED.lock().unwrap().is_some();
-                if forcing && unboxed_chosen() != *UNBOXED.lock().unwrap() {
-                    ISO_DIRTY.store(true, Ordering::SeqCst);
-                }
-                if has_sbie_update() {
-                    let procs = process_list();
-                    quiet_sbie_ui(&procs);
-                    follow_desk(&procs);
-                }
+            if ticks % 16 == 0 && has_sbie_update() {
+                let procs = process_list();
+                quiet_sbie_ui(&procs);
+                follow_desk(&procs);
             }
         }
     });
@@ -4455,139 +4461,10 @@ fn primary_area() -> RECT {
     }
 }
 
-/// A program's full path (None: it's gone, or not ours to look at).
-fn process_path(pid: u32) -> Option<String> {
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buf = [0u16; 1024];
-        let mut n = buf.len() as u32;
-        let r = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).ok().map(|_| String::from_utf16_lossy(&buf[..n as usize]));
-        let _ = CloseHandle(h);
-        r
-    }
-}
-
-/// When the monitor's own copy of an app was last started for a window of your desk's: one start
-/// for the windows it opens at once.
-static OWN_COPY_STARTED: Mutex<Option<HashMap<(i32, String), Instant>>> = Mutex::new(None);
-
-/// An app you picked to have its own copy on every monitor, opened from monitor `idx`'s Start,
-/// taskbar or desktop — and its copy on your desk took the start (a second window of it, or the
-/// one window of an app that only runs once came forward): your desk's stays your desk's, and the
-/// monitor's own copy opens there instead, in its box. Its sound is the monitor's alone ("no audio
-/// mixing between monitors AT ALL EVER"). `new_window`: that window is a new one of your desk's
-/// copy, there only for this start — it closes again before it's seen. True if so (the window is
-/// left alone then).
-fn own_copy_instead(h: HWND, idx: i32, new_window: bool) -> bool {
-    if sbie_dir().is_none() || !isolated(idx) {
-        return false;
-    }
-    if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
-        return false; // (not opened from the monitor just now: an app bringing up a window of its own)
-    }
-    let p = pid(h);
-    let Some(path) = process_path(p) else { return false };
-    let exe = file_name(&path);
-    if !chosen(&exe) || !box_of(p).is_empty() {
-        return false;
-    }
-    if new_window {
-        veil(h); // (shown already: from now on it isn't, wherever it goes)
-        unsafe {
-            let _ = ShowWindow(h, SW_HIDE);
-            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-        }
-    }
-    {
-        let mut started = OWN_COPY_STARTED.lock().unwrap();
-        let started = started.get_or_insert_with(HashMap::new);
-        let key = (idx, exe.clone());
-        if started.get(&key).is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
-            return true;
-        }
-        started.insert(key, Instant::now());
-    }
-    eprintln!("info=\"{}\" ({exe}) opened on in-game monitor {idx} as your desk's: its own copy opens there instead", title(h));
-    std::thread::spawn(move || {
-        if !box_launch(idx, &path, "") {
-            eprintln!("info=couldn't open in-game monitor {idx}'s own copy of {exe}");
-        }
-    });
-    true
-}
-
-/// A window just made — not shown yet — by your desk's copy of an app you picked, right after you
-/// used the Start, taskbar or desktop of the monitor you sit at: the start your desk's copy took
-/// for that monitor. It's made invisible before it's ever drawn (off every screen, see-through)
-/// and closed, and the monitor's own copy opens instead: nothing of it ever shows, anywhere ("we're
-/// compromising with little flashes going on now just for opening up the browser?"). Only an
-/// app's own main window (a title bar, no owner): never a tooltip, menu or hidden helper window.
-fn on_window_created(h: HWND) {
-    if !SEATED.load(Ordering::SeqCst) || ISO_APPS.lock().unwrap().is_empty() {
-        return;
-    }
-    if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
-        return;
-    }
-    unsafe {
-        if GetAncestor(h, GA_ROOT) != h || GetWindow(h, GW_OWNER).is_ok_and(|o| !o.0.is_null()) {
-            return;
-        }
-        let style = GetWindowLongW(h, GWL_STYLE) as u32;
-        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
-        if ex & WS_EX_TOOLWINDOW.0 != 0 || (style & WS_CAPTION.0 != WS_CAPTION.0 && ex & WS_EX_APPWINDOW.0 == 0) {
-            return;
-        }
-    }
-    let idx = SEAT_IDX.load(Ordering::SeqCst);
-    if !isolated(idx) {
-        return;
-    }
-    let p = pid(h);
-    let Some(path) = process_path(p) else { return };
-    if !chosen(&path) || !box_of(p).is_empty() {
-        return;
-    }
-    veil(h);
-    let _ = own_copy_instead(h, idx, true);
-}
-
-/// Windows made invisible to be closed (see veil): one still there when it shows is closed again.
-static VEILED: Mutex<Vec<(isize, Instant)>> = Mutex::new(Vec::new());
-
-/// Was that window veiled to be closed (in the last half minute)? Then it's asked to close again.
-fn close_veiled(h: HWND) -> bool {
-    let mut v = VEILED.lock().unwrap();
-    v.retain(|(_, t)| t.elapsed() < Duration::from_secs(30));
-    if !v.iter().any(|(x, _)| *x == h.0 as isize) {
-        return false;
-    }
-    unsafe {
-        let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-    }
-    true
-}
-
-/// Another program's window, made invisible wherever it's shown: see-through and off every screen.
-fn veil(h: HWND) {
-    {
-        let mut v = VEILED.lock().unwrap();
-        if !v.iter().any(|(x, _)| *x == h.0 as isize) {
-            v.push((h.0 as isize, Instant::now()));
-        }
-    }
-    unsafe {
-        let ex = GetWindowLongW(h, GWL_EXSTYLE);
-        let _ = SetWindowLongW(h, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as i32);
-        let _ = SetLayeredWindowAttributes(h, COLORREF(0), 0, LWA_ALPHA);
-        let _ = SetWindowPos(h, None, -32000, -32000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-}
-
 /// While you sit at a monitor, an app that was already open on your desk comes forward (you
 /// started it again from the monitor's Start menu or taskbar, and it's one that only ever runs
 /// once — Discord, Spotify, WhatsApp…): its window comes onto the monitor instead of pulling you
-/// to your desk. One you picked to have its own copy on every monitor gets that instead. It goes back to exactly where it was when the monitor turns off (or with Move →
+/// to your desk. It goes back to exactly where it was when the monitor turns off (or with Move →
 /// Your desk), and it's never closed for it — it was yours before.
 fn on_window_activated(h: HWND) {
     if !SEATED.load(Ordering::SeqCst) || h.0 as isize == GAME.load(Ordering::SeqCst) || h.0 as isize == SINK.load(Ordering::SeqCst) {
@@ -4602,7 +4479,7 @@ fn on_window_activated(h: HWND) {
             return;
         }
     }
-    if is_shell(h) || !seat_known().lock().unwrap().contains(&(h.0 as isize)) || close_veiled(h) {
+    if is_shell(h) || !seat_known().lock().unwrap().contains(&(h.0 as isize)) {
         return; // the shell itself, or a new window (that one goes there by itself)
     }
     let idx = SEAT_IDX.load(Ordering::SeqCst);
@@ -4636,9 +4513,6 @@ fn on_window_activated(h: HWND) {
     // an app that only runs once (Discord, WhatsApp, Calculator… any of them), already open on
     // your desk or another monitor, came forward there instead of opening here: it comes over to
     // this monitor — in the middle, at a modest size, in front — in one move
-    if own_copy_instead(h, idx, false) {
-        return;
-    }
     let elsewhere = if monitor_of_window(h).is_some() { "another in-game monitor" } else { "your desk" };
     eprintln!("info=\"{}\" only runs once and was open on {elsewhere}: bringing it over to in-game monitor {idx}", title(h));
     bring_over(h, idx);
@@ -4808,12 +4682,6 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     if h.0.is_null() {
         return;
     }
-    if event == 0x8000 {
-        if obj == 0 && child == 0 {
-            on_window_created(h);
-        }
-        return;
-    }
     if event == 0x8002 && obj == 0 && class_name(h) == "Shell_SecondaryTrayWnd" {
         // Windows put a monitor's taskbar up again: over a full-screen video it goes straight away
         tidy_taskbars();
@@ -4876,11 +4744,6 @@ fn ensure_placer() {
         let hook3 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_UNCLOAKED, EVENT_OBJECT_UNCLOAKED, None, Some(win_event), 0, 0,
             0 | 2);
         let _ = hook3;
-        // a window being made, before it's ever shown (see on_window_created)
-        const EVENT_OBJECT_CREATE: u32 = 0x8000;
-        let hook4 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, None, Some(win_event), 0, 0,
-            0 | 2);
-        let _ = hook4;
         if hook.is_invalid() || hook2.is_invalid() {
             eprintln!("error=can't watch for new windows");
         }
@@ -5791,6 +5654,13 @@ fn main() {
                         });
                     }
                 }
+            }
+            Some("installedapps") => {
+                // every app on this PC that can have its own copy on each monitor (the game's list)
+                for (name, exe) in installed_apps() {
+                    say(&format!("iapp\t{}\t{}", name.replace(['\t', '\n', '\r'], " "), exe.replace(['\t', '\n', '\r'], " ")));
+                }
+                say("iapps-end");
             }
             Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
             Some("installsbie") => {

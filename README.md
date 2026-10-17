@@ -159,19 +159,20 @@ one of your real screens instead, as before.
 - **Store apps** (Calculator, Settings…) open on the monitor you open them from, like any app.
 - **Each monitor's sound is its own — never mixed**: a monitor plays only what's on it, never
   another monitor's sound or your desk's. Windows only knows sound per program, so:
-  - **Own copies of apps** (U → the monitor → "Own copies of apps"; a one-time setup of the free
-    Sandboxie-Plus, which WindowsCraft downloads, checks and installs hidden — Windows asks for
-    permission once, and it never shows itself). You pick the apps — none until you do; "Add one
-    that's open" offers what's running, never games or launchers. Each monitor then runs its own
-    copy of each of them: its own program, so its own sound, never mixed with another monitor's or
-    your desk's, even with the same app open everywhere. Its sign-ins are its own and kept (the
-    first time it starts signed in like your desk). Opened on a monitor while it's open on your
-    desk, the monitor gets its own copy and your desk's stays as it is — your desk's copy is never
-    boxed. Everything you didn't pick runs normally, games, Steam and Store apps included, and so
-    does whatever a copy starts from them (a game from a browser). "Open another copy here" starts
-    one more copy of anything by hand. Turning the monitor off closes its copies; getting up,
-    closing the game or the game crashing leave nothing behind that would affect your desk's apps.
-    "Reset this monitor's copies" wipes their sign-ins and data.
+  - **Own copies of apps** (U → "Own copies of apps", a page of its own; a one-time setup of the
+    free Sandboxie-Plus, which WindowsCraft downloads, checks and installs hidden — Windows asks for
+    permission once, and it never shows itself). Every app on your PC is listed with its own switch
+    — all off until you switch them on; type to find one. An app switched on, started while you sit
+    at (or point at) an in-game monitor, starts straight in that monitor's own Sandboxie box: its
+    own program, so its own sound, never mixed with another monitor's or your desk's, even with the
+    same app open everywhere. Its sign-ins are its own and kept (the first time it starts signed
+    in like your desk). Everything not switched on runs normally, games, Steam and Store apps
+    included, and so does whatever a copy starts from them (a game from a browser). While you sit
+    at a monitor, a switched-on app that's also open on your desk starts what it opens meanwhile in
+    that monitor's box too. "Open another copy here" (on the monitor's page) starts one more copy
+    of anything by hand. Turning the monitor off closes its copies; getting up, closing the game or
+    the game crashing leave nothing behind that would affect your desk's apps. "Reset this
+    monitor's copies" wipes their sign-ins and data.
   - Without it, an app open in several places plays from wherever you last used it (never from two
     places).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.

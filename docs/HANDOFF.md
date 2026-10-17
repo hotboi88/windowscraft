@@ -115,7 +115,44 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
-## 0.15.34 (17 Oct): own copies per app (no flash: 0.15.35)
+## 0.15.36 (17 Oct): own copies as before, per app, on a page of its own
+
+Supersedes how 0.15.34/0.15.35 handled a picked app that's also open on the desk. 0.15.35 (the
+"veil") was never released. His words:
+- **"No. I want it to work EXACTLY how it did before with sandboxie. BUT not all apps are affected
+  automatically and it can be switched on or off for all detected apps on the computer in a whole
+  other settings page on the UI"**
+
+What changed:
+- **The rule, always.** While you sit at (or point at) a monitor, `Template_WCForce` holds
+  `ForceProcess=` for every app switched on. That includes one whose desk copy is running: it's
+  started from the monitor's taskbar straight into the box, with no hand-off to the desk copy.
+- **Removed:** `unboxed_chosen`/`UNBOXED`, `own_copy_instead`, `on_window_created`, `veil`/
+  `VEILED`, the `EVENT_OBJECT_CREATE` hook and `process_path`.
+- **Known and accepted:** while you sit at a monitor, a switched-on app's desk copy that starts a
+  new process gets it in the box too. That's how Chromium tabs and Electron pages start, and it's
+  how the Claude app went gray under the old all-apps rule. He was told before it was built; the
+  page says it in one line.
+- **The page.** U → side panel → "Own copies of apps", above Settings (`HubScreen.appsPage`).
+  - It lists every app on the PC from the helper's `installedapps`: AppsFolder (Start menu
+    "All apps") desktop programs with an .exe target, by name, without uninstallers or Store apps.
+    It also lists any switched-on app that isn't among them.
+  - Each app has its own On/Off switch: `ClientSettings.ownCopyApps`, empty by default.
+  - Typing filters the list. Backspace and Ctrl+V work; Esc clears the filter first. On this page
+    U types a letter instead of closing the menu.
+  - Games and launchers (`Sandbox.mustRunNormally`) get a one-line note, but can be switched on.
+  - Sandboxie setup moved here.
+  - A monitor's own page keeps a summary with a "Choose apps"/"Set up" button that opens the page,
+    plus "Running as this monitor's own", "Open another copy here" and reset.
+- **The probe:**
+  - 3b: a switched-on app also open on the desk, started at the monitor, lands in the box; the desk
+    copy stays.
+  - 10, with a real Edge: the desk Edge runs normally; seated, the monitor's taskbar clicked,
+    `msedge --new-window` with the same profile. It must land in the box on the monitor, no new
+    desk-Edge window may show anywhere (watched every 1 ms), and the desk Edge must stay.
+  - `installedapps` must list Edge, with every line "iapp/name/…exe".
+
+## 0.15.34 (17 Oct): own copies per app (no flash: 0.15.35; both superseded by 0.15.36)
 
 His words, after 0.15.33:
 - **"I want per monitor audio. no mixing with the same app"**

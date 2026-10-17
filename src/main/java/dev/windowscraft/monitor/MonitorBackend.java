@@ -109,6 +109,8 @@ public interface MonitorBackend {
     default void isolationExceptions(List<String> programs, List<String> folders) {}
     /** The apps (their programs) that have their own copy on every monitor: nothing else goes in a box by itself. */
     default void ownCopyApps(List<String> programs) {}
+    /** The apps on this PC that can be switched on for that, as the Start menu lists them: {name, program}. */
+    default CompletableFuture<List<String[]>> installedApps() { return CompletableFuture.completedFuture(List.of()); }
     /** "ok", "missing" or "stopped". */
     default CompletableFuture<String> sandboxStatus() { return CompletableFuture.completedFuture("missing"); }
     /** Installs Sandboxie-Plus quietly (one permission prompt). Completes with the status after. */

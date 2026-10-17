@@ -2158,9 +2158,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         format!("{:?} {:?} · A's box {ina:?}", wc.map(pid), wx.map(pid)));
     finish(wc);
     finish(wx);
-    // 3b. one you picked, open outside a box (your desk's): the rule leaves it out — Sandboxie would
-    //     also box the new processes your desk's copy starts meanwhile, and break it (the Claude
-    //     app's window went gray that way). Opened on the monitor, it's the monitor's own copy.
+    // 3b. one switched on that's open on your desk too: started at the monitor, it's the monitor's
+    //     own copy, straight into its box, as own copies always worked — your desk's stays as it was
     let _ = h.call("unseat", "unseated", 8000);
     // (up from the monitor: the rule goes a moment later — what starts before that is still the
     //  monitor's)
@@ -2170,19 +2169,14 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let mut rules = ini_forced();
     let _ = wait_for(8000, || {
         rules = ini_forced();
-        names(&rules) == vec!["wcapp_a.exe".to_string()]
+        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
     });
-    rep.check("one you picked that's open on your desk: the rule leaves it out (its desk copy is never boxed)",
-        desk_b.is_some() && names(&rules) == vec!["wcapp_a.exe".to_string()] && !in_box(&h, ma.idx).contains(&desk_b.map_or(0, pid)),
-        format!("{s:?} · desk copy {:?} · {rules:?}", desk_b.map(pid)));
-    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
-    let r = h.call(&format!("launch\t{}\t{}\t\twcapp_b.exe", ma.idx, app("wcapp_b").display()), "launched", 20000);
-    let copy_b = find_new(&before, 20000, |w| title(*w).contains("wcapp_b") && class_name(*w) != "ConsoleWindowClass");
+    let copy_b = start(&app("wcapp_b"));
     let on_copy = wait_for(3000, || on(copy_b, &ra));
     let ina = in_box(&h, ma.idx);
-    rep.check("…and opened on the monitor, it's the monitor's own copy, in its box, on it — your desk's stays as it was",
-        copy_b.is_some_and(|w| ina.contains(&pid(w))) && on_copy && desk_b.is_some_and(|w| !ina.contains(&pid(w)) && !on(Some(w), &ra)),
-        format!("{r:?} · copy {:?} at {} · desk copy {:?} · A's box {ina:?}", copy_b.map(pid), copy_b.map(|w| fmt(&rect_of(w))).unwrap_or_default(), desk_b.map(pid)));
+    rep.check("one switched on that's open on your desk too: started at the monitor, it's the monitor's own copy, in its box, on it — your desk's stays as it was",
+        copy_b.is_some_and(|w| ina.contains(&pid(w))) && on_copy && desk_b.is_some_and(|w| !ina.contains(&pid(w)) && !on(Some(w), &ra) && unsafe { IsWindow(Some(w)).as_bool() }),
+        format!("{s:?} · copy {:?} at {} · desk copy {:?} · A's box {ina:?} · {rules:?}", copy_b.map(pid), copy_b.map(|w| fmt(&rect_of(w))).unwrap_or_default(), desk_b.map(pid)));
     finish(copy_b);
     finish(desk_b);
     // 4. over to B: B's box, on B — and A's app stays A's
@@ -2335,10 +2329,10 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         }
         h5.stop();
     }
-    // 10. a real browser you picked, open on your desk, opened from the monitor's own taskbar: the
-    //     start your desk's copy takes is made invisible before it's ever drawn and closed —
-    //     nothing of it on any screen, not for a moment ("we're compromising with little flashes
-    //     going on now just for opening up the browser?") — and the monitor's own copy opens there
+    // 10. a real browser switched on, open on your desk, started from the monitor's own taskbar: it
+    //     starts straight in the monitor's box, its own copy, on it — your desk's copy never gets
+    //     that start (no window of it shows anywhere, not for a moment) and stays as it was. And
+    //     the apps the game lists to switch on: this PC's, Edge among them.
     let edge = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
         .into_iter().find(|p| std::path::Path::new(p).exists());
     match (edge, Helper::start(&vexe)) {
@@ -2349,6 +2343,11 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         (Some(_), Err(e)) => rep.check("helper starts again", false, e),
         (Some(e), Ok(h6)) => {
             let _ = h6.call("status", "status", 15000);
+            let listed = h6.call("installedapps", "iapps-end", 30000).unwrap_or_default();
+            let apps: Vec<&String> = listed.iter().filter(|l| l.starts_with("iapp\t")).collect();
+            rep.check("the apps you can switch on are this PC's (as its Start menu lists them), Edge among them",
+                apps.iter().any(|l| l.to_lowercase().ends_with("\\msedge.exe")) && apps.iter().all(|l| l.split('\t').count() == 3 && l.to_lowercase().ends_with(".exe")),
+                format!("{} apps: {:?}", apps.len(), apps.iter().take(6).map(|l| l.split('\t').nth(1).unwrap_or("")).collect::<Vec<_>>()));
             if let Ok(m) = add(&h6, 1920, 1080) {
                 h6.send(&format!("isoapps\t{e}"));
                 h6.send(&format!("profilekey {} {ka}", m.idx));
@@ -2410,9 +2409,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
                         std::thread::sleep(Duration::from_millis(1));
                     }
                 });
-                // the start from the monitor's taskbar: Windows runs the browser like this, and it
-                // hands the start to the copy that's open (your desk's)
-                let log0 = HELPER_LOG.lock().unwrap().len();
+                // the start from the monitor's taskbar, as Windows runs it (the same program, the
+                // same profile as your desk's)
                 let before2: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
                 let _ = Command::new(e).args(args("--new-window")).spawn();
                 let copy = find_new(&before2, 25000, |w| exe_of(pid(*w)) == "msedge.exe" && pid(*w) != desk_pid && on(Some(*w), &rm));
@@ -2420,13 +2418,12 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
                 watching.store(false, Ordering::SeqCst);
                 let _ = th.join();
                 let boxed = copy.is_some_and(|w| in_box(&h6, m.idx).contains(&pid(w)));
-                let took = HELPER_LOG.lock().unwrap()[log0..].iter().any(|l| l.contains("as your desk's: its own copy opens there instead"));
                 let (looks, what) = seen.lock().unwrap().clone();
                 let desk_ok = desk.is_some_and(|w| unsafe { IsWindow(Some(w)).as_bool() } && pid(w) == desk_pid && !in_box(&h6, m.idx).contains(&desk_pid));
-                rep.check("a browser you picked, opened from the monitor's taskbar while it's open on your desk: the monitor's own copy opens, in its box, on it",
-                    boxed && took, format!("{sr:?} · taskbar {:?} · copy {:?} at {} · taken {took}", tray.map(|t| t.0 as isize), copy.map(pid), copy.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
-                rep.check("…and the window your desk's copy made for it never showed on any screen, not for a moment",
-                    took && looks == 0, format!("seen on a screen {looks}× {what:?}"));
+                rep.check("a browser switched on, open on your desk, started from the monitor's taskbar: straight in the monitor's box, its own copy, on it",
+                    boxed, format!("{sr:?} · taskbar {:?} · copy {:?} at {}", tray.map(|t| t.0 as isize), copy.map(pid), copy.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
+                rep.check("…your desk's copy never got that start: no window of it showed anywhere, not for a moment",
+                    copy.is_some() && looks == 0, format!("seen on a screen {looks}× {what:?}"));
                 rep.check("…and your desk's copy is still there, as it was", desk_ok, format!("desk Edge {desk_pid}"));
                 if let Some(w) = copy {
                     let _ = Command::new("taskkill").args(["/PID", &pid(w).to_string(), "/T", "/F"]).output();

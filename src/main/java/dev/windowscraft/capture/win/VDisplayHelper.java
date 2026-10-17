@@ -292,6 +292,17 @@ public final class VDisplayHelper implements MonitorBackend {
     }
     @Override public CompletableFuture<Void> boxReset(Mon m) { return call("boxreset " + m.index(), "boxreset").thenApply(l -> null); }
     @Override public CompletableFuture<List<Win>> boxApps(Mon m) { return call("boxapps " + m.index(), "windows-end").thenApply(VDisplayHelper::wins); }
+    @Override
+    public CompletableFuture<List<String[]>> installedApps() {
+        return call("installedapps", "iapps-end").thenApply(l -> {
+            List<String[]> out = new ArrayList<>();
+            for (String s : l) {
+                String[] p = s.split("\t", 3);
+                if (p.length == 3 && p[0].equals("iapp")) out.add(new String[]{p[1], p[2]});
+            }
+            return out;
+        });
+    }
 
     @Override
     public void point(Mon m, long gameWindow, double u, double v) {
