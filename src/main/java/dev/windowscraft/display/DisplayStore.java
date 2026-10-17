@@ -135,7 +135,8 @@ final class DisplayStore {
             writePeople(o, "picked", d.picked);
             writePeople(o, "blocked", d.blocked);
             if (d.name != null && !d.name.isBlank()) o.addProperty("name", d.name);
-            if (!d.ownCopies) o.addProperty("ownCopies", false);
+            // (saved only when on: before 0.15.32 it was on unless saved off, and every monitor goes back to off)
+            if (d.ownCopies) o.addProperty("ownCopies", true);
             if (!d.followDesk) o.addProperty("followDesk", false);
             if (d.filesHere) o.addProperty("filesHere", true);
             if (!d.overrides.isEmpty()) {

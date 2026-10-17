@@ -115,6 +115,38 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.32 (16 Oct): apps run normally again (own copies off unless turned on)
+
+- **"i can't open minecraft java or bedrock, roblox doesn't open at all anymore, steam doesn't open
+  it just breaks now"**, then **"claude desktop app is just gray blank"**. His log and Sandboxie
+  show what happened. The force rule, on while he sits at a monitor, put these into the box:
+  - Steam: asked to sign in again, then "Steam Service Error".
+  - The Epic launcher and Fortnite: Easy Anti-Cheat "Launch Error (30001)".
+  - Roblox, started from a boxed Brave.
+  - Store apps, everything in `C:\Program Files\WindowsApps`: the Minecraft Launcher, Bedrock, Sea
+    of Thieves and Gaming Services ("msgamelaunch://notifyLaunch…" errors).
+- Worse, Sandboxie's force rule applies to every program that starts while it's on, whoever starts
+  it:
+  - A process the Claude app (running on his desk) started at 18:44:57 was in the monitor's box
+    (`SbieApi_QueryProcess`). The app's page process failed to start (Electron
+    `render-process-gone`, `launch-failed`, exit code 18 = `SBOX_ERROR_CREATE_PROCESS`), so the
+    window stayed gray.
+  - Our own tools too: a Python run from Claude Code wrote its edits into a monitor's box.
+- A force rule can't be kept to one monitor's apps, so it breaks "WindowsCraft must only affect
+  its own monitors".
+- His call: **"lets go back to normal for apps. the only reason for sandboxing AT ALL, is just so
+  that we can get multiple instances of the same app to not mix sound with each other across
+  monitors. if there's a way to get it done without sandboxing i prefer it actually"**.
+- `Display.ownCopies` is now off by default, and every monitor goes back to off. (Before, it was
+  saved only when off; now it's saved only when on.) The toggle stays, and its text says what
+  turning it on does.
+- Unchanged: each app's sound plays only from the monitor it has a window on (`SoundHome`). With
+  windows on several monitors, it plays from the one where it was last used.
+- Two ways to get a second copy with its own sound:
+  - "Own Brave": a separate browser with its own profile, no Sandboxie.
+  - "Open another copy here": that one app in the monitor's box, on purpose. Nothing else is
+    boxed.
+
 ## 0.15.31 (16 Oct): your desk's windows stay yours when monitors come and go
 
 - **"my apps all disappear from my main desktop sometimes when i close the game"**, then **"now

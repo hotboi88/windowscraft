@@ -1,4 +1,7 @@
-WindowsCraft 0.15.31 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.32 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.32: apps run normally on in-game monitors again (games, Steam, Roblox, Minecraft,
+Store apps); a monitor's own copies are off unless you turn them on.
 
 New in 0.15.31: your desk's windows stay on your desk when in-game monitors come and go, and
 closing the game never closes or hides them.

@@ -698,14 +698,15 @@ public final class HubScreen extends Screen {
             int bx = right - 3;
             bx -= button(g, mx, my, "Set up", bx, y + 2, 14, UiKit.ACCENT, UiKit.ACCENT_HOVER, () -> {
                 copiesNote = null;
-                dev.windowscraft.monitor.Sandbox.install().thenAccept(s -> copiesNote = s.equals("ok") ? "Ready: apps you start here are now this monitor's own copies."
+                dev.windowscraft.monitor.Sandbox.install().thenAccept(s -> copiesNote = s.equals("ok") ? "Ready: open another copy of an app here, or turn its own copies on below."
                         : s.equals("cancelled") ? "Not set up (Windows' permission was declined)." : "Couldn't set it up: " + s);
             }) + 4;
             UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, "Give this monitor its own copies of apps", bx - 4 - (x + 6)), x + 6, y + 5, UiKit.TEXT);
             y += ROW;
             if (copiesNote != null) y = wrap(g, copiesNote, x, y + 2, w, UiKit.TEXT_2) + 2;
-            return wrap(g, "Each app you start here runs as this monitor's own copy: its own sound (never mixed with your desk or another monitor), "
-                    + "its own logins and data (kept), and apps that only run once can run here too. One-time setup of the free Sandboxie-Plus "
+            return wrap(g, "A second copy of an app that's already open (a second Discord or browser) for this monitor: its own sound, "
+                    + "never mixed with your desk or another monitor. Without it, apps here run normally and each one's sound plays from the "
+                    + "monitor it's on. One-time setup of the free Sandboxie-Plus "
                     + "(Windows asks for permission once; it never shows itself)." + (st.equals("stopped") ? " It's installed but not running: restart your PC." : ""),
                     x, y + 2, w, UiKit.TEXT_MUTED) + 2;
         }
@@ -731,8 +732,9 @@ public final class HubScreen extends Screen {
             g.fill(x, top, x + 2, y - 4, UiKit.ACCENT); // (marks the question)
         }
         y = toggleRow(g, mx, my, x, y, w, "Apps you start here are its own copies",
-                d.ownCopies ? "Its own sound, never mixed with your desk or another monitor." + (group.size() > 1 ? " One box for it and the " + (group.size() - 1) + " joined with it." : "")
-                        : "Off: apps here are the same ones as on your desk (their sound plays where you last used them).",
+                d.ownCopies ? "Its own sound, never mixed with your desk or another monitor. While you sit here, everything that starts goes in its box, "
+                        + "your desk's too: games, their stores and Store apps don't run there." + (group.size() > 1 ? " One box for it and the " + (group.size() - 1) + " joined with it." : "")
+                        : "Off: apps run normally, the same ones as on your desk; each one's sound plays from the monitor it's on (on several, where you last used it).",
                 d.ownCopies, on -> changeBox(d, o -> o.ownCopies = on));
         if (d.ownCopies) {
             // quick picks, then the two choices they're made of

@@ -34,10 +34,15 @@ public final class Display {
     public final java.util.Map<UUID, String> picked = new java.util.LinkedHashMap<>(), blocked = new java.util.LinkedHashMap<>();
     /** The size you chose for its in-game monitor (0: the usual 1920 × 1080). */
     public int monitorW, monitorH;
-    /** In-game monitor: apps started at it run as its own copies (its own Sandboxie box). */
     /** Its name, as you named it (null: the usual "In-game monitor 2", "Wall 3"). Remembered with its settings. */
     public volatile String name;
-    public boolean ownCopies = true;
+    /**
+     * In-game monitor: apps started while you sit at it run as its own copies (its own Sandboxie
+     * box). Off unless you turn it on: Sandboxie's rule boxes every program that starts meanwhile,
+     * your desk's too, and games, their stores and Store apps don't run in a box ("lets go back to
+     * normal for apps").
+     */
+    public boolean ownCopies;
     /** With own copies: its apps start from your desk's sign-ins each time (its box emptied once they've all closed). */
     public boolean followDesk = true;
     /** With own copies: files saved there stay on this monitor (in its box) instead of going to your own folders. */
