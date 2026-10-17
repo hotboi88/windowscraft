@@ -607,13 +607,8 @@ public final class HubScreen extends Screen {
             UiKit.round(g, x, y, w, ROW - 2, 3, UiKit.SURFACE);
             int bx = right - 3;
             bx -= button(g, mx, my, "Close", bx, y + 2, 14, UiKit.SEG_ACTIVE, UiKit.DANGER_HOVER, () -> { InGameMonitors.close(win.hwnd()); moved(); }) + 4;
-            // the same browser is open somewhere else too: one program, one sound — offer a copy of its own
-            String app = sharedElsewhere(win) ? InGameMonitors.ownCopyName(win.pid()) : null;
-            if (app != null) {
-                sharedApp = app;
-                bx -= button(g, mx, my, "Own " + app, bx, y + 2, 14, UiKit.ACCENT, UiKit.ACCENT_HOVER,
-                        () -> InGameMonitors.openOwnCopy(d, win.pid()).thenAccept(ok -> { windowsNote = ok ? "Opening a separate " + app + " here…" : "Couldn't open a separate " + app + " here"; moved(); })) + 4;
-            }
+            // the same browser is open somewhere else too: one program, one sound (said below)
+            if (sharedElsewhere(win) && InGameMonitors.appName(win.pid()) != null) sharedApp = InGameMonitors.appName(win.pid());
             boolean open = expanded == win.hwnd();
             bx -= button(g, mx, my, open ? "Move ▴" : "Move ▾", bx, y + 2, 14, open ? UiKit.SURFACE_HOVER : UiKit.SEG_ACTIVE, UiKit.SURFACE_HOVER,
                     () -> expanded = expanded == win.hwnd() ? 0 : win.hwnd()) + 4;
@@ -640,8 +635,7 @@ public final class HubScreen extends Screen {
             }
         }
         if (sharedApp != null) {
-            y = wrap(g, sharedApp + " is also open somewhere else, and Windows gives one program one sound, so it plays where you last used it. "
-                    + "\"Own " + sharedApp + "\" opens a separate " + sharedApp + " just for this monitor (with its own sign-ins), with its own sound.",
+            y = wrap(g, sharedApp + " is also open somewhere else, and Windows gives one program one sound, so it plays where you last used it.",
                     x, y + 2, w, UiKit.TEXT_MUTED) + 2;
         }
         y = renderOwnCopies(g, mx, my, x, y, w);

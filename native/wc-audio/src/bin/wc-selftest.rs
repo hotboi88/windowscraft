@@ -537,6 +537,70 @@ fn now_rect(h: &Helper, idx: i32) -> Option<RECT> {
     rects(h).into_iter().find(|m| m.idx == idx).map(|m| m.r)
 }
 
+/// The display name of that in-game monitor ("\\.\DISPLAY12").
+fn device_of(h: &Helper, idx: i32) -> Option<String> {
+    let l = h.call("rects", "rects-end", 8000).ok()?;
+    l.iter().filter(|x| x.starts_with("rect ")).find_map(|x| {
+        let p: Vec<&str> = x.split(' ').collect();
+        (p.get(1)?.parse::<i32>().ok()? == idx).then(|| p.get(2).map(|s| s.to_string()))?
+    })
+}
+
+/// That monitor's own mode at w×h, if it has one.
+fn mode_of(device: &str, w: u32, h: u32) -> Option<DEVMODEW> {
+    let name: Vec<u16> = device.encode_utf16().chain(Some(0)).collect();
+    let mut i = 0;
+    loop {
+        let mut m = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+        if !unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_DISPLAY_SETTINGS_MODE(i), &mut m) }.as_bool() {
+            return None;
+        }
+        i += 1;
+        if m.dmPelsWidth == w && m.dmPelsHeight == h {
+            return Some(m);
+        }
+    }
+}
+
+/// A size it offers other than w×h.
+fn another_size(device: &str, w: u32, h: u32) -> Option<(u32, u32)> {
+    [(1280, 720), (1600, 900), (1366, 768), (1024, 768), (2560, 1440)].into_iter().find(|&(a, b)| (a, b) != (w, h) && mode_of(device, a, b).is_some())
+}
+
+/// Does to a monitor what Windows does when a monitor comes or goes and it puts back the layout
+/// it remembers: another size, or switched off ((0, 0)).
+fn windows_sets(device: &str, w: u32, h: u32) -> bool {
+    let name: Vec<u16> = device.encode_utf16().chain(Some(0)).collect();
+    let dm = if w > 0 {
+        let Some(mut m) = mode_of(device, w, h) else { return false };
+        m.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        m
+    } else {
+        let mut off = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+        off.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_POSITION; // (all zero: off the desktop)
+        off
+    };
+    unsafe {
+        let r = ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
+        let a = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
+        r == DISP_CHANGE_SUCCESSFUL && a == DISP_CHANGE_SUCCESSFUL
+    }
+}
+
+/// No two of them on top of each other.
+fn apart(ms: &[Mon]) -> bool {
+    ms.iter().enumerate().all(|(i, a)| ms.iter().skip(i + 1).all(|b| !(a.r.left < b.r.right && b.r.left < a.r.right && a.r.top < b.r.bottom && b.r.top < a.r.bottom)))
+}
+
+/// Each touches another screen (an edge or a corner): not one left floating off on its own.
+fn touching(ms: &[Mon]) -> bool {
+    let all = monitors();
+    ms.iter().all(|m| all.iter().any(|(_, o)| {
+        (o.left, o.top, o.right, o.bottom) != (m.r.left, m.r.top, m.r.right, m.r.bottom)
+            && m.r.left <= o.right && o.left <= m.r.right && m.r.top <= o.bottom && o.top <= m.r.bottom
+    }))
+}
+
 // ---- the report --------------------------------------------------------------------------------
 
 struct Report {
@@ -1670,6 +1734,60 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             if let Some(&(n, done, settled, changes)) = seen.first() {
                 rep.check("leaving with several monitors on: all of them go, with no more than one change to your screens each", n == 3 && done == n && settled && changes as usize <= n,
                     format!("{changes} layout changes for {n} monitors · {done}/{n} removed · all gone {settled}"));
+            }
+            // ---- 17. a monitor coming or going leaves the others as they were. Windows answers
+            //      each with the layout it remembers for the monitors there are then — another
+            //      in-game monitor came back 4096×2160, or switched off — and putting them right
+            //      one at a time cascaded until one was left ("i add a monitor n it shut down like
+            //      all the other monitors"). Done to them here by hand, as Windows does it: each is
+            //      put back — its size, switched on — none goes, none lands on another.
+            {
+                let t = Instant::now();
+                let on: Vec<Mon> = (0..2).filter_map(|_| add(&h2, 1920, 1080).ok()).collect();
+                let devs: Vec<String> = on.iter().filter_map(|m| device_of(&h2, m.idx)).collect();
+                let other = devs.first().and_then(|d| another_size(d, 1920, 1080));
+                let size = |m: &Mon| (m.r.right - m.r.left, m.r.bottom - m.r.top);
+                match other {
+                    Some((ow, oh)) if on.len() == 2 && devs.len() == 2 => {
+                        let did = windows_sets(&devs[0], ow, oh);
+                        sleep(800);
+                        let c = add(&h2, 1920, 1080);
+                        sleep(1500);
+                        let all = rects(&h2);
+                        let a_now = all.iter().find(|m| m.idx == on[0].idx).map(size);
+                        let gone = h2.events_since(t).iter().filter(|e| e.starts_with("gone")).count();
+                        rep.check("a monitor coming on: another that Windows gave another size is back at its own; none goes, none lands on another",
+                            did && c.is_ok() && a_now == Some((1920, 1080)) && all.len() == 3 && gone == 0 && apart(&all),
+                            format!("Windows made it {ow}×{oh} ({did}) · now {a_now:?} · {} on · gone {gone} · the new one {c:?}", all.len()));
+                        // going: Windows switches another off meanwhile
+                        let t2 = Instant::now();
+                        let off = windows_sets(&devs[1], 0, 0);
+                        if let Ok(c) = &c {
+                            let _ = h2.call(&format!("remove {}", c.idx), "removed", 30000);
+                        }
+                        let back = wait_for(8000, || rects(&h2).iter().any(|m| m.idx == on[1].idx));
+                        sleep(1000);
+                        let all = rects(&h2);
+                        let gone = h2.events_since(t2).iter().filter(|e| e.starts_with("gone")).count();
+                        rep.check("…a monitor going: one Windows switched off meanwhile is on again, at its size; none goes",
+                            off && back && all.len() == 2 && gone == 0 && all.iter().all(|m| size(m) == (1920, 1080)) && apart(&all),
+                            format!("switched off {off} · back {back} · {:?} · gone {gone}", all.iter().map(|m| (m.idx, size(m))).collect::<Vec<_>>()));
+                        // a new size for one: all laid out again — none left floating off on its own
+                        // (then Windows shuffles them all), none gone
+                        let t3 = Instant::now();
+                        let r = h2.call(&format!("setmode {} {ow} {oh} 60", on[0].idx), "modeset", 20000);
+                        sleep(1000);
+                        let all = rects(&h2);
+                        let gone = h2.events_since(t3).iter().filter(|e| e.starts_with("gone")).count();
+                        rep.check("…a new size for one: they all stay, each touching another screen, none on top of another",
+                            r.as_ref().is_ok_and(|l| l.last().is_some_and(|x| x.starts_with("modeset ok"))) && all.len() == 2 && gone == 0 && apart(&all) && touching(&all),
+                            format!("{r:?} · {:?} · gone {gone}", all.iter().map(|m| fmt(&m.r)).collect::<Vec<_>>()));
+                    }
+                    _ => rep.skip("a monitor coming on leaves the others as they were", format!("{} monitors on, devices {devs:?}, another size {other:?}", on.len())),
+                }
+                for m in &on {
+                    let _ = h2.call(&format!("remove {}", m.idx), "removed", 30000);
+                }
             }
             h2.stop();
         }

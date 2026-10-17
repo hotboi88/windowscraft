@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 /**
  * Matches the in-game monitor helper's answers to the questions asked. It answers in the order
  * asked — except a few slow ones it answers from their own thread, whenever they're done (opening
- * another copy, resetting a monitor's apps, its own browser): one line each, in between the
+ * another copy, resetting a monitor's apps): one line each, in between the
  * others' answers. Matched in order, such a line ended the wrong question and left the next one
  * waiting for an answer that had already gone: 20 s later the helper was restarted, every
  * in-game monitor going dark with it.
@@ -22,7 +22,7 @@ import java.util.function.Consumer;
  */
 final class HelperAnswers {
     /** First words of the answers that come whenever they're done. */
-    static final Set<String> WHENEVER = Set.of("boxlaunched", "boxreset", "ownbrowser");
+    static final Set<String> WHENEVER = Set.of("boxlaunched", "boxreset");
 
     private static final class Pending {
         final String what;

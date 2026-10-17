@@ -115,6 +115,76 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.33 (16 Oct): monitors don't affect each other
+
+His words, the same evening:
+- **"i just added a monitor n it shut down like all the other monitors except 1 and then said on top
+  of that that it failed to start the monitor i was trying to start and that 'screen share failed'"**
+- **"overtime i drop frames"**
+- **"i add or remove a monitor and i literally hear all the audio from the other monitors instantly
+  go to my screen"**
+- **"it keeps starting up with a window on it from probably another monitor … i dont want windows
+  to ever go onto new screens … i dont want them effecting each other"**
+- **"ONCE A MONITOR IS TURNED OFF ALL ITS APPS SHOULD BE ELIMINATED IMMEDIATELY"**
+- **"i dont want the 'own brave' thing back again"**
+
+What his log showed (21:28:49, a fourth monitor added):
+- Each monitor coming or going makes Windows put back the layout it remembers for that exact set
+  of monitors, or its own for a set it hasn't seen. Two other in-game monitors came back
+  4096×2160 and one 1680×1050.
+- The game put sizes back one at a time (`keepOwnSize`). The helper's `set_mode` moved "the ones
+  to its right" along a row, but in-game monitors touch only at corners (`arrange` places each
+  group off the previous one's bottom-right). After a resize the next monitor was left floating,
+  and Windows rearranged everything its own way.
+- Monitor 0 dropped out of Windows' list. `refreshRects` turned it off after two misses less than
+  a second apart. Removing it changed the set again, and so on, until one monitor was left. Every
+  "moved" also stopped and started its share (`restartShares`). That closed the app-sound capture
+  (sound on his speakers until the restart), ended the stream ("screen share failed"), and
+  restarted the captures mid-shuffle.
+- At 17:24 the same shuffle made Windows Graphics Capture and GPU sharing of "In-game monitor 3"
+  fail (`0x80070057`). Both were given up for good (`FallbackProducer.usingGdi`,
+  `Share.gpuFailed`), so the wall ran GDI capture for four hours at ~35 pictures/s, 26.6 ms each:
+  a processor core busy the whole time.
+
+What changed:
+- **Helper.**
+  - Each monitor remembers the size it's meant to be (`Added.want`).
+  - `arrange` lays every monitor out at that size and in one change puts back what Windows
+    changed: another size, or switched off while still listed.
+  - `settle` runs after every add and every remove, once the screens have been still for 700 ms.
+  - `set_mode` sets `want` and lays everything out again, instead of shifting a row.
+  - The watcher switches on again a monitor that's listed but off the desktop for about 3 s
+    (internal `relayout`).
+  - A monitor really gone (`gone`) first gets an internal `lost`: its box closes, its own apps
+    close wherever Windows put their windows (`close_own`: by `owned`/`placed`/box, not by area),
+    and the driver lets it go. The game then turns its wall on again, empty.
+  - `clear_monitor` on a monitor already off the desktop closes its apps the same way (before, it
+    returned early and closed nothing).
+  - A new monitor starts empty: `forget_monitor` clears `owned`/`placed`/`watch`/`LAUNCHES` for its
+    number. Windows' "remember window locations" put an old monitor's windows back on a new one
+    with the same number, and the stale entries kept them there.
+  - `keep_windows_put` exempts a window brought from the desk only if it was on the desk just
+    before. Before, a window brought to A long ago that Windows moved onto the new monitor stayed
+    there.
+- **Game.**
+  - A moved monitor's share follows it (`DisplayManager.retarget` → `Share`/`CaptureSession`/
+    `StreamPublisher.retarget`): the sound capture and the stream carry on.
+  - `restartShares` is gone.
+  - A monitor missing from the list is turned off only after 15 s (`MISSING_GRACE_NANOS`); the
+    helper's `gone` is the real signal.
+- **Captures.** These are retried instead of given up for good (`Backoff`):
+  - GPU sharing: 5 s, then doubling to at most 5 min.
+  - Graphics Capture under GDI: the same.
+  - The stream's GPU capture: at the next start after 2 min, at most every 30 min.
+  - A good minute starts the waits over.
+- **"Own Brave" removed**: the helper command, the backend call and the button. The "one program,
+  one sound" note stays.
+- **Self-test 17.**
+  - Windows' doing is reproduced by hand: one monitor at another size, then another switched off.
+  - Each time, a monitor comes or goes; then a new size is set for one.
+  - Checked: the sizes are back, it's switched on again, none goes, none overlaps, each touches
+    another screen.
+
 ## 0.15.32 (16 Oct): apps run normally again (own copies off unless turned on)
 
 - **"i can't open minecraft java or bedrock, roblox doesn't open at all anymore, steam doesn't open
@@ -143,7 +213,8 @@ full FFmpeg restart on quality change; no guest relative mouse.
 - Unchanged: each app's sound plays only from the monitor it has a window on (`SoundHome`). With
   windows on several monitors, it plays from the one where it was last used.
 - Two ways to get a second copy with its own sound:
-  - "Own Brave": a separate browser with its own profile, no Sandboxie.
+  - "Own Brave": a separate browser with its own profile, no Sandboxie (removed in 0.15.33, at his
+    word).
   - "Open another copy here": that one app in the monitor's box, on purpose. Nothing else is
     boxed.
 

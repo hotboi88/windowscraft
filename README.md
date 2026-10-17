@@ -171,8 +171,7 @@ one of your real screens instead, as before.
     turning it off, closing the game or the game crashing leave nothing behind that would affect
     your desk's apps. "Reset this monitor's apps" wipes its logins and data.
   - Without it, an app open in several places plays from wherever you last used it (never from two
-    places), and a browser open both on your desk and on a monitor can get a separate one there
-    ("Own Brave" in the monitor manager — its own profile, so you sign in there once).
+    places).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.
   (Task Manager normally runs as administrator, which Windows doesn't let other programs move;
   while in-game monitors are on it starts with your normal rights instead — no permission
@@ -240,9 +239,11 @@ one of your real screens instead, as before.
   the game removes the monitor, and everything that was on it goes back to your desk. If the game
   crashes, the driver removes the monitors within a second by itself.
 - **Sound**: each app is heard from the monitor it's on. Windows gives a program one sound, not
-  each window: the same browser on two monitors plays from the one you used it on last. For a
-  browser of its own on a monitor (its own sound, its own sign-ins, closed with the monitor), use
-  **Own Brave / Own Chrome / Own Edge…** next to it on the monitor's Windows tab.
+  each window: the same browser on two monitors plays from the one you used it on last.
+- **Monitors don't affect each other**: turning one on or off leaves the others as they were — their
+  size, their windows, their sound, the stream to others (Windows rearranges its screens each time;
+  what it changes on the others is put back). A new monitor starts empty. Turning one off closes
+  its apps; one Windows drops by itself is turned on again, empty, its apps closed with it.
 - **Setup, once**: the first U offers to install the free, signed *Parsec Virtual Display Driver*
   (downloaded from Parsec, checked byte for byte); Windows asks for permission. Settings shows its
   state and has **Remove driver**. Adding or removing a monitor may make your screens blink for a

@@ -91,6 +91,16 @@ fn from_wide(w: &[u16]) -> String {
     String::from_utf16_lossy(&w[..n])
 }
 
+/// Commands the helper gives itself (its watcher: a monitor gone, one switched off), run in turn
+/// with the game's — never at the same time as one.
+static INTERNAL: OnceLock<Mutex<std::sync::mpsc::Sender<String>>> = OnceLock::new();
+
+fn internal_command(c: &str) {
+    if let Some(tx) = INTERNAL.get() {
+        let _ = tx.lock().unwrap().send(c.to_string());
+    }
+}
+
 /// Answers and events share stdout; one line at a time.
 fn say(line: &str) {
     let out = io::stdout();
@@ -491,7 +501,61 @@ fn sizes(device: &str) -> Vec<(u32, u32, u32)> {
 /// command): joined ones edge to edge, each group of them off on its own — touching nothing else
 /// but at a corner, so a window only ever drags across monitors that are joined in the game.
 static LAST_SPEC: Mutex<String> = Mutex::new(String::new());
-static REFUSED: Mutex<Option<(String, Vec<Option<(i32, i32)>>)>> = Mutex::new(None);
+static REFUSED: Mutex<Option<(String, Vec<Option<(i32, i32, i32, i32)>>)>> = Mutex::new(None);
+
+/// Every in-game monitor laid out again as last asked (one the layout doesn't know yet on its
+/// own) — each at its own size, switched on.
+fn relayout(added: &AddedMap) -> Result<(), String> {
+    let last = LAST_SPEC.lock().unwrap().clone();
+    let ids: Vec<i32> = added.lock().unwrap().keys().copied().collect();
+    let mut spec: Vec<String> = last.split_whitespace()
+        .filter(|e| e.split(':').next().and_then(|x| x.parse::<i32>().ok()).is_some_and(|i| ids.contains(&i)))
+        .map(|e| e.to_string()).collect();
+    for i in ids {
+        if !spec.iter().any(|e| e.starts_with(&format!("{i}:"))) {
+            spec.push(format!("{i}:-1:-"));
+        }
+    }
+    arrange(added, &spec.join(" "))
+}
+
+/// A monitor came or went: Windows answers with the layout it remembers for the monitors there
+/// are now (or one of its own for a set it hasn't seen) — another in-game monitor can come back
+/// 4096×2160, or switched off ("i add a monitor n it shut down like all the other monitors").
+/// Once its screens have stayed the same for a moment, every in-game monitor is put back: its
+/// own size, switched on, in its place — in one change.
+fn settle(added: &AddedMap, why: &str) {
+    if added.lock().unwrap().values().all(|a| a.device.is_empty()) {
+        return;
+    }
+    let t0 = Instant::now();
+    let look = || monitors().into_iter().map(|(d, r)| (d, r.left, r.top, r.right, r.bottom)).collect::<Vec<_>>();
+    let mut last = look();
+    let mut calm = Instant::now();
+    while t0.elapsed() < Duration::from_secs(4) && calm.elapsed() < Duration::from_millis(700) {
+        std::thread::sleep(Duration::from_millis(100));
+        let now = look();
+        if now != last {
+            last = now;
+            calm = Instant::now();
+        }
+    }
+    if let Err(e) = relayout(added) {
+        eprintln!("info=couldn't put the in-game monitors back ({why}): {e}");
+    }
+}
+
+/// Does the monitor offer exactly that size?
+fn offers(device: &str, w: u32, h: u32) -> bool {
+    best_mode(&wide(device), w, h, 60).is_some_and(|m| m.dmPelsWidth == w && m.dmPelsHeight == h)
+}
+
+/// The refresh rate it runs at now (0: not known).
+fn current_hz(device: &str) -> u32 {
+    let name = wide(device);
+    let mut dm = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+    if unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm) }.as_bool() { dm.dmDisplayFrequency } else { 0 }
+}
 
 /// After Windows turned a new monitor on (it shuffles the others around when it does): the
 /// last layout again, the new one off on its own.
@@ -511,16 +575,35 @@ fn rearrange_with(added: &AddedMap, idx: i32) {
 fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
     *LAST_SPEC.lock().unwrap() = spec.to_string();
     let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
+    // each at the size it's meant to be (Windows may have given it another) — and one Windows
+    // switched off is laid out too: it's switched on again in its place
     let mut size: HashMap<i32, (String, i32, i32)> = HashMap::new();
+    let mut hz_of: HashMap<i32, u32> = HashMap::new();
     let mut links: Vec<(i32, i32, char)> = Vec::new();
     for e in spec.split_whitespace() {
         let f: Vec<&str> = e.split(':').collect();
         let (Some(i), Some(p)) = (f.first().and_then(|x| x.parse::<i32>().ok()), f.get(1).and_then(|x| x.parse::<i32>().ok())) else { continue };
         let side = f.get(2).and_then(|x| x.chars().next()).unwrap_or('-');
-        if let Some((device, r)) = our_area(added, i) {
-            size.insert(i, (device, r.right - r.left, r.bottom - r.top));
-            links.push((i, p, side));
+        let Some((device, (ww, wh, whz))) = added.lock().unwrap().get(&i).map(|a| (a.device.clone(), a.want)).filter(|(d, _)| !d.is_empty()) else { continue };
+        let now = rect_of(&device);
+        // (off the desktop and not even listed: gone — the keep-alive says so)
+        if now.is_none() && !device_for_index(i).is_some_and(|d| d.eq_ignore_ascii_case(&device)) {
+            continue;
         }
+        // (showing on one of your own screens — Windows duplicating them: never touched here)
+        if now.is_some() && mirrored(added, i) {
+            continue;
+        }
+        let (w, h) = if ww > 0 && offers(&device, ww, wh) {
+            (ww as i32, wh as i32)
+        } else if let Some(r) = now {
+            (r.right - r.left, r.bottom - r.top)
+        } else {
+            continue;
+        };
+        size.insert(i, (device, w, h));
+        hz_of.insert(i, whz);
+        links.push((i, p, side));
     }
     if size.is_empty() {
         return Ok(());
@@ -589,42 +672,81 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
         }
         *GROUPS.lock().unwrap() = Some(map);
     }
-    let mut want: Vec<(String, i32, i32)> = Vec::new();
+    // (index, device, where it goes, its size)
+    let mut want: Vec<(i32, String, RECT)> = Vec::new();
     for g in &groups {
         let minx = g.iter().map(|(_, r)| r.left).min().unwrap_or(0);
         let miny = g.iter().map(|(_, r)| r.top).min().unwrap_or(0);
         let (dx, dy) = (cx - minx, cy - miny);
         let (mut maxx, mut maxy) = (cx, cy);
         for (i, r) in g {
-            want.push((size[i].0.clone(), r.left + dx, r.top + dy));
+            want.push((*i, size[i].0.clone(), RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy }));
             maxx = maxx.max(r.right + dx);
             maxy = maxy.max(r.bottom + dy);
         }
         cx = maxx;
         cy = maxy;
     }
-    // already like that: nothing to do (moving monitors restarts their pictures)
-    if want.iter().all(|(d, x, y)| rect_of(d).map_or(false, |r| r.left == *x && r.top == *y)) {
+    // the refresh rate its size runs at (0: whatever it has)
+    let hz_for = |i: i32, d: &str, w: i32, h: i32| -> u32 {
+        let hz = hz_of.get(&i).copied().unwrap_or(0);
+        if hz == 0 { 0 } else { best_mode(&wide(d), w as u32, h as u32, hz).map_or(0, |m| m.dmDisplayFrequency) }
+    };
+    let sized = |i: i32, d: &str, r: &RECT| -> bool {
+        rect_of(d).is_some_and(|n| n.right - n.left == r.right - r.left && n.bottom - n.top == r.bottom - r.top)
+            && { let hz = hz_for(i, d, r.right - r.left, r.bottom - r.top); hz == 0 || current_hz(d) == hz }
+    };
+    // already like that — in place, its own size, switched on: nothing to do (any change makes
+    // every screen blink and restarts the monitors' pictures)
+    if want.iter().all(|(i, d, r)| sized(*i, d, r) && rect_of(d).is_some_and(|n| n.left == r.left && n.top == r.top)) {
         return Ok(());
     }
     // asked for this layout before and Windows put them its own way: don't fight it every few
     // seconds (each try makes the screens blink)
-    let now_at = |w: &Vec<(String, i32, i32)>| w.iter().map(|(d, _, _)| rect_of(d).map(|r| (r.left, r.top))).collect::<Vec<_>>();
+    let now_at = |w: &Vec<(i32, String, RECT)>| w.iter().map(|(_, d, _)| rect_of(d).map(|r| (r.left, r.top, r.right, r.bottom))).collect::<Vec<_>>();
     if let Some((s0, got)) = REFUSED.lock().unwrap().as_ref() {
         if s0 == spec && *got == now_at(&want) {
             return Ok(());
         }
     }
+    let mut fixed: Vec<String> = Vec::new();
     unsafe {
-        for (d, x, y) in &want {
-            let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
-            p.dmFields = DM_POSITION;
-            p.Anonymous1.Anonymous2.dmPosition = POINTL { x: *x, y: *y };
+        for (i, d, r) in &want {
+            let (w, h) = (r.right - r.left, r.bottom - r.top);
             let dn = wide(d);
-            let r = ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(&p), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
-            if r != DISP_CHANGE_SUCCESSFUL {
-                let _ = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
-                return Err(format!("Windows refused to move {d} ({})", r.0));
+            let now = rect_of(d);
+            // its own size again (or switched on again): all of the mode, at its new place
+            let mut tries: Vec<(DEVMODEW, bool)> = Vec::new();
+            if !sized(*i, d, r) {
+                let hz = hz_of.get(i).copied().unwrap_or(0);
+                if let Some(mut m) = best_mode(&dn, w as u32, h as u32, if hz == 0 { current_hz(d).max(60) } else { hz }).filter(|m| m.dmPelsWidth == w as u32 && m.dmPelsHeight == h as u32) {
+                    m.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY | DM_POSITION;
+                    m.Anonymous1.Anonymous2.dmPosition = POINTL { x: r.left, y: r.top };
+                    tries.push((m, true));
+                }
+            }
+            if now.is_some() {
+                let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+                p.dmFields = DM_POSITION;
+                p.Anonymous1.Anonymous2.dmPosition = POINTL { x: r.left, y: r.top };
+                tries.push((p, false));
+            }
+            let mut took = false;
+            for (t, resized) in &tries {
+                if ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(t), None, CDS_UPDATEREGISTRY | CDS_NORESET, None) == DISP_CHANGE_SUCCESSFUL {
+                    took = true;
+                    if *resized {
+                        fixed.push(match now {
+                            None => format!("{d} switched on again at {w}×{h}"),
+                            Some(n) => format!("{d} {}×{} back to {w}×{h}", n.right - n.left, n.bottom - n.top),
+                        });
+                    }
+                    break;
+                }
+            }
+            if !took {
+                // (one Windows won't take: the others are still laid out — it's left as it is)
+                eprintln!("info=Windows wouldn't take {d} at {},{} ({w}×{h})", r.left, r.top);
             }
         }
         step("Windows applying the new layout");
@@ -633,11 +755,14 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
             return Err(format!("Windows didn't apply it ({})", applied.0));
         }
     }
-    let list: Vec<String> = want.iter().map(|(d, x, y)| format!("{d}@{x},{y}")).collect();
+    if !fixed.is_empty() {
+        eprintln!("info=put back what Windows changed by itself: {}", fixed.join(", "));
+    }
+    let list: Vec<String> = want.iter().map(|(_, d, r)| format!("{d}@{},{}", r.left, r.top)).collect();
     eprintln!("info=arranged the in-game monitors: {}", list.join(" "));
     std::thread::sleep(Duration::from_millis(300));
     let got = now_at(&want);
-    if want.iter().zip(got.iter()).any(|((_, x, y), g)| *g != Some((*x, *y))) {
+    if want.iter().zip(got.iter()).any(|((_, _, r), g)| *g != Some((r.left, r.top, r.right, r.bottom))) {
         eprintln!("info=Windows placed them differently ({got:?}); leaving it like that");
         *REFUSED.lock().unwrap() = Some((spec.to_string(), got));
     }
@@ -700,42 +825,20 @@ fn fit_scale(device: &str, h: u32) -> String {
     "scale: monitor not found".into()
 }
 
-/// Another size for a monitor that's on, where it is.
-fn set_mode(device: &str, area: RECT, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT, String> {
+/// Another size for a monitor that's on: it's kept as its size, and every in-game monitor is laid
+/// out again with it, in one change. (They touch only at their corners: moving just the ones to
+/// its right along left the next one floating, and Windows then shuffled them all its own way —
+/// one landed on another and was gone.) Asked for the size it has: nothing changes.
+fn set_mode(added: &AddedMap, idx: i32, device: &str, w: u32, h: u32, hz: u32) -> Result<RECT, String> {
     let name = wide(device);
-    let Some(mut m) = best_mode(&name, w, h, hz) else { return Err("it offers no sizes".into()) };
+    let Some(m) = best_mode(&name, w, h, hz) else { return Err("it offers no sizes".into()) };
     if m.dmPelsWidth != w || m.dmPelsHeight != h {
         return Err(format!("{w}×{h} isn't one of its sizes"));
     }
-    m.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY | DM_POSITION;
-    m.Anonymous1.Anonymous2.dmPosition = POINTL { x: area.left, y: area.top };
-    // in-game monitors stand in a row: the ones to its right move along with its new width, so
-    // they neither overlap it nor leave a gap (Windows would shuffle them around itself)
-    let dx = w as i32 - (area.right - area.left);
-    unsafe {
-        let r = ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&m), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
-        if r != DISP_CHANGE_SUCCESSFUL {
-            let _ = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
-            return Err(format!("Windows refused it ({})", r.0));
-        }
-        if dx != 0 {
-            for (d, o) in monitors() {
-                if d.eq_ignore_ascii_case(device) || !ours.iter().any(|x| x.eq_ignore_ascii_case(&d)) || o.left < area.right {
-                    continue;
-                }
-                let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
-                p.dmFields = DM_POSITION;
-                p.Anonymous1.Anonymous2.dmPosition = POINTL { x: o.left + dx, y: o.top };
-                let dn = wide(&d);
-                let _ = ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(&p), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
-            }
-        }
-        step("Windows applying the new layout");
-        let applied = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
-        if applied != DISP_CHANGE_SUCCESSFUL {
-            return Err(format!("Windows didn't apply it ({})", applied.0));
-        }
+    if let Some(a) = added.lock().unwrap().get_mut(&idx) {
+        a.want = (w, h, hz);
     }
+    relayout(added)?;
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         if let Some(r) = rect_of(device) {
@@ -3073,6 +3176,42 @@ fn is_shell(h: HWND) -> bool {
 fn owned() -> &'static Mutex<HashMap<u32, i32>> { OWNED.get_or_init(|| Mutex::new(HashMap::new())) }
 fn placed() -> &'static Mutex<HashMap<isize, i32>> { PLACED.get_or_init(|| Mutex::new(HashMap::new())) }
 
+/// Nothing is that monitor's any more: its programs, its windows, an app being started for it.
+fn forget_monitor(idx: i32) {
+    owned().lock().unwrap().retain(|_, i| *i != idx);
+    placed().lock().unwrap().retain(|_, i| *i != idx);
+    watch().lock().unwrap().retain(|(_, i, _)| *i != idx);
+    LAUNCHES.lock().unwrap().retain(|l| l.idx != idx);
+}
+
+/// A monitor that went without its windows being on it any more (Windows dropped it, or switched
+/// it off before it was turned off): its own apps close all the same — wherever Windows put their
+/// windows meanwhile, so nothing of it is left on another monitor or your desk. Its own: a window
+/// put there, a program started for it, anything in its own copies' box. Returns the programs
+/// that were all its own (ended a few seconds later if still running, like a monitor turned off).
+fn close_own(idx: i32) -> Vec<u32> {
+    let own_box = isolated(idx).then(|| box_name(idx));
+    let mut closed = Vec::new();
+    for h in app_windows() {
+        let p = pid(h);
+        let whole = owned().lock().unwrap().get(&p) == Some(&idx) || own_box.as_ref().is_some_and(|b| box_of(p).eq_ignore_ascii_case(b));
+        let this = whole || placed().lock().unwrap().get(&(h.0 as isize)) == Some(&idx);
+        if !this {
+            continue;
+        }
+        eprintln!("info=\"{}\" was in-game monitor {idx}'s: closing it", title(h));
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        // (a window put there of a program that's also yours elsewhere: only that window)
+        if whole && !closed.contains(&p) {
+            closed.push(p);
+        }
+    }
+    forget_monitor(idx);
+    closed
+}
+
 fn now_filetime() -> u64 {
     let ft = unsafe { windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime() };
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
@@ -3123,7 +3262,7 @@ fn on_window_shown(h: HWND, fresh: bool) {
         }
     }
     let on_desk = at.is_none() && !SEATED.load(Ordering::SeqCst) && !POINTING.load(Ordering::SeqCst) && !game_in_front();
-    // 1. started for a monitor by WindowsCraft (its Start menu, "Own Brave"…): its first window
+    // 1. started for a monitor by WindowsCraft (its Start menu, "Open another copy here"…): its first window
     // goes there — once (what you open yourself afterwards follows the rules below)
     if fresh {
         let mut launches = LAUNCHES.lock().unwrap();
@@ -4268,24 +4407,12 @@ fn close_box(idx: i32, wait: Duration) {
     sbie_start(&[&format!("/box:{b}"), "/terminate"]);
 }
 
-// ---- a monitor's own browser ("Own Brave" in its menu) -----------------------------------------
-//
-// A separate copy of that browser for this monitor: its own program (so its own sound), its own
-// profile kept for this wall. Nothing is copied from your desk browser, and it's never restarted.
-
+// Which wall a monitor is (the game says): what's kept per wall — its own copies' box — stays
+// that wall's whichever number the monitor gets.
 static PROFILE_KEYS: Mutex<Option<HashMap<i32, String>>> = Mutex::new(None);
 
 fn profile_key(idx: i32) -> String {
     PROFILE_KEYS.lock().unwrap().as_ref().and_then(|m| m.get(&idx).cloned()).unwrap_or_else(|| format!("monitor{idx}"))
-}
-
-fn own_browser(idx: i32, exe_path: &str) -> bool {
-    let exe = exe_path.rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
-    let dir = std::path::Path::new(&base).join("WindowsCraft").join("profiles").join(format!("{}-{}", exe.trim_end_matches(".exe"), profile_key(idx)));
-    let _ = std::fs::create_dir_all(&dir);
-    let params = format!("--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window", dir.display());
-    launch(idx, exe_path, &params, &exe)
 }
 
 /// Which in-game monitor your real cursor is on (None: your own screens).
@@ -4926,6 +5053,10 @@ struct Added {
     device: String,
     /// When it was turned on (FILETIME): programs started after that "live on it"
     since: u64,
+    /// The size it's meant to be (width, height, refresh rate): what it came on at, or was last
+    /// set to. Windows has its own ideas each time a monitor comes or goes — another size, or
+    /// switched off — and they're undone (see arrange). (0, 0, 0): not known yet.
+    want: (u32, u32, u32),
 }
 
 type Driver = Arc<Mutex<Option<Arc<Vdd>>>>;
@@ -5078,6 +5209,8 @@ fn main() {
                     windows::Win32::System::Threading::GetCurrentThread(), windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL);
             }
             let mut missing: HashMap<i32, u32> = HashMap::new();
+            let mut off_desk: HashMap<i32, u32> = HashMap::new();
+            let mut last_relayout: Option<Instant> = None;
             let mut last_look = Instant::now();
             loop {
                 std::thread::sleep(Duration::from_millis(*PING_MS));
@@ -5094,10 +5227,26 @@ fn main() {
                 if last_look.elapsed() >= Duration::from_millis(700) {
                     last_look = Instant::now();
                     let ours: Vec<(i32, String)> = added.lock().unwrap().iter().filter(|(_, a)| !a.device.is_empty()).map(|(i, a)| (*i, a.device.clone())).collect();
+                    off_desk.retain(|i, _| ours.iter().any(|(j, _)| j == i));
                     for (i, dev) in ours {
                         let now = device_for_index(i);
                         if now.as_deref().map_or(false, |d| d.eq_ignore_ascii_case(&dev)) {
                             missing.remove(&i);
+                            // still there, but Windows switched it off (off the desktop) for a few
+                            // seconds: switched on again in its place, at its size (not left to the
+                            // game to turn off — then its apps would close)
+                            if rect_of(&dev).is_none() {
+                                let n = off_desk.entry(i).or_insert(0);
+                                *n += 1;
+                                if *n >= 4 && last_relayout.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
+                                    last_relayout = Some(Instant::now());
+                                    off_desk.remove(&i);
+                                    eprintln!("info=Windows switched in-game monitor {i} ({dev}) off by itself: switching it on again");
+                                    internal_command("relayout");
+                                }
+                            } else {
+                                off_desk.remove(&i);
+                            }
                             continue;
                         }
                         // Windows gave it another display name (it settles on one a moment after a
@@ -5119,11 +5268,14 @@ fn main() {
                             missing.remove(&i);
                             let mut g = added.lock().unwrap();
                             if g.get(&i).map_or(false, |a| a.device == dev) {
-                                g.remove(&i);
+                                let since = g.remove(&i).map_or(0, |a| a.since);
                                 drop(g);
                                 let pings = PING_FAILS.load(Ordering::SeqCst);
                                 eprintln!("error=in-game monitor {i} ({dev}) went away by itself (driver {}, Windows has {} screens, {} failed pings so far, last call: {})",
                                     driver_status(), monitors().len(), pings, LAST_IOCTL.lock().unwrap());
+                                // it's off, and so are its apps — before the game turns its wall on
+                                // again (a fresh monitor, empty)
+                                internal_command(&format!("lost {i} {since}"));
                                 emit(&format!("gone {i}"));
                             }
                         }
@@ -5135,6 +5287,7 @@ fn main() {
 
     // "beat" is handled as soon as it arrives, even while a slow command runs
     let (cmd_tx, cmd_rx) = channel::<String>();
+    let _ = INTERNAL.set(Mutex::new(cmd_tx.clone()));
     std::thread::spawn(move || {
         let stdin = io::stdin();
         for line in stdin.lock().lines() {
@@ -5241,6 +5394,35 @@ fn main() {
                     say(&format!("removed {idx}"));
                 }
             }
+            // (from the watcher, not the game: no answer)
+            Some("lost") => {
+                // a monitor Windows dropped is off, and so are its apps — wherever Windows put their
+                // windows ("once a monitor is turned off all its apps should be eliminated"); the
+                // driver lets it go too, so it never comes back on its own as a screen of yours
+                let idx = n(1) as i32;
+                if isolated(idx) && !box_shared(idx) {
+                    close_box(idx, Duration::from_secs(3));
+                    if follows(idx) {
+                        empty_box(&box_name(idx), "its monitor went away");
+                    }
+                }
+                let left = close_own(idx);
+                if !added.lock().unwrap().contains_key(&idx) && device_for_index(idx).is_some() {
+                    if let Some(v) = vdd.lock().unwrap().clone() {
+                        v.remove(idx);
+                    }
+                    *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
+                }
+                if let Some(since) = p.get(2).and_then(|s| s.parse::<u64>().ok()).filter(|s| *s > 0) {
+                    end_leftovers(left, since);
+                }
+                settle(&added, "a monitor went away");
+            }
+            Some("relayout") => {
+                if let Err(why) = relayout(&added) {
+                    eprintln!("info=couldn't switch the monitor on again: {why}");
+                }
+            }
             Some("rects") => {
                 let list: Vec<i32> = added.lock().unwrap().keys().copied().collect();
                 for i in list {
@@ -5345,8 +5527,7 @@ fn main() {
             }
             Some("setmode") => match our_area(&added, n(1) as i32) {
                 None => say("modeset fail that in-game monitor isn't there any more"),
-                Some((device, area)) => match set_mode(&device, area, n(2) as u32, n(3) as u32, n(4).max(24) as u32,
-                    &added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect::<Vec<_>>()) {
+                Some((device, _)) => match set_mode(&added, n(1) as i32, &device, n(2) as u32, n(3) as u32, n(4).max(24) as u32) {
                     Ok(r) => {
                         eprintln!("info={}", fit_scale(&device, (r.bottom - r.top) as u32));
                         let r = rect_of(&device).unwrap_or(r);
@@ -5488,16 +5669,6 @@ fn main() {
                     PROFILE_KEYS.lock().unwrap().get_or_insert_with(HashMap::new).insert(n(1) as i32, key);
                 }
             }
-            Some("ownbrowser") => {
-                // "Own Brave" from the monitor's menu: its own copy opens there
-                let f: Vec<&str> = line.split('\t').collect();
-                let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
-                let exe = f.get(2).copied().unwrap_or("").to_string();
-                std::thread::spawn(move || {
-                    let ok = own_browser(idx, &exe);
-                    say(if ok { "ownbrowser ok" } else { "ownbrowser failed" });
-                });
-            }
             Some("launch") => {
                 let f: Vec<&str> = line.split('\t').collect();
                 let idx = f.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
@@ -5606,10 +5777,16 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     let old = added.lock().unwrap().remove(&idx);
     if let Some(o) = old {
         eprintln!("error=in-game monitor {idx} ({}) had gone away by itself", o.device);
+        // (its apps went with it, like any monitor that's gone)
+        end_leftovers(close_own(idx), o.since);
         emit(&format!("gone {idx}"));
     }
+    // a new monitor starts empty: nothing an earlier monitor with this number had (its programs,
+    // its windows, an app being started for it) belongs to it — or Windows' "remember window
+    // locations" putting that one's windows back on this number would see them kept there
+    forget_monitor(idx);
     // the keep-alive covers it from now on
-    added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime() });
+    added.lock().unwrap().insert(idx, Added { device: String::new(), since: now_filetime(), want: (w, h, hz) });
     // (a try the driver said no to may still have made a monitor: never leave one behind)
     if failed_tries > 0 {
         std::thread::sleep(Duration::from_millis(500));
@@ -5681,10 +5858,15 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
         }
     }
     let since = added.lock().unwrap().get(&idx).map_or_else(now_filetime, |a| a.since);
-    added.lock().unwrap().insert(idx, Added { device: device.clone(), since });
+    // (its size as it came on: the nearest the driver offers to the one asked for)
+    let want = ((r.right - r.left) as u32, (r.bottom - r.top) as u32, hz);
+    added.lock().unwrap().insert(idx, Added { device: device.clone(), since, want });
     taskbars_separate(true);
     ensure_placer();
     rearrange_with(added, idx);
+    // (Windows' own layout for this set of monitors can land a moment later: once it has, any
+    // other in-game monitor it resized or switched off is put back)
+    settle(added, "a monitor came on");
     keep_windows_put(spots, "a monitor came on");
     let r = rect_of(&device).unwrap_or(r);
     Ok(format!("added {idx} {device} {} {} {} {}", r.left, r.top, r.right - r.left, r.bottom - r.top))
@@ -5765,6 +5947,9 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
             }
         }
     }
+    // (the ones that stay are put back as they were, should Windows have resized or switched off
+    // any of them while answering)
+    settle(added, "a monitor turned off");
     keep_windows_put(others, "monitors turned off");
     for (pids, since) in leftovers {
         end_leftovers(pids, since);
@@ -5802,9 +5987,12 @@ fn keep_windows_put(before: Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)>, 
                 if now == was.map(|(i, _)| i) {
                     continue;
                 }
-                // (one WindowsCraft put somewhere — brought over, placed, started for a monitor — stays)
+                // (one WindowsCraft put there — placed on it, started for it, brought over from your
+                // desk just now — stays. One brought over long ago that Windows moved from its
+                // monitor onto another goes back: that's where you put it)
                 let p_id = pid(h);
-                if HOMES.get().is_some_and(|m| m.lock().unwrap().contains_key(hw)) || now.is_some_and(|i| placed().lock().unwrap().get(hw) == Some(&i) || owned().lock().unwrap().get(&p_id) == Some(&i)) {
+                let brought_now = was.is_none() && HOMES.get().is_some_and(|m| m.lock().unwrap().contains_key(hw));
+                if brought_now || now.is_some_and(|i| placed().lock().unwrap().get(hw) == Some(&i) || owned().lock().unwrap().get(&p_id) == Some(&i)) {
                     continue;
                 }
                 let mut q = *p;
@@ -5855,8 +6043,12 @@ fn clear_monitor(added: &AddedMap, homes: &Homes, idx: i32, close_copies: bool) 
             empty_box(&box_name(idx), "its monitor turned off");
         }
     }
-    let (_, a) = our_area(added, idx)?;
-    let left = evacuate(idx, &a, homes);
+    // (off the desktop already — Windows switched it off: what's its own is found by what it is,
+    // not where it is, and closes all the same)
+    let left = match our_area(added, idx) {
+        Some((_, a)) => evacuate(idx, &a, homes),
+        None => close_own(idx),
+    };
     since.map(|s| (left, s))
 }
 

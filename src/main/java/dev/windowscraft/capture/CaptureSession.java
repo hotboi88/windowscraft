@@ -12,7 +12,9 @@ import java.util.concurrent.locks.LockSupport;
 public final class CaptureSession implements FrameSource {
     public enum State { STARTING, LIVE, IDLE, PAUSED, ENDED }
 
-    private final SourceInfo source;
+    private volatile SourceInfo source;
+    /** The source moved (see {@link #retarget}): the capture opens it again where it is now. */
+    private volatile boolean reopen;
     private final FramePool pool = new FramePool();
     private final AtomicReference<Frame> latest = new AtomicReference<>();
     private final Thread thread;
@@ -51,14 +53,19 @@ public final class CaptureSession implements FrameSource {
         this.thread.start();
     }
 
+    private FrameProducer open() {
+        FrameProducer producer = CaptureBackends.open(source);
+        producerName = producer.getClass().getSimpleName();
+        if (producer instanceof FallbackProducer fp0) wgcActive = !fp0.usingGdi();
+        helperFps = -1;
+        helperShrink = 0;
+        return producer;
+    }
+
     private void run() {
         FrameProducer producer;
         try {
-            producer = CaptureBackends.open(source);
-            producerName = producer.getClass().getSimpleName();
-            if (producer instanceof FallbackProducer fp0) wgcActive = !fp0.usingGdi();
-            producerName = producer.getClass().getSimpleName();
-            if (producer instanceof FallbackProducer fp0) wgcActive = !fp0.usingGdi();
+            producer = open();
         } catch (Throwable t) {
             WindowsCraftClient.LOGGER.error("Could not open capture source {}", source.title(), t);
             end("Couldn't start capture: " + t.getMessage());
@@ -70,6 +77,18 @@ public final class CaptureSession implements FrameSource {
         try {
             long next = System.nanoTime();
             while (running) {
+                if (reopen) { // (the wall keeps its last picture meanwhile)
+                    reopen = false;
+                    FrameProducer old = producer;
+                    producer = null;
+                    try {
+                        old.close();
+                    } catch (Throwable t) {
+                        WindowsCraftClient.LOGGER.warn("Error closing capture source", t);
+                    }
+                    producer = open();
+                    next = System.nanoTime();
+                }
                 if (paused) {
                     state = State.PAUSED;
                     LockSupport.parkNanos(100_000_000L);
@@ -148,7 +167,7 @@ public final class CaptureSession implements FrameSource {
             end("Capture stopped: " + t.getClass().getSimpleName());
         } finally {
             try {
-                producer.close();
+                if (producer != null) producer.close();
             } catch (Throwable t) {
                 WindowsCraftClient.LOGGER.warn("Error closing capture source", t);
             }
@@ -194,6 +213,16 @@ public final class CaptureSession implements FrameSource {
 
     public void stop() {
         running = false;
+        LockSupport.unpark(thread);
+    }
+
+    /**
+     * The same source somewhere else now (an in-game monitor Windows moved or resized): the capture
+     * goes on from there — nothing else about the share stops.
+     */
+    public void retarget(SourceInfo s) {
+        source = s;
+        reopen = true;
         LockSupport.unpark(thread);
     }
 

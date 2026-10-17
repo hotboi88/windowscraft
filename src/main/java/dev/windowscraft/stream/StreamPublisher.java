@@ -72,7 +72,7 @@ public final class StreamPublisher {
     public record Target(UUID displayId, String dimension, WallRect rect, int fit, List<UUID> controllers) {}
 
     private volatile List<Target> targets;
-    private final SourceInfo source;
+    private volatile SourceInfo source;
     private final CaptureSession session;
     private volatile CaptureSettings settings;
     private final String streamId;
@@ -93,7 +93,9 @@ public final class StreamPublisher {
     private volatile String audioStatus = "";
     private volatile int streamW, streamH, streamFps; // what the current pipeline encodes (0 = not yet)
     private volatile boolean softwareOnly;              // the GPU encoder failed (e.g. out of sessions)
-    private volatile boolean gpuFailed;                 // GPU capture didn't work on this PC: use the GDI path
+    private volatile boolean gpuFailed;                 // GPU capture didn't work: use the CPU path (tried again later, see gpuRetry)
+    /** GPU capture that didn't work is tried again at a later start of the stream (2 min, then less often). */
+    private final dev.windowscraft.capture.Backoff gpuRetry = new dev.windowscraft.capture.Backoff(120, 1800);
     /**
      * Which way of feeding the GPU capture to the encoder is being tried: 0 = straight into NVENC
      * (it takes the BGRA pictures itself), 1 = converted on the GPU (scale_d3d11) at a size that's
@@ -413,7 +415,7 @@ public final class StreamPublisher {
                     if (gpuAttempt < 1) gpuAttempt++;
                     else gpuFailed = true;
                     WindowsCraftClient.LOGGER.warn("GPU capture didn't start for '{}' ({}); {}", source.title(), e.toString(),
-                            gpuFailed ? "using CPU capture" : "trying the GPU's own converter");
+                            gpuFailed ? "using CPU capture, trying it again in " + gpuRetry.failed(System.nanoTime()) + " s" : "trying the GPU's own converter");
                 }
                 WindowsCraftClient.LOGGER.warn("Stream pipeline restarting: {}", e.toString());
                 RESTARTS.inc();
@@ -835,6 +837,11 @@ public final class StreamPublisher {
 
     /** GPU capture needs Windows, a real window or monitor, and a hardware encoder that takes D3D11 frames. */
     private boolean gpuEligible(Ffmpeg.Encoder enc) {
+        if (gpuFailed && gpuRetry.due(System.nanoTime())) { // (it may have been a passing hiccup: one more go)
+            gpuFailed = false;
+            gpuAttempt = 0;
+            WindowsCraftClient.LOGGER.info("Stream '{}': trying GPU capture again", source.title());
+        }
         if (gpuFailed || !"true".equals(System.getProperty("windowscraft.gpuCapture", "true"))) return false;
         if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) return false;
         if (source.kind() == SourceInfo.Kind.TEST) return false;
@@ -855,7 +862,7 @@ public final class StreamPublisher {
                 + ":width=" + ew + ":height=" + eh + ":resize_mode=scale_aspect:display_border=0:premultiplied=1";
     }
 
-    /** GPU capture didn't work here: go back to the CPU capture for the rest of this share. */
+    /** GPU capture didn't work here: back to the CPU capture (GPU capture is tried again at a later start). */
     private void gpuFail(String why) throws IOException {
         if (gpuAttempt < 1) {
             gpuAttempt++;
@@ -864,8 +871,22 @@ public final class StreamPublisher {
             throw new IOException("GPU capture: trying another way");
         }
         gpuFailed = true;
-        WindowsCraftClient.LOGGER.warn("GPU capture unavailable for '{}' ({}); using CPU capture", source.title(), why);
+        WindowsCraftClient.LOGGER.warn("GPU capture unavailable for '{}' ({}); using CPU capture, trying it again in {} s", source.title(), why,
+                gpuRetry.failed(System.nanoTime()));
         throw new IOException("GPU capture unavailable, using CPU capture");
+    }
+
+    /**
+     * Its source is somewhere else now (an in-game monitor Windows moved or resized): the stream
+     * carries on — FFmpeg starts again from there; everyone watching stays (no "screen share ended").
+     */
+    public void retarget(SourceInfo fresh) {
+        source = fresh;
+        gpuFailed = false; // (a new place: a fresh try)
+        gpuAttempt = 0;
+        gpuRetry.reset();
+        quickRestart = true;
+        restartPipeline();
     }
 
     /** GPU mode: read the BGRA copy FFmpeg sends back, for your own wall. */

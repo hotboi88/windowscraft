@@ -1,4 +1,8 @@
-WindowsCraft 0.15.32 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.33 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.33: in-game monitors don't affect each other. Turning one on or off leaves the
+others as they were (their size, windows and sound), a new one starts empty, and turning one
+off closes its apps. No more slow capture for hours after a monitor came on.
 
 New in 0.15.32: apps run normally on in-game monitors again (games, Steam, Roblox, Minecraft,
 Store apps); a monitor's own copies are off unless you turn them on.

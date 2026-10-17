@@ -15,7 +15,7 @@ import net.minecraft.util.Identifier;
  * walls. Putting the same window on a second wall mirrors it instead of capturing it twice.
  */
 public final class Share {
-    final SourceInfo source;
+    volatile SourceInfo source;
     final CaptureSession session;
     StreamPublisher publisher;
     final List<Display> displays = new ArrayList<>();
@@ -27,7 +27,10 @@ public final class Share {
     public volatile double localVolume = dev.windowscraft.config.ClientSettings.ownVolume();
     /** Direct GPU sharing for this share's walls (Windows), or null. */
     dev.windowscraft.capture.GpuShare gpu;
+    /** It stopped working; tried again when {@link #gpuRetry} says (see DisplayManager.tickGpuSharing). */
     boolean gpuFailed;
+    final dev.windowscraft.capture.Backoff gpuRetry = new dev.windowscraft.capture.Backoff(5, 300);
+    private long gpuFeedingSince;
     int gpuFps;
     /** What the GPU helper was last told (the performance settings lower it). */
     int gpuSentFps;
@@ -104,6 +107,9 @@ public final class Share {
                 }
             }
             gpuFeeding = lastPolled != null;
+            if (!gpuFeeding) gpuFeedingSince = 0;
+            else if (gpuFeedingSince == 0) gpuFeedingSince = System.nanoTime();
+            else if (gpuRetry.fails() > 0 && System.nanoTime() - gpuFeedingSince > 60_000_000_000L) gpuRetry.reset(); // (a good run)
             if (lastPolled == null) {
                 // 2. GPU capture: the preview FFmpeg sends back; 3. otherwise our own CPU capture
                 dev.windowscraft.capture.FrameSource src = publisher != null ? publisher.previewSource() : null;
@@ -114,11 +120,40 @@ public final class Share {
         return lastPolled;
     }
 
+    /**
+     * Direct GPU sharing stopped: the wall takes the CPU capture meanwhile, and GPU sharing is tried
+     * again a few seconds later (then less often). It used to be given up for good: a wall whose
+     * monitor came on while Windows rearranged its screens stayed on the slow capture for hours.
+     */
     private void gpuFailed() {
         gpuFailed = true;
         gpuFeeding = false;
+        gpuFeedingSince = 0;
+        dev.windowscraft.WindowsCraftClient.LOGGER.info("Direct GPU sharing of '{}' stopped ({}); trying it again in {} s", source.title(),
+                gpu == null ? "?" : gpu.failure(), gpuRetry.failed(System.nanoTime()));
         texture.dropGpu();
         if (publisher != null && publisher.gpuActive()) publisher.restartPipeline(); // bring FFmpeg's preview back
+    }
+
+    /**
+     * The same source somewhere else now (an in-game monitor Windows moved or resized): the share
+     * goes on — its sound, the stream to others, every wall of it — and only the pictures are taken
+     * from where it is now. (Stopping and starting it put its apps' sound on your speakers for a
+     * moment and ended the stream to everyone watching.)
+     */
+    void retarget(SourceInfo fresh) {
+        source = fresh;
+        session.retarget(fresh);
+        if (gpu != null) { // (started again where it is now, next tick)
+            gpu.stop();
+            gpu = null;
+        }
+        texture.dropGpu();
+        gpuFeeding = false;
+        gpuFeedingSince = 0;
+        gpuFailed = false; // (a new place: a fresh try)
+        gpuRetry.reset();
+        if (publisher != null) publisher.retarget(fresh);
     }
 
     /** The wall shows FFmpeg's preview (the whole window, fitted into the stream's shape) rather than just the app's content. */

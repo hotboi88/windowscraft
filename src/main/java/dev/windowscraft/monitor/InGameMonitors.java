@@ -56,9 +56,17 @@ public final class InGameMonitors {
     private static final Map<String, Mon> LIVE = new ConcurrentHashMap<>();
     private static final Map<String, Integer> NUMBER = new ConcurrentHashMap<>();
     private static final Set<UUID> STARTING = new HashSet<>();
-    private static final Set<String> RESTARTING = new HashSet<>();
     private static final Map<UUID, List<Long>> REVIVED = new ConcurrentHashMap<>();
-    private static final Map<String, Integer> MISSES = new ConcurrentHashMap<>();
+    /** Since when a live monitor has been missing from Windows' list (System.nanoTime()). */
+    private static final Map<String, Long> MISSING_SINCE = new ConcurrentHashMap<>();
+    /**
+     * How long a monitor may be missing before it's turned off here. While Windows rearranges its
+     * screens one drops out of its list for a moment; the helper switches one Windows left off on
+     * again, and says "gone" (the wall then gets a fresh one) when it's really gone. Two looks in
+     * a row — under a second apart — used to turn it off: removing it made Windows rearrange again,
+     * and the next one went the same way, until one monitor was left.
+     */
+    private static final long MISSING_GRACE_NANOS = 15_000_000_000L;
     /** Your own screen's refresh rate (see {@link #screenHz}). */
     private static volatile int screenHz = HZ;
     /** Monitors we're giving another size right now (the size Windows reports meanwhile is ours). */
@@ -101,17 +109,6 @@ public final class InGameMonitors {
 
     /** The monitor a source shows (any thread), or null. */
     public static Mon monitorOf(SourceInfo s) { return s == null ? null : LIVE.get(s.id()); }
-
-    /**
-     * (Any thread) An app on a monitor also has a window on your desk, so its sound stays on your
-     * desk: say so once, and how to give the monitor its own.
-     */
-    public static void sharedAppSound(String title) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        String name = title == null || title.isBlank() ? "That app" : title.length() > 40 ? title.substring(0, 40) + "…" : title;
-        mc.execute(() -> say(mc, "\"" + name + "\" is also open on your desk, so its sound stays on your desk (Windows can't split one app's sound). "
-                + "For a browser with its own sound on the monitor: sneak + U on it → \"Own browser\".", Formatting.GRAY));
-    }
 
     /** Are you using that in-game monitor right now (sitting at it, or holding it up as your tablet)? */
     public static boolean inUse(SourceInfo s) {
@@ -259,9 +256,10 @@ public final class InGameMonitors {
 
     /** A share ended (DisplayManager): if it showed an in-game monitor, that monitor goes away. */
     public static void released(SourceInfo s) {
-        if (!isInGameMonitor(s) || RESTARTING.contains(s.id())) return;
+        if (!isInGameMonitor(s)) return;
         Mon m = LIVE.remove(s.id());
         NUMBER.remove(s.id());
+        MISSING_SINCE.remove(s.id());
         if (m == null) return;
         if (seatedMon != null && seatedMon.index() == m.index()) unseat();
         MonitorBackend b = backend();
@@ -320,33 +318,36 @@ public final class InGameMonitors {
 
     /**
      * Windows may move monitors around when another comes or goes: a wall whose monitor moved
-     * restarts its capture on the new spot (the monitor itself, and its apps, stay as they are).
+     * takes its pictures from the new spot — nothing else about it stops (its apps' sound, the
+     * stream to others), and the monitor and its apps stay as they are.
      */
     static void refreshRects(MinecraftClient mc) {
         MonitorBackend b = backend();
         if (b == null || LIVE.isEmpty()) return;
         b.rects().thenAccept(list -> mc.execute(() -> {
+            long now = System.nanoTime();
             for (Map.Entry<String, Mon> e : new ArrayList<>(LIVE.entrySet())) {
                 Mon old = e.getValue();
                 Mon fresh = list.stream().filter(x -> x.index() == old.index()).findFirst().orElse(null);
                 boolean mirrored = fresh != null && fresh.width() == 0;
-                int missed = fresh == null ? MISSES.merge(e.getKey(), 1, Integer::sum) : 0;
-                if (fresh != null) MISSES.remove(e.getKey());
-                if (mirrored || missed >= 2) {
-                    // Windows is mirroring it onto one of your real screens (never shown), or it's gone
+                if (fresh != null) MISSING_SINCE.remove(e.getKey());
+                long missing = fresh == null ? now - MISSING_SINCE.computeIfAbsent(e.getKey(), k -> now) : 0;
+                if (mirrored || missing > MISSING_GRACE_NANOS) {
+                    // Windows is mirroring it onto one of your real screens (never shown), or it's
+                    // been gone a good while without the helper getting it back
                     WindowsCraftClient.LOGGER.warn("In-game monitor {} isn't a monitor of its own any more ({}): turning it off", old,
-                            mirrored ? "mirrored onto a real screen" : "missing");
-                    MISSES.remove(e.getKey());
+                            mirrored ? "mirrored onto a real screen" : "missing for " + missing / 1_000_000_000L + " s");
+                    MISSING_SINCE.remove(e.getKey());
                     for (Share s : DisplayManager.get().liveShares()) if (s.source().id().equals(e.getKey())) DisplayManager.get().stopShare(s);
                     continue;
                 }
-                if (fresh == null) continue; // Windows may be rearranging: look again next time
+                if (fresh == null) continue; // Windows may be rearranging (the helper puts it back): look again next time
                 if (old.equals(fresh)) continue;
                 WindowsCraftClient.LOGGER.info("In-game monitor {} moved: {} → {}", fresh.index(), old, fresh);
                 LIVE.put(e.getKey(), fresh);
                 if (seatedMon != null && seatedMon.index() == fresh.index()) seatedMon = fresh;
                 Sandbox.pushAll();
-                restartShares(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1), nameFor(e.getKey())));
+                DisplayManager.get().retarget(e.getKey(), sourceFor(fresh, NUMBER.getOrDefault(e.getKey(), 1), nameFor(e.getKey())));
                 if (fresh.width() != old.width() || fresh.height() != old.height()) keepOwnSize(b, mc, e.getKey(), fresh);
             }
         })).exceptionally(t -> null);
@@ -397,22 +398,6 @@ public final class InGameMonitors {
             if (err != null) WindowsCraftClient.LOGGER.info("In-game monitor {} couldn't be put back to {}×{}: {}", fresh.index(), w, h, err.toString());
             refreshRects(mc);
         }));
-    }
-
-    private static void restartShares(String id, SourceInfo fresh) {
-        for (Share s : DisplayManager.get().liveShares()) {
-            if (!s.source().id().equals(id)) continue;
-            RESTARTING.add(id);
-            try {
-                for (Display d : new ArrayList<>(s.displays())) {
-                    CaptureSettings settings = d.lastSettings != null ? d.lastSettings : ClientSettings.get();
-                    DisplayManager.get().stop(d);
-                    DisplayManager.get().start(d, fresh, settings);
-                }
-            } finally {
-                RESTARTING.remove(id);
-            }
-        }
     }
 
     // ---- moving windows ------------------------------------------------------------------------------
@@ -534,8 +519,6 @@ public final class InGameMonitors {
         if (backend() != null) backend().close(hwnd);
     }
 
-    /** Browsers that can run a separate copy of themselves (their own sign-ins, their own sound). */
-    private static final java.util.Set<String> OWN_COPY = java.util.Set.of("chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe");
     private static final Map<Long, String> EXE_OF = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The program file of that process ("" if unknown). */
@@ -544,32 +527,18 @@ public final class InGameMonitors {
         return EXE_OF.computeIfAbsent(pid, p -> ProcessHandle.of(p).flatMap(h -> h.info().command()).orElse(""));
     }
 
-    /** Can that app have a copy of its own on a monitor? Its name if so ("Brave"), else null. */
-    public static String ownCopyName(long pid) {
+    /** That app's name, from its program ("Brave" for brave.exe, "Discord"…; null if unknown). */
+    public static String appName(long pid) {
         String exe = exeOf(pid);
         String file = exe.substring(Math.max(exe.lastIndexOf('\\'), exe.lastIndexOf('/')) + 1).toLowerCase(java.util.Locale.ROOT);
-        if (!OWN_COPY.contains(file)) return null;
+        if (!file.endsWith(".exe")) return null;
         return switch (file) {
             case "chrome.exe" -> "Chrome";
             case "msedge.exe" -> "Edge";
             case "brave.exe" -> "Brave";
-            case "vivaldi.exe" -> "Vivaldi";
-            case "opera.exe" -> "Opera";
-            default -> "Firefox";
+            case "firefox.exe" -> "Firefox";
+            default -> Character.toUpperCase(file.charAt(0)) + file.substring(1, file.length() - 4);
         };
-    }
-
-    /**
-     * Opens a separate copy of that browser on this monitor: a process of its own (so its sound
-     * is this monitor's alone, and it closes with the monitor), with its own sign-ins and tabs,
-     * kept for this monitor next time.
-     */
-    public static CompletableFuture<Boolean> openOwnCopy(Display d, long pid) {
-        Mon m = monitorOf(d);
-        String exe = exeOf(pid);
-        if (m == null || backend() == null || exe.isEmpty() || ownCopyName(pid) == null) return CompletableFuture.completedFuture(false);
-        guardFocus();
-        return backend().ownBrowser(m, exe);
     }
 
     public static void sendHome(long hwnd) {
@@ -1042,6 +1011,7 @@ public final class InGameMonitors {
                     SourceInfo src = d.share().source();
                     LIVE.remove(src.id()); // (first: it's gone already, nothing to remove)
                     NUMBER.remove(src.id());
+                    MISSING_SINCE.remove(src.id());
                     DisplayManager.get().stop(d);
                     // the wall/monitor/tablet gets a fresh monitor of its own, as if you pressed U again
                     long now = System.currentTimeMillis();
@@ -1053,7 +1023,7 @@ public final class InGameMonitors {
                     }
                     recent.add(now);
                     if (mc.world != null && DisplayManager.get().all().contains(d)) {
-                        hint(mc, "Windows dropped an in-game monitor - turning it back on…");
+                        hint(mc, "Windows dropped an in-game monitor (its apps closed with it) - turning it back on…");
                         turnOn(mc, d.dimension, d.rect, d);
                     }
                 }

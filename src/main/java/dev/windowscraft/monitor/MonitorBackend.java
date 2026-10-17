@@ -118,11 +118,8 @@ public interface MonitorBackend {
     /** The windows of programs running in that monitor's box. */
     default CompletableFuture<List<Win>> boxApps(Mon m) { return CompletableFuture.completedFuture(List.of()); }
 
-    /** Which wall this monitor is (its own browser copies are kept per wall). */
+    /** Which wall this monitor is (its own copies' box is kept per wall). */
     default void profileKey(Mon m, String key) {}
-
-    /** The monitor's own copy of that browser (its own profile, kept for this wall) opens on it. */
-    default CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) { return CompletableFuture.completedFuture(false); }
 
     /**
      * Your real cursor goes onto that monitor while the game keeps the keyboard (Alt-pointing at

@@ -324,6 +324,19 @@ public final class DisplayManager {
         d.endedMessage = null;
     }
 
+    /**
+     * That source is somewhere else now (an in-game monitor Windows moved or gave another size):
+     * its share goes on where it is — see {@link Share#retarget}.
+     */
+    public void retarget(String sourceId, SourceInfo fresh) {
+        Share s = shareFor(sourceId);
+        if (s == null) return;
+        s.retarget(fresh);
+        for (Display d : s.displays) d.lastSource = fresh.descriptor();
+        if (s.publisher != null) s.publisher.setTargets(targets(s));
+        save();
+    }
+
     public void remove(Display d) {
         detach(d);
         displays.remove(d);
@@ -505,6 +518,7 @@ public final class DisplayManager {
      * possible; stop it when switched off; let the CPU capture rest while it feeds the wall.
      */
     private void tickGpuSharing(Share s) {
+        if (s.gpuFailed && s.gpuRetry.due(System.nanoTime())) s.gpuFailed = false; // (its time to try again: started below)
         boolean want = dev.windowscraft.render.GpuInterop.wanted() && dev.windowscraft.capture.GpuShare.supported(s.source) && !s.gpuFailed;
         int fps = s.session.settings().fps();
         // (an in-game monitor: every picture it shows, at your screen's refresh rate)

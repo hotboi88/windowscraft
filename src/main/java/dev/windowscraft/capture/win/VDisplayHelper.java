@@ -288,10 +288,6 @@ public final class VDisplayHelper implements MonitorBackend {
     }
     @Override public CompletableFuture<Void> boxReset(Mon m) { return call("boxreset " + m.index(), "boxreset").thenApply(l -> null); }
     @Override public CompletableFuture<List<Win>> boxApps(Mon m) { return call("boxapps " + m.index(), "windows-end").thenApply(VDisplayHelper::wins); }
-    @Override
-    public CompletableFuture<Boolean> ownBrowser(Mon m, String exePath) {
-        return call("ownbrowser\t" + m.index() + "\t" + exePath.replace('\t', ' ').replace('\n', ' '), "ownbrowser").thenApply(l -> last(l).endsWith("ok"));
-    }
 
     @Override
     public void point(Mon m, long gameWindow, double u, double v) {
