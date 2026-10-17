@@ -366,8 +366,12 @@ public final class WinGameTest implements ClientModInitializer {
             }
             case 10 -> {
                 if (tick < 20) return;
-                look(mc, 7.0, ground + 1, -1.5, DisplayManager.get().findAt(dim(mc), mon(), Direction.SOUTH) != null
-                        ? dev.windowscraft.block.MonitorBlock.rectAt(mc.world, mon().east()).center() : Vec3d.ofCenter(mon().east()));
+                // (the placed monitor's screen is there once its block has its pose from the server:
+                // a moment, now and then more than a second)
+                var placed = dev.windowscraft.block.MonitorBlock.rectAt(mc.world, mon().east());
+                if (placed == null && tick < 200) return;
+                look(mc, 7.0, ground + 1, -1.5, DisplayManager.get().findAt(dim(mc), mon(), Direction.SOUTH) != null && placed != null
+                        ? placed.center() : Vec3d.ofCenter(mon().east()));
                 stage++;
                 tick = 0;
             }

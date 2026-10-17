@@ -2059,10 +2059,12 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     // starts a test app the normal way (as from a monitor's own Start menu); its window
     let start = |exe: &std::path::Path| -> Option<HWND> {
         let stem = exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        // (its own new window: another copy of the same app may be open already)
+        let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
         use std::os::windows::process::CommandExt;
         let _ = Command::new(exe).current_dir("C:\\").creation_flags(0x0800_0000).spawn(); // (no console window)
         // (in a box its title could carry Sandboxie's [#] marker: that's checked on its own)
-        (0..48).find_map(|_| { sleep(250); top_windows().into_iter().find(|w| title(*w).contains(&stem) && class_name(*w) != "ConsoleWindowClass") })
+        find_new(&before, 12000, |w| title(*w).contains(&stem) && class_name(*w) != "ConsoleWindowClass")
     };
     let finish = |w: Option<HWND>| if let Some(w) = w { let p = pid(w); let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output(); };
     let rep_times = std::sync::Mutex::new(Vec::<u128>::new());
@@ -2160,6 +2162,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     //     also box the new processes your desk's copy starts meanwhile, and break it (the Claude
     //     app's window went gray that way). Opened on the monitor, it's the monitor's own copy.
     let _ = h.call("unseat", "unseated", 8000);
+    // (up from the monitor: the rule goes a moment later — what starts before that is still the
+    //  monitor's)
+    let _ = wait_for(5000, || h.call("forcestate", "forcestate", 3000).ok().and_then(|l| l.last().cloned()).is_some_and(|l| l == "forcestate -"));
     let desk_b = start(&app("wcapp_b"));
     let s = seat(&h, ma.idx);
     let mut rules = ini_forced();
