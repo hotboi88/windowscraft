@@ -255,7 +255,6 @@ static GAME_HOLDS: AtomicBool = AtomicBool::new(false);
 static GAME_RESTORE: Mutex<(i32, i32)> = Mutex::new((0, 0));
 static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 static DISPLAY_CHANGES: AtomicIsize = AtomicIsize::new(0);
-static ROUND: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
@@ -674,7 +673,6 @@ fn main() {
     // (several rounds: a check that passes only sometimes is a bug too)
     let rounds = arg("--rounds").and_then(|r| r.parse::<u32>().ok()).unwrap_or(1).max(1);
     for round in 1..=rounds {
-        ROUND.store(round as isize, Ordering::SeqCst);
         if rounds > 1 {
             rep.line(format!("---- round {round} of {rounds}"));
         }
@@ -1401,7 +1399,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     // ---- 10b. leaving the world: every monitor off together — one change to your screens, not one
     //      each ("instead of making my screen go black 10 separate times"); and only what's a
     //      monitor's own closes with it ("my apps all disappear from my main desktop")
-    let _watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
+    let watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
     let screens_before = monitors().len();
     let three: Vec<Mon> = (0..3).filter_map(|_| add(&h, 1920, 1080).ok()).collect();
     if three.len() == 3 {
@@ -1465,6 +1463,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             let _ = h.call(&format!("remove {}", m.idx), "removed", 15000);
         }
     }
+    close(watch); // (one per round: each would count every change once more)
 
     // ---- 11. the cursor and text stay the same size at any resolution
     let mut sizes = Vec::new();
@@ -1634,14 +1633,14 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             if let Ok(d) = d {
                 let _ = h2.call(&format!("remove {}", d.idx), "removed", 15000);
             }
-            // ---- 16. leaving the world with several monitors on (nothing else on): they all go
-            //      together — "instead of making my screen go black 10 separate times just once".
-            //      Each way of letting them go, by the changes to the screens' layout it makes.
-            let _watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
-            let modes: &[&str] = if ROUND.load(Ordering::SeqCst) <= 1 { &["plain", "together", "letgo", "both", ""] } else { &[""] };
+            // ---- 16. leaving the world with several monitors on (nothing else on): every one of
+            //      them makes Windows lay the screens out again — "my screen go black 10 separate
+            //      times" — and that's as few as this driver allows (it takes its monitors away one
+            //      at a time; letting them go together, or taking them off the desktop first, was
+            //      measured here: the same, or one more). Never more than one each.
+            let watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
             let mut seen = Vec::new();
-            for mode in modes {
-                let _ = h2.call(&format!("offmode {mode}"), "offmode", 5000);
+            {
                 let on: Vec<Mon> = (0..3).filter_map(|_| add(&h2, 1920, 1080).ok()).collect();
                 sleep(1500);
                 let c0 = DISPLAY_CHANGES.load(Ordering::SeqCst);
@@ -1664,14 +1663,13 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
                 let settled = wait_for(6000, || monitors().len() == real.len());
                 sleep(1500);
                 let changes = DISPLAY_CHANGES.load(Ordering::SeqCst) - c0;
-                let name = if mode.is_empty() { "as shipped" } else { mode };
-                rep.note(format!("(leaving with {} monitors, {name}: {changes} changes to the screens' layout, {ms} ms, all gone {settled})", on.len()));
-                seen.push((name, on.len(), done, settled, changes));
+                rep.note(format!("(leaving with {} monitors: {changes} changes to the screens' layout, {ms} ms, all gone {settled})", on.len()));
+                seen.push((on.len(), done, settled, changes));
             }
-            if let Some(&(_, n, done, settled, changes)) = seen.iter().find(|s| s.0 == "as shipped") {
-                let plain = seen.iter().find(|s| s.0 == "plain").map(|s| s.4);
-                rep.check("leaving with several monitors on: they all go together, in one change to your screens", n == 3 && done == n && settled && changes <= 1,
-                    format!("{changes} layout changes (one after another: {plain:?}) · {done}/{n} removed · all gone {settled}"));
+            close(watch);
+            if let Some(&(n, done, settled, changes)) = seen.first() {
+                rep.check("leaving with several monitors on: all of them go, with no more than one change to your screens each", n == 3 && done == n && settled && changes as usize <= n,
+                    format!("{changes} layout changes for {n} monitors · {done}/{n} removed · all gone {settled}"));
             }
             h2.stop();
         }

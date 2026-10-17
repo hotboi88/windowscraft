@@ -1,4 +1,7 @@
-WindowsCraft 0.15.30 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.31 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.31: your desk's windows stay on your desk when in-game monitors come and go, and
+closing the game never closes or hides them.
 
 New in 0.15.30: a browser on a monitor (Chrome, Edge, Brave and the like) starts signed in
 like the one on your desk.

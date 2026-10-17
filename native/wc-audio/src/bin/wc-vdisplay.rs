@@ -5368,11 +5368,6 @@ fn main() {
                 taskbars_separate(p.get(1) == Some(&"on"));
                 say("taskbar done");
             }
-            Some("offmode") => {
-                // (tests) how monitors that go together go: see OFF_MODE
-                *OFF_MODE.lock().unwrap() = p.get(1).unwrap_or(&"").to_string();
-                say("offmode done");
-            }
             Some("forcestate") => {
                 // (tests) the box new programs really start in now
                 say(&format!("forcestate {}", FORCE_LIVE.lock().unwrap().clone().unwrap_or_else(|| "-".into())));
@@ -5738,45 +5733,15 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
     for &idx in &list {
         leftovers.extend(clear_monitor(added, homes, idx, boxed.len() <= 1));
     }
-    // then they go: each one unplugged on its own made every screen go black once per monitor
-    // ("instead of making my screen go black 10 separate times just once")
-    let mode = Some(OFF_MODE.lock().unwrap().clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| "letgo".into());
-    let devices: Vec<String> = list.iter().filter_map(|i| added.lock().unwrap().get(i).map(|a| a.device.clone())).filter(|d| !d.is_empty() && rect_of(d).is_some()).collect();
-    if matches!(mode.as_str(), "together" | "both") && devices.len() > 1 {
-        detach_together(&devices);
-    }
+    // then they're unplugged. Each one makes Windows lay your screens out again (a blink of every
+    // screen, "my screen go black 10 separate times"), and that can't be merged into one: the
+    // driver takes its monitors away one at a time, ~3 s apart, whichever way it's asked — all
+    // asked for at once, or let go together — and Windows answers each. Taking them all off the
+    // desktop first made it one more, not one: at every step Windows puts back the layout it
+    // remembers for the monitors that are left (the self-test counted each way).
     let others = window_spots(); // (the monitors that stay, and your desk: Windows may shuffle them)
-    let everyone = added.lock().unwrap().keys().all(|i| list.contains(i));
-    if matches!(mode.as_str(), "letgo" | "both") && everyone && list.len() > 1 {
-        // every monitor goes (leaving the world): the driver lets all of its monitors go at once
-        // when it isn't kept alive any more — instead of one after another, ~3 s apart
-        let t = Instant::now();
-        for &idx in &list {
-            added.lock().unwrap().remove(&idx); // (the keep-alive stops with the last one)
-        }
-        *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
-        while t.elapsed() < Duration::from_secs(4) && list.iter().any(|i| device_for_index(*i).is_some()) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let left: Vec<i32> = list.iter().copied().filter(|i| device_for_index(*i).is_some()).collect();
-        eprintln!("info=let the driver drop {} in-game monitors together ({} ms{})", list.len(), t.elapsed().as_millis(),
-            if left.is_empty() { String::new() } else { format!(", {left:?} still there: unplugged") });
-        let v = vdd.lock().unwrap().clone();
-        if let Some(v) = v {
-            for &idx in &left {
-                v.remove(idx);
-            }
-        }
-    } else {
-        for &idx in &list {
-            unplug(vdd, added, idx);
-            if mode == "plain" {
-                let deadline = Instant::now() + Duration::from_secs(3);
-                while Instant::now() < deadline && device_for_index(idx).is_some() {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-        }
+    for &idx in &list {
+        unplug(vdd, added, idx);
     }
     // (each one is asked for straight away; then all of them waited for)
     for &idx in &list {
@@ -5809,34 +5774,6 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
     }
 }
 
-/// How monitors that go together go (the self-test compares them by the changes to the screens'
-/// layout they make): "plain" — unplugged one after another; "together" — taken off the desktop
-/// in one change, then unplugged; "letgo" — when every monitor goes, the driver lets them all go
-/// at once; "both".
-static OFF_MODE: Mutex<String> = Mutex::new(String::new());
-
-/// Takes these in-game monitors off your desktop in one go: each set aside first, then Windows
-/// told once — one change to the layout of your screens instead of one per monitor. They're
-/// unplugged after, with nothing left on the desktop to rearrange.
-fn detach_together(devices: &[String]) {
-    let t0 = Instant::now();
-    unsafe {
-        for d in devices {
-            let mut p = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
-            p.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT; // (no size: off the desktop)
-            let dn = wide(d);
-            let r = ChangeDisplaySettingsExW(PCWSTR(dn.as_ptr()), Some(&p), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
-            if r != DISP_CHANGE_SUCCESSFUL {
-                eprintln!("info=Windows wouldn't set {d} aside ({}): it goes when it's unplugged", r.0);
-            }
-        }
-        step("Windows taking the monitors off the desktop");
-        let applied = ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None);
-        eprintln!("info=took {} in-game monitors off the desktop together ({} ms{})", devices.len(), t0.elapsed().as_millis(),
-            if applied == DISP_CHANGE_SUCCESSFUL { String::new() } else { format!(", Windows said {}", applied.0) });
-    }
-}
-
 /// Where every window is now (on which in-game monitor, if any, and that monitor's place then).
 fn window_spots() -> Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)> {
     app_windows().into_iter().filter_map(|h| {
@@ -5846,12 +5783,15 @@ fn window_spots() -> Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)> {
 }
 
 /// Windows moves windows by itself when a monitor comes or goes — back onto a monitor it remembers
-/// ("it moved all my windows from the other monitor i have ingame onto it"), or from one monitor to
-/// another. For a few seconds after, any window that changed monitor without WindowsCraft moving
-/// it goes back where it was: on your desk, or on its in-game monitor (wherever that is now).
+/// ("Remember window locations based on monitor connection", on by default: your in-game monitors
+/// come back as the same monitors every time), or from one monitor to another; and it minimizes
+/// what's left on a monitor that goes ("Minimize windows when a monitor is disconnected"): your
+/// desk's apps "gone" after closing the game, there in Alt+Tab. For a few seconds after, any window
+/// that changed monitor without WindowsCraft moving it goes back where it was: on your desk, or on
+/// its in-game monitor (wherever that is now). Your Windows settings stay as they are.
 fn keep_windows_put(before: Vec<(isize, Option<(i32, RECT)>, WINDOWPLACEMENT)>, why: &'static str) {
     std::thread::spawn(move || {
-        for wait in [300u64, 1200, 2500] {
+        for wait in [300u64, 1200, 2500, 4000] {
             std::thread::sleep(Duration::from_millis(wait));
             for (hw, was, p) in &before {
                 let h = HWND(*hw as *mut _);

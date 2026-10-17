@@ -115,6 +115,34 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.31 (16 Oct): your desk's windows stay yours when monitors come and go
+
+- **"my apps all disappear from my main desktop sometimes when i close the game"**, then **"now
+  they are all 'gone' but when i alt+tab they are there"**. Windows 11's "Remember window locations
+  based on monitor connection" and "Minimize windows when a monitor is disconnected" (both on by
+  default; his: defaults) — the in-game monitors come back as the same monitors every session, so
+  Windows puts desk windows back onto them as they come on (out of sight: they're virtual), and
+  minimizes them when they go. Worse, a monitor turning off closed every window on it, and ended
+  their apps 3 s later if started that session.
+- A monitor turning off now closes only what's its own (`evacuate`: opened or placed there
+  (`placed`), started for it (`owned`), its own copies (`box_of`)); any other window on it goes back
+  to the desk first ("… was on in-game monitor N without being its own: back to your desk").
+- `keep_windows_put`: for ~8 s after a monitor comes on or monitors go, any window that changed
+  monitor without WindowsCraft moving it goes back where it was (on the desk, or on its in-game
+  monitor at the same spot, wherever that monitor is now). His Windows settings aren't touched.
+- **"get rid of all ingame monitors simultaneous instead of making my screen go black 10 separate
+  times"**: not possible with the Parsec driver, measured (self-test step 16, WM_DISPLAYCHANGE
+  counted by a hidden window): one layout change per monitor whichever way — one after another 3
+  for 3; taken off the desktop together first (one `ChangeDisplaySettingsEx` batch) 4 for 3 (at every
+  unplug Windows reapplies the layout it saved for the monitors that are left); keep-alive stopped
+  so the driver lets them go: it dropped one in 4 s, the rest still one by one. The driver removes
+  its monitors one at a time ~3 s apart. Kept: one after another (no waits between the asks), and
+  a check that leaving never costs more than one change per monitor. (A driver that creates and
+  removes all its monitors at once — e.g. one configured with a monitor count and restarted —
+  would be the way; not done.)
+- Self-test 10b: a window moved onto a monitor as it comes on goes back; a desk window moved onto a
+  monitor comes back to the desk, not closed, when monitors go.
+
 ## 0.15.30 (16 Oct): a boxed browser opens your desk's sign-ins
 
 - **"sign-ins aren't carrying over."** Browsers built on Chromium (Chrome, Edge, Brave, Vivaldi,
