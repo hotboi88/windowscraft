@@ -255,6 +255,7 @@ static GAME_HOLDS: AtomicBool = AtomicBool::new(false);
 static GAME_RESTORE: Mutex<(i32, i32)> = Mutex::new((0, 0));
 static OPEN_ANOTHER: AtomicIsize = AtomicIsize::new(0);
 static DISPLAY_CHANGES: AtomicIsize = AtomicIsize::new(0);
+static ROUND: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_MOUSEWHEEL
@@ -673,6 +674,7 @@ fn main() {
     // (several rounds: a check that passes only sometimes is a bug too)
     let rounds = arg("--rounds").and_then(|r| r.parse::<u32>().ok()).unwrap_or(1).max(1);
     for round in 1..=rounds {
+        ROUND.store(round as isize, Ordering::SeqCst);
         if rounds > 1 {
             rep.line(format!("---- round {round} of {rounds}"));
         }
@@ -1449,16 +1451,16 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
         let _ = wait_for(5000, || monitors().len() == screens_before);
         sleep(1500); // (late notices)
         let changes = DISPLAY_CHANGES.load(Ordering::SeqCst) - changes0;
-        rep.note(format!("({} monitors off together in {off_ms} ms: {changes} changes to the screens' layout)", all.len()));
-        rep.check("leaving with several monitors on: they go together, in one change to your screens", done == all.len() && monitors().len() == screens_before && changes <= 1,
-            format!("{done}/{} removed · {changes} layout changes · {} screens now (was {screens_before})", all.len(), monitors().len()));
+        rep.note(format!("({} of the monitors off together while another stays on, in {off_ms} ms: {changes} changes to the screens' layout)", all.len()));
+        rep.check("several monitors off together (another staying on): all of them go", done == all.len() && monitors().len() == screens_before,
+            format!("{done}/{} removed · {} screens now (was {screens_before})", all.len(), monitors().len()));
         let alive_v = unsafe { IsWindow(Some(visitor)) }.as_bool();
         let (x, y) = center(&rect_of(visitor));
         rep.check("…and a window that was on one without being its own comes back to your desk, not closed", alive_v && inside(&prim, x, y),
             format!("still open {alive_v}, at {}", fmt(&rect_of(visitor))));
         close(visitor);
     } else {
-        rep.check("leaving with several monitors on: they go together, in one change to your screens", false, format!("only {} of 3 monitors came on", three.len()));
+        rep.check("several monitors off together (another staying on): all of them go", false, format!("only {} of 3 monitors came on", three.len()));
         for m in &three {
             let _ = h.call(&format!("remove {}", m.idx), "removed", 15000);
         }
@@ -1631,6 +1633,45 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
             rep.check("…and the next monitor turns on fine", d.is_ok(), format!("{d:?}"));
             if let Ok(d) = d {
                 let _ = h2.call(&format!("remove {}", d.idx), "removed", 15000);
+            }
+            // ---- 16. leaving the world with several monitors on (nothing else on): they all go
+            //      together — "instead of making my screen go black 10 separate times just once".
+            //      Each way of letting them go, by the changes to the screens' layout it makes.
+            let _watch = spawn_window("WindowsCraftDisplayWatch", "display watch (self-test)", RECT { left: prim.left + 4, top: prim.top + 4, right: prim.left + 40, bottom: prim.top + 40 }, true);
+            let modes: &[&str] = if ROUND.load(Ordering::SeqCst) <= 1 { &["plain", "together", "letgo", "both", ""] } else { &[""] };
+            let mut seen = Vec::new();
+            for mode in modes {
+                let _ = h2.call(&format!("offmode {mode}"), "offmode", 5000);
+                let on: Vec<Mon> = (0..3).filter_map(|_| add(&h2, 1920, 1080).ok()).collect();
+                sleep(1500);
+                let c0 = DISPLAY_CHANGES.load(Ordering::SeqCst);
+                let t = Instant::now();
+                let mut done = 0;
+                if let Some((last, rest)) = on.split_last() {
+                    for m in rest {
+                        h2.send(&format!("remove {}", m.idx));
+                    }
+                    done = h2.call(&format!("remove {}", last.idx), "removed", 60000).map_or(0, |l| l.iter().filter(|x| x.starts_with("removed")).count());
+                    while done < on.len() {
+                        match h2.answers.recv_timeout(Duration::from_secs(10)) {
+                            Ok(l) if l.starts_with("removed") => done += 1,
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                }
+                let ms = t.elapsed().as_millis();
+                let settled = wait_for(6000, || monitors().len() == real.len());
+                sleep(1500);
+                let changes = DISPLAY_CHANGES.load(Ordering::SeqCst) - c0;
+                let name = if mode.is_empty() { "as shipped" } else { mode };
+                rep.note(format!("(leaving with {} monitors, {name}: {changes} changes to the screens' layout, {ms} ms, all gone {settled})", on.len()));
+                seen.push((name, on.len(), done, settled, changes));
+            }
+            if let Some(&(_, n, done, settled, changes)) = seen.iter().find(|s| s.0 == "as shipped") {
+                let plain = seen.iter().find(|s| s.0 == "plain").map(|s| s.4);
+                rep.check("leaving with several monitors on: they all go together, in one change to your screens", n == 3 && done == n && settled && changes <= 1,
+                    format!("{changes} layout changes (one after another: {plain:?}) · {done}/{n} removed · all gone {settled}"));
             }
             h2.stop();
         }

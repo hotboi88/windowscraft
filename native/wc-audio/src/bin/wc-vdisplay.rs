@@ -5368,6 +5368,11 @@ fn main() {
                 taskbars_separate(p.get(1) == Some(&"on"));
                 say("taskbar done");
             }
+            Some("offmode") => {
+                // (tests) how monitors that go together go: see OFF_MODE
+                *OFF_MODE.lock().unwrap() = p.get(1).unwrap_or(&"").to_string();
+                say("offmode done");
+            }
             Some("forcestate") => {
                 // (tests) the box new programs really start in now
                 say(&format!("forcestate {}", FORCE_LIVE.lock().unwrap().clone().unwrap_or_else(|| "-".into())));
@@ -5733,15 +5738,45 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
     for &idx in &list {
         leftovers.extend(clear_monitor(added, homes, idx, boxed.len() <= 1));
     }
-    // then off your desktop together: one change to your screens, however many there are (each
-    // one unplugged on its own made every screen go black once per monitor)
+    // then they go: each one unplugged on its own made every screen go black once per monitor
+    // ("instead of making my screen go black 10 separate times just once")
+    let mode = Some(OFF_MODE.lock().unwrap().clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| "letgo".into());
     let devices: Vec<String> = list.iter().filter_map(|i| added.lock().unwrap().get(i).map(|a| a.device.clone())).filter(|d| !d.is_empty() && rect_of(d).is_some()).collect();
-    if devices.len() > 1 {
+    if matches!(mode.as_str(), "together" | "both") && devices.len() > 1 {
         detach_together(&devices);
     }
     let others = window_spots(); // (the monitors that stay, and your desk: Windows may shuffle them)
-    for &idx in &list {
-        unplug(vdd, added, idx);
+    let everyone = added.lock().unwrap().keys().all(|i| list.contains(i));
+    if matches!(mode.as_str(), "letgo" | "both") && everyone && list.len() > 1 {
+        // every monitor goes (leaving the world): the driver lets all of its monitors go at once
+        // when it isn't kept alive any more — instead of one after another, ~3 s apart
+        let t = Instant::now();
+        for &idx in &list {
+            added.lock().unwrap().remove(&idx); // (the keep-alive stops with the last one)
+        }
+        *LAST_DRIVER_CHANGE.lock().unwrap() = Some(Instant::now());
+        while t.elapsed() < Duration::from_secs(4) && list.iter().any(|i| device_for_index(*i).is_some()) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let left: Vec<i32> = list.iter().copied().filter(|i| device_for_index(*i).is_some()).collect();
+        eprintln!("info=let the driver drop {} in-game monitors together ({} ms{})", list.len(), t.elapsed().as_millis(),
+            if left.is_empty() { String::new() } else { format!(", {left:?} still there: unplugged") });
+        let v = vdd.lock().unwrap().clone();
+        if let Some(v) = v {
+            for &idx in &left {
+                v.remove(idx);
+            }
+        }
+    } else {
+        for &idx in &list {
+            unplug(vdd, added, idx);
+            if mode == "plain" {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline && device_for_index(idx).is_some() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
     }
     // (each one is asked for straight away; then all of them waited for)
     for &idx in &list {
@@ -5773,6 +5808,12 @@ fn remove_many(vdd: &Driver, added: &AddedMap, homes: &Homes, ids: &[i32]) {
         eprintln!("info=turned {} in-game monitors off in {} ms", list.len(), t0.elapsed().as_millis());
     }
 }
+
+/// How monitors that go together go (the self-test compares them by the changes to the screens'
+/// layout they make): "plain" — unplugged one after another; "together" — taken off the desktop
+/// in one change, then unplugged; "letgo" — when every monitor goes, the driver lets them all go
+/// at once; "both".
+static OFF_MODE: Mutex<String> = Mutex::new(String::new());
 
 /// Takes these in-game monitors off your desktop in one go: each set aside first, then Windows
 /// told once — one change to the layout of your screens instead of one per monitor. They're
