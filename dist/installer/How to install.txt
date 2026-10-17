@@ -1,4 +1,6 @@
-WindowsCraft 0.15.36 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.37 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.37: the screen-capture helper rebuilt the clean way (nothing of the PC it was built on inside).
 
 New in 0.15.36: own copies of apps work as before, but only for the apps you switch on. A page of
 its own (U → "Own copies of apps") lists every app on your PC with its own switch, all off to
