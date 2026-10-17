@@ -115,7 +115,7 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
-## 0.15.34 (17 Oct): own copies per app
+## 0.15.34 (17 Oct): own copies per app (no flash: 0.15.35)
 
 His words, after 0.15.33:
 - **"I want per monitor audio. no mixing with the same app"**
@@ -158,6 +158,20 @@ What changed:
     carve);
   - Store apps (`WindowsApps`), Steam, Epic, Battle.net, EA, Ubisoft, GOG, Riot, Rockstar and
     Roblox (`Sandbox.launcherFolders`, worked out once).
+- **No flash.** He asked: **"hold on, we're compromising with little flashes going on now just for
+  opening up the browser?"**
+  - The window the desk copy makes for that start is now caught when it's created
+    (`EVENT_OBJECT_CREATE`), not when it's shown. `on_window_created` only takes an app's own main
+    window: top-level, no owner, title bar or app-window style, no tool window.
+  - `veil` then makes it layered with alpha 0 and moves it to -32000,-32000, before Windows ever
+    draws it.
+  - Then WM_CLOSE. `VEILED` + `close_veiled` close it again if it shows up anyway, and keep it from
+    ever being placed.
+  - Probe section 10 checks this with a real Edge. The "desk" Edge runs normally; the probe sits at
+    the monitor, clicks its taskbar and starts Edge `--new-window`. A watcher looks every
+    millisecond at every new window of the desk Edge, counting any that's on a screen and not
+    see-through. It must stay at 0, the box copy must open on the monitor, and the desk Edge must
+    stay.
 - **"Own browser" removed** from the self-test.
 - **The sandbox probe** now checks:
   - the rule names just the picked apps;

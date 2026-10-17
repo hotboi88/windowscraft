@@ -3378,6 +3378,9 @@ fn on_window_shown(h: HWND, fresh: bool) {
             return;
         }
     }
+    if close_veiled(h) {
+        return; // (made invisible to be closed: it never goes anywhere)
+    }
     let p = pid(h);
     let mut target: Option<i32> = None;
     let at = cursor_monitor();
@@ -4489,6 +4492,7 @@ fn own_copy_instead(h: HWND, idx: i32, new_window: bool) -> bool {
         return false;
     }
     if new_window {
+        veil(h); // (shown already: from now on it isn't, wherever it goes)
         unsafe {
             let _ = ShowWindow(h, SW_HIDE);
             let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -4512,6 +4516,74 @@ fn own_copy_instead(h: HWND, idx: i32, new_window: bool) -> bool {
     true
 }
 
+/// A window just made — not shown yet — by your desk's copy of an app you picked, right after you
+/// used the Start, taskbar or desktop of the monitor you sit at: the start your desk's copy took
+/// for that monitor. It's made invisible before it's ever drawn (off every screen, see-through)
+/// and closed, and the monitor's own copy opens instead: nothing of it ever shows, anywhere ("we're
+/// compromising with little flashes going on now just for opening up the browser?"). Only an
+/// app's own main window (a title bar, no owner): never a tooltip, menu or hidden helper window.
+fn on_window_created(h: HWND) {
+    if !SEATED.load(Ordering::SeqCst) || ISO_APPS.lock().unwrap().is_empty() {
+        return;
+    }
+    if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
+        return;
+    }
+    unsafe {
+        if GetAncestor(h, GA_ROOT) != h || GetWindow(h, GW_OWNER).is_ok_and(|o| !o.0.is_null()) {
+            return;
+        }
+        let style = GetWindowLongW(h, GWL_STYLE) as u32;
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_TOOLWINDOW.0 != 0 || (style & WS_CAPTION.0 != WS_CAPTION.0 && ex & WS_EX_APPWINDOW.0 == 0) {
+            return;
+        }
+    }
+    let idx = SEAT_IDX.load(Ordering::SeqCst);
+    if !isolated(idx) {
+        return;
+    }
+    let p = pid(h);
+    let Some(path) = process_path(p) else { return };
+    if !chosen(&path) || !box_of(p).is_empty() {
+        return;
+    }
+    veil(h);
+    let _ = own_copy_instead(h, idx, true);
+}
+
+/// Windows made invisible to be closed (see veil): one still there when it shows is closed again.
+static VEILED: Mutex<Vec<(isize, Instant)>> = Mutex::new(Vec::new());
+
+/// Was that window veiled to be closed (in the last half minute)? Then it's asked to close again.
+fn close_veiled(h: HWND) -> bool {
+    let mut v = VEILED.lock().unwrap();
+    v.retain(|(_, t)| t.elapsed() < Duration::from_secs(30));
+    if !v.iter().any(|(x, _)| *x == h.0 as isize) {
+        return false;
+    }
+    unsafe {
+        let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
+    true
+}
+
+/// Another program's window, made invisible wherever it's shown: see-through and off every screen.
+fn veil(h: HWND) {
+    {
+        let mut v = VEILED.lock().unwrap();
+        if !v.iter().any(|(x, _)| *x == h.0 as isize) {
+            v.push((h.0 as isize, Instant::now()));
+        }
+    }
+    unsafe {
+        let ex = GetWindowLongW(h, GWL_EXSTYLE);
+        let _ = SetWindowLongW(h, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as i32);
+        let _ = SetLayeredWindowAttributes(h, COLORREF(0), 0, LWA_ALPHA);
+        let _ = SetWindowPos(h, None, -32000, -32000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
 /// While you sit at a monitor, an app that was already open on your desk comes forward (you
 /// started it again from the monitor's Start menu or taskbar, and it's one that only ever runs
 /// once — Discord, Spotify, WhatsApp…): its window comes onto the monitor instead of pulling you
@@ -4530,7 +4602,7 @@ fn on_window_activated(h: HWND) {
             return;
         }
     }
-    if is_shell(h) || !seat_known().lock().unwrap().contains(&(h.0 as isize)) {
+    if is_shell(h) || !seat_known().lock().unwrap().contains(&(h.0 as isize)) || close_veiled(h) {
         return; // the shell itself, or a new window (that one goes there by itself)
     }
     let idx = SEAT_IDX.load(Ordering::SeqCst);
@@ -4736,6 +4808,12 @@ unsafe extern "system" fn win_event(_: windows::Win32::UI::Accessibility::HWINEV
     if h.0.is_null() {
         return;
     }
+    if event == 0x8000 {
+        if obj == 0 && child == 0 {
+            on_window_created(h);
+        }
+        return;
+    }
     if event == 0x8002 && obj == 0 && class_name(h) == "Shell_SecondaryTrayWnd" {
         // Windows put a monitor's taskbar up again: over a full-screen video it goes straight away
         tidy_taskbars();
@@ -4798,6 +4876,11 @@ fn ensure_placer() {
         let hook3 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_UNCLOAKED, EVENT_OBJECT_UNCLOAKED, None, Some(win_event), 0, 0,
             0 | 2);
         let _ = hook3;
+        // a window being made, before it's ever shown (see on_window_created)
+        const EVENT_OBJECT_CREATE: u32 = 0x8000;
+        let hook4 = windows::Win32::UI::Accessibility::SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, None, Some(win_event), 0, 0,
+            0 | 2);
+        let _ = hook4;
         if hook.is_invalid() || hook2.is_invalid() {
             eprintln!("error=can't watch for new windows");
         }

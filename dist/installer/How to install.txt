@@ -1,4 +1,7 @@
-WindowsCraft 0.15.34 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.35 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.35: opening an app with its own copy on a monitor while it's open on your desk shows
+nothing on any screen but the monitor's own copy.
 
 New in 0.15.34: own copies are per app. Pick the apps (a browser, Discord…) that get their own
 copy on every monitor, with its own sound and sign-ins; none until you do, and games and

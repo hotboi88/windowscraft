@@ -2335,6 +2335,108 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         }
         h5.stop();
     }
+    // 10. a real browser you picked, open on your desk, opened from the monitor's own taskbar: the
+    //     start your desk's copy takes is made invisible before it's ever drawn and closed —
+    //     nothing of it on any screen, not for a moment ("we're compromising with little flashes
+    //     going on now just for opening up the browser?") — and the monitor's own copy opens there
+    let edge = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
+        .into_iter().find(|p| std::path::Path::new(p).exists());
+    match (edge, Helper::start(&vexe)) {
+        (None, h6) => {
+            rep.skip("a browser you picked, opened from the monitor while it's open on your desk", "Edge isn't installed");
+            if let Ok(h6) = h6 { h6.stop(); }
+        }
+        (Some(_), Err(e)) => rep.check("helper starts again", false, e),
+        (Some(e), Ok(h6)) => {
+            let _ = h6.call("status", "status", 15000);
+            if let Ok(m) = add(&h6, 1920, 1080) {
+                h6.send(&format!("isoapps\t{e}"));
+                h6.send(&format!("profilekey {} {ka}", m.idx));
+                h6.send(&format!("isolate {} 1", m.idx));
+                exceptions(&h6);
+                sleep(500);
+                let rm = now_rect(&h6, m.idx).unwrap_or(m.r);
+                let profile = std::env::temp_dir().join(format!("wc-selftest-edge-desk-{}", std::process::id()));
+                let _ = std::fs::create_dir_all(&profile);
+                let args = |last: &str| vec![format!("--user-data-dir={}", profile.display()), "--no-first-run".to_string(), "--no-default-browser-check".to_string(), last.to_string()];
+                // your desk's Edge, started normally (not sitting anywhere)
+                let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+                let _ = Command::new(e).args(args("about:blank")).spawn();
+                let desk = find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty() && { let r = rect_of(*w); r.right - r.left >= 300 });
+                sleep(2500);
+                let desk_pid = desk.map_or(0, pid);
+                // sitting at the monitor, its own taskbar used (as you'd open the browser there)
+                let sr = seat(&h6, m.idx);
+                let tray = taskbar_on(&rm);
+                if let Some(t) = tray {
+                    let tr = rect_of(t);
+                    unsafe {
+                        let _ = SetCursorPos(tr.left + (tr.right - tr.left) * 3 / 4, (tr.top + tr.bottom) / 2);
+                    }
+                    sleep(100);
+                    click(false); // (a click on the monitor's own taskbar, as you'd start the browser from there)
+                }
+                sleep(400);
+                // every window your desk's Edge makes from now on, looked at every millisecond: on a
+                // screen and not see-through, even once?
+                let known: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+                let screens: Vec<RECT> = monitors().into_iter().map(|(_, r)| r).collect();
+                let watching = Arc::new(AtomicBool::new(true));
+                let seen = Arc::new(Mutex::new((0u32, Vec::<String>::new())));
+                let (wt, st) = (watching.clone(), seen.clone());
+                let th = std::thread::spawn(move || {
+                    while wt.load(Ordering::SeqCst) {
+                        for w in top_windows() {
+                            if known.contains(&(w.0 as isize)) || pid(w) != desk_pid {
+                                continue;
+                            }
+                            let r = rect_of(w);
+                            let on_screen = screens.iter().any(|s| r.left < s.right && s.left < r.right && r.top < s.bottom && s.top < r.bottom);
+                            let ex = unsafe { GetWindowLongW(w, GWL_EXSTYLE) } as u32;
+                            let mut alpha = 255u8;
+                            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+                            if ex & WS_EX_LAYERED.0 != 0 {
+                                let _ = unsafe { GetLayeredWindowAttributes(w, None, Some(&mut alpha), Some(&mut flags)) };
+                            }
+                            let see_through = ex & WS_EX_LAYERED.0 != 0 && flags.0 & LWA_ALPHA.0 != 0 && alpha == 0;
+                            if on_screen && !see_through {
+                                let mut s = st.lock().unwrap();
+                                s.0 += 1;
+                                if s.1.len() < 5 {
+                                    s.1.push(format!("{}/{} at {}", title(w), class_name(w), fmt(&r)));
+                                }
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                });
+                // the start from the monitor's taskbar: Windows runs the browser like this, and it
+                // hands the start to the copy that's open (your desk's)
+                let log0 = HELPER_LOG.lock().unwrap().len();
+                let before2: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+                let _ = Command::new(e).args(args("--new-window")).spawn();
+                let copy = find_new(&before2, 25000, |w| exe_of(pid(*w)) == "msedge.exe" && pid(*w) != desk_pid && on(Some(*w), &rm));
+                sleep(1500);
+                watching.store(false, Ordering::SeqCst);
+                let _ = th.join();
+                let boxed = copy.is_some_and(|w| in_box(&h6, m.idx).contains(&pid(w)));
+                let took = HELPER_LOG.lock().unwrap()[log0..].iter().any(|l| l.contains("as your desk's: its own copy opens there instead"));
+                let (looks, what) = seen.lock().unwrap().clone();
+                let desk_ok = desk.is_some_and(|w| unsafe { IsWindow(Some(w)).as_bool() } && pid(w) == desk_pid && !in_box(&h6, m.idx).contains(&desk_pid));
+                rep.check("a browser you picked, opened from the monitor's taskbar while it's open on your desk: the monitor's own copy opens, in its box, on it",
+                    boxed && took, format!("{sr:?} · taskbar {:?} · copy {:?} at {} · taken {took}", tray.map(|t| t.0 as isize), copy.map(pid), copy.map(|w| fmt(&rect_of(w))).unwrap_or_default()));
+                rep.check("…and the window your desk's copy made for it never showed on any screen, not for a moment",
+                    took && looks == 0, format!("seen on a screen {looks}× {what:?}"));
+                rep.check("…and your desk's copy is still there, as it was", desk_ok, format!("desk Edge {desk_pid}"));
+                if let Some(w) = copy {
+                    let _ = Command::new("taskkill").args(["/PID", &pid(w).to_string(), "/T", "/F"]).output();
+                }
+                let _ = Command::new("taskkill").args(["/PID", &desk_pid.to_string(), "/T", "/F"]).output();
+                let _ = h6.call(&format!("remove {}", m.idx), "removed", 30000);
+            }
+            h6.stop();
+        }
+    }
     sleep(1000);
     rep.note(format!("(the rule was there this many ms after sitting down: {:?})", rep_times.lock().unwrap()));
     rep.check("at the end, no rule is left that would box your desk's apps", ini_forced().is_empty(), format!("{:?}", ini_forced()));
