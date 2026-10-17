@@ -22,10 +22,12 @@ import java.util.concurrent.CompletableFuture;
 import net.fabricmc.loader.api.FabricLoader;
 
 /**
- * Own copies of apps on each in-game monitor, through Sandboxie-Plus (free, open source): each
- * monitor has its own box, and what you start while you sit at it is its own copy — its own sound,
- * its own logins and data, kept. Sandboxie is installed once (quietly, one permission prompt) and
- * never shows itself: WindowsCraft drives it.
+ * Own copies of apps on each in-game monitor, through Sandboxie-Plus (free, open source): you pick
+ * the apps (none by default), and each monitor runs its own copy of them in its own box — its own
+ * sound, never mixed with another monitor's or your desk's, its own sign-ins, kept. Everything you
+ * didn't pick runs normally: games, their launchers, Store apps ("configurable per app and off by
+ * default … while not being automatically blocked from games n stuff"). Sandboxie is installed
+ * once (quietly, one permission prompt) and never shows itself: WindowsCraft drives it.
  */
 public final class Sandbox {
     /** The exact build that was checked (silent install, hidden, boxes) — and its fingerprint. */
@@ -64,14 +66,20 @@ public final class Sandbox {
         }
     }
 
-    /** That monitor's settings to the helper (its box, own copies on or off). */
+    /**
+     * That monitor's box to the helper. Every monitor has one once you've picked an app: its copies
+     * keep their own sign-ins (the box is never emptied), and files saved there go to your own
+     * folders.
+     */
     static void push(MonitorBackend.Mon m, Display d) {
         MonitorBackend b = InGameMonitors.backend();
         if (b == null || m == null || d == null) return;
         // (joined monitors are one PC with several screens: one box, the group's)
         b.profileKey(m, InGameMonitors.groupKey(d));
-        b.boxOptions(m, d.followDesk, !d.filesHere); // (before isolate: the box is never emptied for the wrong reason)
-        b.isolate(m, d.ownCopies);
+        b.boxOptions(m, false, true); // (before isolate: the box is never emptied for the wrong reason)
+        List<String> apps = ClientSettings.ownCopyApps();
+        b.ownCopyApps(apps); // (a helper started again since has them too; the same list again changes nothing)
+        b.isolate(m, !apps.isEmpty());
     }
 
     public static void pushAll() {
@@ -82,7 +90,38 @@ public final class Sandbox {
         }
     }
 
-    /** What never goes in a box: what you picked, WindowsCraft and the game, games with anti-cheat. */
+    /**
+     * Must that program always run normally — a game, a launcher, a Store app, the game you play in
+     * (they refuse to run in a box, or anti-cheat flags them)? Then it's never offered as one with
+     * its own copy on every monitor.
+     */
+    public static boolean mustRunNormally(String exePath) {
+        if (exePath == null || exePath.isEmpty()) return true;
+        String p = exePath.replace('/', '\\').toLowerCase(Locale.ROOT);
+        List<String> folders = new ArrayList<>(launcherFolders());
+        folders.add(FabricLoader.getInstance().getGameDir().toAbsolutePath().toString());
+        String jh = System.getProperty("java.home");
+        if (jh != null) folders.add(jh);
+        folders.addAll(autoFolders);
+        for (Path l : libraries) folders.add(l.toAbsolutePath().toString());
+        for (String f : folders) {
+            String d = f.replace('/', '\\').toLowerCase(Locale.ROOT);
+            if (!d.endsWith("\\")) d += "\\";
+            if (p.startsWith(d)) return true;
+        }
+        return false;
+    }
+
+    /** The apps with their own copy on every monitor (programs' paths), changed: saved and sent. */
+    public static void setOwnCopyApps(List<String> programs) {
+        ClientSettings.setOwnCopyApps(programs);
+        pushAll();
+    }
+
+    /**
+     * What always runs normally, also when a monitor's own copy starts it: WindowsCraft and the
+     * game, games (your libraries) and their launchers, Store apps, what you picked to.
+     */
     public static void pushExceptions() {
         MonitorBackend b = InGameMonitors.backend();
         if (b == null) return;
@@ -91,9 +130,50 @@ public final class Sandbox {
         String jh = System.getProperty("java.home");
         if (jh != null) folders.add(Path.of(jh).toAbsolutePath().toString());
         folders.addAll(autoFolders);
-        List<String> apps = new ArrayList<>();
-        for (Path p : libraries) apps.add(p.toAbsolutePath().toString());
-        b.isolationExceptions(ClientSettings.isoPrograms(), folders, apps);
+        for (Path p : libraries) folders.add(p.toAbsolutePath().toString());
+        folders.addAll(launcherFolders());
+        b.isolationExceptions(ClientSettings.isoPrograms(), folders);
+    }
+
+    /**
+     * What a monitor's own copy may start that must run normally, wherever it's opened from: Store
+     * apps (they can't run in a box), game launchers and Roblox (a game started from a boxed browser
+     * landed in the box, and its anti-cheat refused it). The ones on this PC.
+     */
+    static List<String> launcherFolders() {
+        List<String> have = launchers;
+        if (have == null) launchers = have = findLauncherFolders(); // (looked for once per game)
+        return have;
+    }
+    private static volatile List<String> launchers;
+
+    private static List<String> findLauncherFolders() {
+        List<String> out = new ArrayList<>();
+        String pf = System.getenv("ProgramW6432") != null ? System.getenv("ProgramW6432") : System.getenv("ProgramFiles");
+        String pf86 = System.getenv("ProgramFiles(x86)"), local = System.getenv("LOCALAPPDATA");
+        List<Path> maybe = new ArrayList<>();
+        if (pf != null) {
+            maybe.add(Path.of(pf, "WindowsApps"));
+            maybe.add(Path.of(pf, "Electronic Arts"));
+            maybe.add(Path.of(pf, "EA Games"));
+            maybe.add(Path.of(pf, "Roblox"));
+        }
+        if (pf86 != null) {
+            for (String n : new String[]{"Steam", "Epic Games", "Battle.net", "Ubisoft", "GOG Galaxy", "Origin", "Roblox", "Rockstar Games"}) maybe.add(Path.of(pf86, n));
+        }
+        if (local != null) maybe.add(Path.of(local, "Roblox"));
+        maybe.add(Path.of("C:\\Riot Games"));
+        try {
+            String steam = com.sun.jna.platform.win32.Advapi32Util.registryGetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER,
+                    "Software\\Valve\\Steam", "SteamPath");
+            maybe.add(Path.of(steam.replace('/', '\\')));
+        } catch (Throwable ignored) {
+        }
+        for (Path p : maybe) {
+            String s = p.toAbsolutePath().toString();
+            if (Files.isDirectory(p) && out.stream().noneMatch(s::equalsIgnoreCase)) out.add(s);
+        }
+        return List.copyOf(out);
     }
 
     /** Games with anti-cheat (they refuse to run in a box): their folders, found in your game libraries. */

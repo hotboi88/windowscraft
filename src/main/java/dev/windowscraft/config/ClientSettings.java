@@ -54,6 +54,12 @@ public final class ClientSettings {
     private static double seatZoom = -1, watchZoom = -1;
     /** Programs you picked to always run normally (never as a monitor's own copy). */
     private static java.util.List<String> isoPrograms = new java.util.ArrayList<>();
+    /**
+     * Apps you picked to have their own copy on every in-game monitor (their programs' paths): each
+     * monitor runs its own, in its own Sandboxie box — its own sound, never mixed with another
+     * monitor's or your desk's. None by default: everything else always runs normally.
+     */
+    private static java.util.List<String> ownCopyApps = new java.util.ArrayList<>();
     private static boolean lightMipmaps = false; // (every picture sharp, from up close or far)
     private static int tabletW = 1920, tabletH = 1080; // (wide, like a monitor)
 
@@ -79,6 +85,7 @@ public final class ClientSettings {
                     if (o.has("deskView")) deskView = o.get("deskView").getAsBoolean();
                     if (o.has("seatZoom")) seatZoom = o.get("seatZoom").getAsDouble();
                     if (o.has("isoPrograms")) { isoPrograms = new java.util.ArrayList<>(); for (var e : o.getAsJsonArray("isoPrograms")) isoPrograms.add(e.getAsString()); }
+                    if (o.has("ownCopyApps")) { ownCopyApps = new java.util.ArrayList<>(); for (var e : o.getAsJsonArray("ownCopyApps")) ownCopyApps.add(e.getAsString()); }
                     if (o.has("watchZoom")) watchZoom = o.get("watchZoom").getAsDouble();
                     if (o.has("uploadKbps")) uploadKbps = Math.max(1000, o.get("uploadKbps").getAsInt());
                     if (o.has("fewerMipmaps")) lightMipmaps = o.get("fewerMipmaps").getAsBoolean(); // (a new key: the old default was on)
@@ -248,6 +255,8 @@ public final class ClientSettings {
     public static void setDeskView(boolean v) { get(); deskView = v; set(current); }
     public static java.util.List<String> isoPrograms() { get(); return java.util.List.copyOf(isoPrograms); }
     public static void setIsoPrograms(java.util.List<String> v) { get(); isoPrograms = new java.util.ArrayList<>(v); set(current); }
+    public static java.util.List<String> ownCopyApps() { get(); return java.util.List.copyOf(ownCopyApps); }
+    public static void setOwnCopyApps(java.util.List<String> v) { get(); ownCopyApps = new java.util.ArrayList<>(v); set(current); }
 
     /** The zoom you left a screen at (-1: never yet). */
     public static double seatZoom(boolean using) { get(); return using ? seatZoom : watchZoom; }
@@ -290,6 +299,9 @@ public final class ClientSettings {
         com.google.gson.JsonArray iso = new com.google.gson.JsonArray();
         for (String p : isoPrograms) iso.add(p);
         o.add("isoPrograms", iso);
+        com.google.gson.JsonArray own = new com.google.gson.JsonArray();
+        for (String p : ownCopyApps) own.add(p);
+        o.add("ownCopyApps", own);
         o.addProperty("watchZoom", watchZoom);
         o.addProperty("tabletWide", tabletW);
         o.addProperty("tabletHigh", tabletH);

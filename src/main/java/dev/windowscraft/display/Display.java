@@ -37,17 +37,6 @@ public final class Display {
     /** Its name, as you named it (null: the usual "In-game monitor 2", "Wall 3"). Remembered with its settings. */
     public volatile String name;
     /**
-     * In-game monitor: apps started while you sit at it run as its own copies (its own Sandboxie
-     * box). Off unless you turn it on: Sandboxie's rule boxes every program that starts meanwhile,
-     * your desk's too, and games, their stores and Store apps don't run in a box ("lets go back to
-     * normal for apps").
-     */
-    public boolean ownCopies;
-    /** With own copies: its apps start from your desk's sign-ins each time (its box emptied once they've all closed). */
-    public boolean followDesk = true;
-    /** With own copies: files saved there stay on this monitor (in its box) instead of going to your own folders. */
-    public boolean filesHere;
-    /**
      * This screen's own performance picks, where it isn't like all screens (setting key →
      * "true"/"false"; see ClientSettings.on(Auto, Display)). Absent: like all screens.
      */

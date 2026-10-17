@@ -3463,6 +3463,14 @@ fn on_window_shown(h: HWND, fresh: bool) {
             app_windows().into_iter().any(|o| o != h && pid(o) == p && on_area(o, &area)).then_some(mine)
         });
     }
+    // an app you picked, opened from the monitor but as your desk's copy: the monitor's own instead
+    if fresh {
+        if let Some(i) = target {
+            if own_copy_instead(h, i, true) {
+                return;
+            }
+        }
+    }
     if fresh && monitor_of_window(h).is_some() != target.is_some() {
         eprintln!("info=new window \"{}\" ({}): {} (cursor on {:?}, seated {}, pointing {}, game in front {}, on your desk {})", title(h), class_name(h),
             target.map_or("your desk".to_string(), |i| format!("in-game monitor {i}")), at, SEATED.load(Ordering::SeqCst),
@@ -3491,18 +3499,58 @@ fn on_window_shown(h: HWND, fresh: bool) {
 
 // ---- own copies of apps: each in-game monitor's own Sandboxie box ----------------------------------
 //
-// Windows gives sound per program, and many apps refuse a second copy of themselves. Each
-// in-game monitor (with "own copies" on) has its own Sandboxie box: while you sit at it (or point
-// at it), whatever you start lands in that box — its own copy of the app, its own sound, its own
-// logins and data, kept. Your desk is never touched. Sandboxie's own window never shows, nor does
-// any border or marker; WindowsCraft drives it from here.
+// Windows gives sound per program, and many apps refuse a second copy of themselves. For the apps
+// you pick, each in-game monitor runs its own copy in its own Sandboxie box: while you sit at it
+// (or point at it), one of them you start lands in that box — its own sound, its own sign-ins and
+// data, kept. Nothing else ever goes in a box by itself, and your desk's copies are never boxed.
+// Sandboxie's own window never shows, nor does any border or marker; WindowsCraft drives it from
+// here.
 
 static ISOLATE: Mutex<Option<HashMap<i32, bool>>> = Mutex::new(None);
 /// What never goes in a box: program names, and folders (WindowsCraft's own, games with anti-cheat…).
 static ISO_EXES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static ISO_DIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// More folders apps live in (game libraries on other drives): forced along with the usual ones.
-static ISO_APPDIRS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The apps you picked to have their own copy on every in-game monitor (their programs, as full
+/// paths when known). Nothing else ever goes in a box by itself: games, their launchers, Store apps
+/// and everything you didn't pick run normally ("configurable per app and off by default … while
+/// not being automatically blocked from games n stuff").
+static ISO_APPS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Of those, the ones running outside any box when the force rule was last written (see force_settings).
+static UNBOXED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn file_name(path: &str) -> String {
+    path.rsplit(['\\', '/']).next().unwrap_or(path).to_ascii_lowercase()
+}
+
+/// Program names (lower-case) of the apps you picked.
+fn chosen_names() -> Vec<String> {
+    let mut v: Vec<String> = ISO_APPS.lock().unwrap().iter().map(|p| file_name(p)).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Is that program (a name or a path) one you picked to have its own copy on every monitor?
+fn chosen(exe: &str) -> bool {
+    let n = file_name(exe);
+    chosen_names().iter().any(|c| *c == n)
+}
+
+/// The apps you picked that are running outside any box right now (your desk's), by name.
+fn unboxed_chosen() -> Vec<String> {
+    let names = chosen_names();
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (pid, _, exe) in process_list() {
+        if names.contains(&exe) && !out.contains(&exe) && box_of(pid).is_empty() {
+            out.push(exe);
+        }
+    }
+    out.sort();
+    out
+}
 /// The box the force rule is on right now (where new programs land), if any.
 static FORCED: Mutex<Option<String>> = Mutex::new(None);
 /// The boxes made so far. Only through `note_box` and `boxes_made`: never locked while anything
@@ -3523,10 +3571,9 @@ fn boxes_made() -> Vec<String> { BOXES_MADE.lock().unwrap_or_else(|e| e.into_inn
 static ISO_BEAT: Mutex<Option<Instant>> = Mutex::new(None);
 static ISO_THREAD: AtomicBool = AtomicBool::new(false);
 static ISO_DIRTY: AtomicBool = AtomicBool::new(false);
-// Only what can't run in a box: Windows itself (Explorer, Task Manager, Settings, installers) and
-// anti-cheat (it refuses to start there). Every other app is the monitor's own copy by default —
-// Discord, WhatsApp, launchers, a second Minecraft too ("make it so all apps run sandboxed by
-// default"); "Always run normally" lets one out. The game you play in is let out by its folder.
+// What a monitor's own copy starts that can't run in a box goes out of it: Windows itself
+// (Explorer, Task Manager, Settings, installers) and anti-cheat (it refuses to start there); games,
+// their launchers and Store apps go out by their folders (see breakout_dirs).
 const ALWAYS_NORMAL: [&str; 10] = ["explorer.exe", "taskmgr.exe", "msiexec.exe", "systemsettings.exe",
     "easyanticheat.exe", "easyanticheat_eos.exe", "beservice.exe", "beservice_x64.exe", "start_protected_game.exe", "vgc.exe"];
 
@@ -3795,36 +3842,23 @@ fn sbie_query(section: &str, setting: &str, index: u32) -> Option<String> {
 /// The box Sandboxie is really forcing new programs into now (confirmed with it, not assumed).
 static FORCE_LIVE: Mutex<Option<String>> = Mutex::new(None);
 
-/// Where your apps are installed: what's forced into the monitor's box while you sit there
-/// (never all of a drive — Windows, Sandboxie and WindowsCraft stay out).
-fn app_folders() -> Vec<String> {
-    let mut v = Vec::new();
-    for k in ["ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"] {
-        if let Ok(d) = std::env::var(k) {
-            if !v.contains(&d) && std::path::Path::new(&d).is_dir() {
-                v.push(d);
-            }
-        }
-    }
-    v.extend(ISO_APPDIRS.lock().unwrap().iter().cloned()); // (game libraries elsewhere: D:\SteamLibrary…)
-    v
-}
-
 /// While "open another copy here" starts one of the always-normal programs in a box on purpose
 /// (a second Discord): that one isn't let out of the box for those few seconds.
 static LAUNCH_ALLOW: Mutex<Option<String>> = Mutex::new(None);
 
-/// Programs that always run normally (never in a box), lower-case names.
+/// Programs that always run normally (never in a box), lower-case names — never one you picked.
 fn breakout_exes() -> Vec<String> {
+    let picked = chosen_names();
     let mut exes: Vec<String> = ALWAYS_NORMAL.iter().map(|s| s.to_string()).collect();
     exes.extend(ISO_EXES.lock().unwrap().iter().cloned());
-    exes.iter().map(|e| e.to_lowercase()).collect()
+    exes.iter().map(|e| e.to_lowercase()).filter(|e| !picked.contains(e)).collect()
 }
 
-/// Folders whose programs always run normally: the game's, Java's, anti-cheat games', yours,
-/// WindowsCraft's. (Not Sandboxie's own: its launcher has to run inside a box to start a program
-/// there — let out, it never gets there. Nor Windows': a boxed app's own little helpers from there
-/// belong in its box with it. Neither folder is ever forced into a box anyway.)
+/// Folders whose programs always run normally, also when a monitor's own copy starts them: the
+/// game's, Java's, games' and their launchers', Store apps', WindowsCraft's. Never one an app you
+/// picked lives in (its own helpers belong in its box with it). (Not Sandboxie's own: its launcher
+/// has to run inside a box to start a program there. Nor Windows': a boxed app's little helpers
+/// from there belong in its box with it.)
 fn breakout_dirs() -> Vec<String> {
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
     if let Ok(me) = std::env::current_exe() {
@@ -3832,193 +3866,16 @@ fn breakout_dirs() -> Vec<String> {
             dirs.push(d.display().to_string());
         }
     }
+    let picked: Vec<String> = ISO_APPS.lock().unwrap().iter().filter(|p| p.contains('\\')).map(|p| norm_dir(p)).collect();
+    dirs.retain(|d| {
+        let l = norm_dir(d);
+        !picked.iter().any(|p| p.starts_with(&format!("{l}\\")))
+    });
     dirs
 }
 
-// Sandboxie can't make an exception inside a forced folder (its driver has none: a program in a
-// forced folder is always boxed). So the rule is "carved": an app folder is forced whole unless an
-// exception lives in it — then its sub-folders are, one by one, around the exception. Worked out
-// in the background and kept; new folders are picked up on the next pass.
-static CARVED: Mutex<Option<(String, Instant, Vec<String>)>> = Mutex::new(None);
-static CARVING: AtomicBool = AtomicBool::new(false);
-
 fn norm_dir(p: &str) -> String {
     p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
-}
-
-fn carve_sig() -> String {
-    format!("{:?}|{:?}|{:?}", app_folders(), breakout_dirs(), breakout_exes())
-}
-
-/// None: nothing in here is an exception (force all of it). Some(list): the parts to force.
-fn carve_walk(dir: &std::path::Path, lower: &str, depth: u32, max_depth: u32, ex: &[String], names: &std::collections::HashSet<String>, budget: &mut usize) -> Option<Vec<String>> {
-    use std::os::windows::fs::MetadataExt;
-    if ex.iter().any(|e| e == lower) {
-        return Some(Vec::new());
-    }
-    let pre = format!("{lower}\\");
-    let ex_inside = ex.iter().any(|e| e.starts_with(&pre));
-    if (depth > max_depth || *budget == 0) && !ex_inside {
-        return None;
-    }
-    *budget = budget.saturating_sub(1);
-    let Ok(rd) = std::fs::read_dir(dir) else { return if ex_inside { Some(Vec::new()) } else { None } };
-    let mut kids = Vec::new();
-    for e in rd.flatten() {
-        let Ok(md) = e.metadata() else { continue };
-        if md.is_dir() {
-            if md.file_attributes() & 0x400 == 0 {
-                kids.push(e.path()); // (not links: they point elsewhere)
-            }
-        } else if names.contains(&e.file_name().to_string_lossy().to_lowercase()) {
-            return Some(Vec::new()); // an always-normal program lives here: none of this folder
-        }
-    }
-    let mut parts = Vec::new();
-    let mut clean = !ex_inside;
-    for k in kids {
-        let kl = format!("{pre}{}", k.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
-        match carve_walk(&k, &kl, depth + 1, max_depth, ex, names, budget) {
-            None => parts.push(k.display().to_string()),
-            Some(v) => {
-                clean = false;
-                parts.extend(v);
-            }
-        }
-    }
-    if clean { None } else { Some(parts) }
-}
-
-/// The app folders, carved around the exceptions — looking `max_depth` folders deep for programs
-/// that must run normally (deeper ones are assumed not to be there).
-fn carve(max_depth: u32, budget: usize) -> Vec<String> {
-    let t0 = Instant::now();
-    let ex: Vec<String> = breakout_dirs().iter().map(|d| norm_dir(d)).filter(|d| !d.is_empty()).collect();
-    let names: std::collections::HashSet<String> = breakout_exes().into_iter().collect();
-    let mut left = budget;
-    let mut out: Vec<String> = Vec::new();
-    for root in app_folders() {
-        let rl = norm_dir(&root);
-        if ex.iter().any(|e| rl == *e || rl.starts_with(&format!("{e}\\"))) {
-            continue;
-        }
-        match carve_walk(std::path::Path::new(root.trim_end_matches('\\')), &rl, 0, max_depth, &ex, &names, &mut left) {
-            None => out.push(root.trim_end_matches('\\').to_string()),
-            Some(v) => out.extend(v),
-        }
-    }
-    // (an app folder inside another: once is enough)
-    out.sort_by_key(|d| norm_dir(d));
-    out.dedup_by_key(|d| norm_dir(d));
-    let mut kept: Vec<String> = Vec::new();
-    for d in out {
-        let l = norm_dir(&d);
-        if !kept.iter().any(|k| l.starts_with(&format!("{}\\", norm_dir(k)))) {
-            kept.push(d);
-        }
-    }
-    eprintln!("info=own copies: {} app folders to box (looked {max_depth} deep, {} folders, {} ms{})", kept.len(), budget - left,
-        t0.elapsed().as_millis(), if left == 0 { ", stopped there" } else { "" });
-    kept
-}
-
-/// The folders whose programs land in the box while you sit there (worked out ahead of time;
-/// only if that hasn't happened yet is it waited for, briefly).
-fn force_folders() -> Vec<String> {
-    let sig = carve_sig();
-    let have = CARVED.lock().unwrap().clone(); // (not held while anything else runs)
-    if let Some((s, at, v)) = have {
-        if s == sig {
-            if at.elapsed() > Duration::from_secs(300) {
-                refresh_carve();
-            }
-            return v;
-        }
-    }
-    refresh_carve();
-    // never waited for: working the folders out reads every app folder (seconds on a slow disk), and
-    // meanwhile an app you start wasn't the monitor's own copy. The last list worked out for these
-    // same exceptions (kept on disk), else at once the app folders with no exception in or above
-    // them; the worked-out list follows as soon as it's there
-    if let Some(v) = carve_cache(&sig) {
-        *CARVED.lock().unwrap() = Some((sig, Instant::now() - Duration::from_secs(290), v.clone()));
-        return v;
-    }
-    coarse_folders()
-}
-
-/// The app folders that have no exception in or above them: right at once, never too much.
-fn coarse_folders() -> Vec<String> {
-    let ex: Vec<String> = breakout_dirs().iter().map(|d| norm_dir(d)).filter(|d| !d.is_empty()).collect();
-    app_folders()
-        .into_iter()
-        .filter(|r| {
-            let rl = norm_dir(r);
-            !ex.iter().any(|e| rl == *e || rl.starts_with(&format!("{e}\\")) || e.starts_with(&format!("{rl}\\")))
-        })
-        .map(|r| r.trim_end_matches('\\').to_string())
-        .collect()
-}
-
-/// Where the last worked-out list is kept (with what it was worked out for), between runs.
-fn carve_cache_path() -> Option<std::path::PathBuf> {
-    let base = std::env::var("LOCALAPPDATA").ok()?;
-    Some(std::path::Path::new(&base).join("WindowsCraft").join("own-copies-folders.txt"))
-}
-
-fn carve_cache(sig: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(carve_cache_path()?).ok()?;
-    let mut lines = text.lines();
-    if lines.next()? != sig {
-        return None;
-    }
-    let v: Vec<String> = lines.filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
-    (!v.is_empty()).then_some(v)
-}
-
-fn save_carve_cache(sig: &str, v: &[String]) {
-    let Some(p) = carve_cache_path() else { return };
-    if let Some(d) = p.parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let _ = std::fs::write(p, format!("{sig}\n{}\n", v.join("\n")));
-}
-
-/// Works the folders out (again) in the background, at low priority: a quick look first, then a
-/// deeper one. When they've changed while you sit somewhere, the rule is rewritten.
-fn refresh_carve() {
-    if CARVING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    std::thread::spawn(|| {
-        unsafe {
-            let _ = windows::Win32::System::Threading::SetThreadPriority(windows::Win32::System::Threading::GetCurrentThread(),
-                windows::Win32::System::Threading::THREAD_MODE_BACKGROUND_BEGIN);
-        }
-        loop {
-            let sig = carve_sig();
-            for (depth, budget) in [(2u32, 4_000usize), (5, 40_000)] {
-                let v = carve(depth, budget);
-                if carve_sig() != sig {
-                    break; // (the exceptions changed meanwhile: start over)
-                }
-                let mut c = CARVED.lock().unwrap();
-                let changed = c.as_ref().map_or(true, |(s, _, old)| *s != sig || *old != v);
-                *c = Some((sig.clone(), Instant::now(), v.clone()));
-                drop(c);
-                if changed {
-                    ISO_DIRTY.store(true, Ordering::SeqCst);
-                }
-                if depth > 2 {
-                    save_carve_cache(&sig, &v); // (the full look: the next run starts with it)
-                }
-            }
-            if carve_sig() == sig {
-                break;
-            }
-        }
-        CARVING.store(false, Ordering::SeqCst);
-    });
 }
 
 /// A monitor's box: no border, no [#] in titles, kept (never wiped on its own), its exceptions —
@@ -4138,8 +3995,15 @@ fn desk_files_settings() -> Vec<(String, String)> {
     s
 }
 
+/// While you sit at a monitor, the apps you picked start in its box — by program name, nothing
+/// else. Not one of them that's running outside a box (your desk's): Sandboxie's rule would also
+/// take the new processes your desk's copy starts meanwhile (a page, a helper) into the box, and
+/// break it there — the Claude app's window went gray that way. Opened on the monitor, one of
+/// those gets the monitor's own copy instead (see own_copy_instead).
 fn force_settings() -> Vec<(String, String)> {
-    force_folders().into_iter().map(|d| ("ForceFolder".to_string(), d)).collect()
+    let outside = unboxed_chosen();
+    *UNBOXED.lock().unwrap() = outside.clone();
+    chosen_names().into_iter().filter(|n| !outside.contains(n)).map(|n| ("ForceProcess".to_string(), n)).collect()
 }
 
 /// Sandboxie's own window never starts by itself: its service starts it (Sandboxie Control, with
@@ -4321,7 +4185,7 @@ fn set_force(to: Option<String>) {
     //  would otherwise slip past)
     let t1 = Instant::now();
     // (its folders, or — if Sandboxie only names the template — the force template)
-    let live = |b: &str| sbie_query(b, "ForceFolder", 0).is_some() || (0..4).any(|i| sbie_query(b, "Template", i).as_deref() == Some(FORCE_TEMPLATE));
+    let live = |b: &str| sbie_query(b, "ForceProcess", 0).is_some() || (0..4).any(|i| sbie_query(b, "Template", i).as_deref() == Some(FORCE_TEMPLATE));
     let took = loop {
         let done = to.as_ref().map_or(true, |b| live(b)) && old.as_ref().filter(|o| Some(*o) != to.as_ref()).map_or(true, |o| !live(o));
         if done {
@@ -4350,10 +4214,17 @@ fn ensure_iso_thread() {
             let want = wanted_force();
             set_force(want);
             ticks += 1;
-            if ticks % 16 == 0 && has_sbie_update() {
-                let procs = process_list();
-                quiet_sbie_ui(&procs);
-                follow_desk(&procs);
+            if ticks % 16 == 0 {
+                // (one of the apps you picked opened or closed outside a box: the rule follows)
+                let forcing = FORCED.lock().unwrap().is_some();
+                if forcing && unboxed_chosen() != *UNBOXED.lock().unwrap() {
+                    ISO_DIRTY.store(true, Ordering::SeqCst);
+                }
+                if has_sbie_update() {
+                    let procs = process_list();
+                    quiet_sbie_ui(&procs);
+                    follow_desk(&procs);
+                }
             }
         }
     });
@@ -4581,10 +4452,70 @@ fn primary_area() -> RECT {
     }
 }
 
+/// A program's full path (None: it's gone, or not ours to look at).
+fn process_path(pid: u32) -> Option<String> {
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut n = buf.len() as u32;
+        let r = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).ok().map(|_| String::from_utf16_lossy(&buf[..n as usize]));
+        let _ = CloseHandle(h);
+        r
+    }
+}
+
+/// When the monitor's own copy of an app was last started for a window of your desk's: one start
+/// for the windows it opens at once.
+static OWN_COPY_STARTED: Mutex<Option<HashMap<(i32, String), Instant>>> = Mutex::new(None);
+
+/// An app you picked to have its own copy on every monitor, opened from monitor `idx`'s Start,
+/// taskbar or desktop — and its copy on your desk took the start (a second window of it, or the
+/// one window of an app that only runs once came forward): your desk's stays your desk's, and the
+/// monitor's own copy opens there instead, in its box. Its sound is the monitor's alone ("no audio
+/// mixing between monitors AT ALL EVER"). `new_window`: that window is a new one of your desk's
+/// copy, there only for this start — it closes again before it's seen. True if so (the window is
+/// left alone then).
+fn own_copy_instead(h: HWND, idx: i32, new_window: bool) -> bool {
+    if sbie_dir().is_none() || !isolated(idx) {
+        return false;
+    }
+    if SEAT_SHELL_AT.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(8)) {
+        return false; // (not opened from the monitor just now: an app bringing up a window of its own)
+    }
+    let p = pid(h);
+    let Some(path) = process_path(p) else { return false };
+    let exe = file_name(&path);
+    if !chosen(&exe) || !box_of(p).is_empty() {
+        return false;
+    }
+    if new_window {
+        unsafe {
+            let _ = ShowWindow(h, SW_HIDE);
+            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+    {
+        let mut started = OWN_COPY_STARTED.lock().unwrap();
+        let started = started.get_or_insert_with(HashMap::new);
+        let key = (idx, exe.clone());
+        if started.get(&key).is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+            return true;
+        }
+        started.insert(key, Instant::now());
+    }
+    eprintln!("info=\"{}\" ({exe}) opened on in-game monitor {idx} as your desk's: its own copy opens there instead", title(h));
+    std::thread::spawn(move || {
+        if !box_launch(idx, &path, "") {
+            eprintln!("info=couldn't open in-game monitor {idx}'s own copy of {exe}");
+        }
+    });
+    true
+}
+
 /// While you sit at a monitor, an app that was already open on your desk comes forward (you
 /// started it again from the monitor's Start menu or taskbar, and it's one that only ever runs
 /// once — Discord, Spotify, WhatsApp…): its window comes onto the monitor instead of pulling you
-/// to your desk. It goes back to exactly where it was when the monitor turns off (or with Move →
+/// to your desk. One you picked to have its own copy on every monitor gets that instead. It goes back to exactly where it was when the monitor turns off (or with Move →
 /// Your desk), and it's never closed for it — it was yours before.
 fn on_window_activated(h: HWND) {
     if !SEATED.load(Ordering::SeqCst) || h.0 as isize == GAME.load(Ordering::SeqCst) || h.0 as isize == SINK.load(Ordering::SeqCst) {
@@ -4633,6 +4564,9 @@ fn on_window_activated(h: HWND) {
     // an app that only runs once (Discord, WhatsApp, Calculator… any of them), already open on
     // your desk or another monitor, came forward there instead of opening here: it comes over to
     // this monitor — in the middle, at a modest size, in front — in one move
+    if own_copy_instead(h, idx, false) {
+        return;
+    }
     let elsewhere = if monitor_of_window(h).is_some() { "another in-game monitor" } else { "your desk" };
     eprintln!("info=\"{}\" only runs once and was open on {elsewhere}: bringing it over to in-game monitor {idx}", title(h));
     bring_over(h, idx);
@@ -4915,6 +4849,10 @@ fn ensure_placer() {
 
 fn launch(idx: i32, file: &str, params: &str, exe: &str) -> bool {
     let Some(area) = monitor_area(idx) else { return false };
+    // an app you picked to have its own copy on every monitor: that copy, in the monitor's box
+    if isolated(idx) && sbie_dir().is_some() && (chosen(file) || (!exe.is_empty() && chosen(exe))) {
+        return box_launch(idx, file, params);
+    }
     ensure_placer();
     LAUNCHES.lock().unwrap().push(Launch {
         idx,
@@ -5737,9 +5675,7 @@ fn main() {
                 let groups: Vec<Vec<String>> = f.split(|x| *x == "|").map(|g| g.iter().filter(|x| !x.is_empty()).map(|x| x.to_string()).collect()).collect();
                 *ISO_EXES.lock().unwrap() = groups.first().cloned().unwrap_or_default().into_iter().map(|x| x.to_ascii_lowercase()).collect();
                 *ISO_DIRS.lock().unwrap() = groups.get(1).cloned().unwrap_or_default();
-                *ISO_APPDIRS.lock().unwrap() = groups.get(2).cloned().unwrap_or_default();
                 ISO_DIRTY.store(true, Ordering::SeqCst);
-                refresh_carve(); // (worked out now, before anyone sits down)
                 // Sandboxie itself on a thread of its own: its settings reload once kept this
                 // thread — the one answering the game — from answering anything for 80 s, and every
                 // in-game monitor went dark when the game restarted it
@@ -5754,6 +5690,24 @@ fn main() {
                         eprintln!("info=Sandboxie took {} ms to reload its settings", t0.elapsed().as_millis());
                     }
                 });
+            }
+            Some("isoapps") => {
+                // the apps you picked to have their own copy on every monitor (tab-separated programs)
+                let v: Vec<String> = line.splitn(2, '\t').nth(1).unwrap_or("").split('\t').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+                let changed = *ISO_APPS.lock().unwrap() != v;
+                *ISO_APPS.lock().unwrap() = v;
+                if changed {
+                    ISO_DIRTY.store(true, Ordering::SeqCst);
+                    if sbie_dir().is_some() {
+                        // (what's let out of the boxes depends on them too: every box written again)
+                        std::thread::spawn(|| {
+                            for b in boxes_made() {
+                                ensure_box(&b);
+                            }
+                            reload_conf();
+                        });
+                    }
+                }
             }
             Some("sbiestatus") => say(&format!("sbie {}", sbie_status())),
             Some("installsbie") => {

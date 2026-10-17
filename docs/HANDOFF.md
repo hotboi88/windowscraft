@@ -115,6 +115,57 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.34 (17 Oct): own copies per app
+
+His words, after 0.15.33:
+- **"I want per monitor audio. no mixing with the same app"**
+- **"no audio mixing between monitors AT ALL EVER! , plus , no sign-ins being lost"**
+- **"I want sandboxie again i guess exactly like before but configurable per app and off by default
+  that way people can select the apps they want to automatically sandbox across each monitor while
+  not being automatically blocked from games n stuff"**
+- Asked how sign-ins should behave, he picked **"Monitor keeps its sign-ins"**: a monitor's box is
+  never emptied. The first start reads the desk's sign-ins through copy-on-write; after that the
+  box keeps its own.
+
+What changed:
+- **The list.** `ClientSettings.ownCopyApps` holds program paths. It's empty by default, and it's
+  one list for every monitor.
+  - Menu: U → monitor → "Own copies of apps" has the list (× to remove) and "Add one that's open".
+    That offer never includes games, launchers, Store apps or the game itself
+    (`Sandbox.mustRunNormally`).
+  - The game sends the list to the helper (`isoapps`) with every monitor's settings, and
+    `isolate` = the list isn't empty.
+  - The per-monitor `ownCopies`/`followDesk`/`filesHere` settings are gone: no longer read or
+    saved, and joining no longer depends on them. Boxes are `boxopts follow=0 deskFiles=1`.
+  - "Always run normally" left the menu (the setting is still honoured), and so did the "Set up
+    like" picks.
+- **The rule.** While you sit at (or point at) a monitor, `Template_WCForce` holds `ForceProcess=`
+  lines, one per picked program name, instead of carved `ForceFolder`s. The whole carve machinery
+  is removed: `force_folders`, `carve*`, `app_folders`, `ISO_APPDIRS`.
+- **Desk safety.** A picked app running outside a box is left out of the rule (`unboxed_chosen`,
+  re-checked every second while forcing).
+  - Why: Sandboxie forces every new process of that name, including the ones the desk copy starts
+    (renderers, helpers), and those break in the box. That's how the Claude app went gray.
+  - Instead, `own_copy_instead` handles it. When the monitor's Start, taskbar or desktop was used
+    in the last 8 s (`SEAT_SHELL_AT`), and the desk copy took the start (a new window, or a
+    single-instance window that came forward), the new window is hidden and closed, and
+    `box_launch` starts the monitor's own copy.
+  - The game's own `launch` of a picked app on a monitor is a `box_launch` too.
+- **Breakout.** `breakout_exes` never names a picked app, and `breakout_dirs` never contains one.
+  `pushExceptions` now sends these as folders that always run normally, also when a copy starts
+  them (a game from a boxed browser was boxed and anti-cheat refused it):
+  - game libraries, now sent as folders (before, they went in the third group, which only fed the
+    carve);
+  - Store apps (`WindowsApps`), Steam, Epic, Battle.net, EA, Ubisoft, GOG, Riot, Rockstar and
+    Roblox (`Sandbox.launcherFolders`, worked out once).
+- **"Own browser" removed** from the self-test.
+- **The sandbox probe** now checks:
+  - the rule names just the picked apps;
+  - an app that wasn't picked runs normally;
+  - a picked app open on the desk is left out of the rule, and launched on the monitor it opens as
+    the box copy while the desk one stays;
+  - with nothing picked, there's no rule.
+
 ## 0.15.33 (16 Oct): monitors don't affect each other
 
 His words, the same evening:

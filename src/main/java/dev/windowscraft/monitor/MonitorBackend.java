@@ -105,8 +105,10 @@ public interface MonitorBackend {
     default void isolate(Mon m, boolean on) {}
     /** That monitor's own copies: what its apps change is forgotten once they've all closed ({@code follow}), files saved there go to your own folders ({@code deskFiles}). */
     default void boxOptions(Mon m, boolean follow, boolean deskFiles) {}
-    /** Programs (file names) and folders that never go in a box, and extra folders apps are installed in (game libraries). */
-    default void isolationExceptions(List<String> programs, List<String> folders, List<String> appFolders) {}
+    /** Programs (file names) and folders that always run normally, also when a monitor's own copy starts them. */
+    default void isolationExceptions(List<String> programs, List<String> folders) {}
+    /** The apps (their programs) that have their own copy on every monitor: nothing else goes in a box by itself. */
+    default void ownCopyApps(List<String> programs) {}
     /** "ok", "missing" or "stopped". */
     default CompletableFuture<String> sandboxStatus() { return CompletableFuture.completedFuture("missing"); }
     /** Installs Sandboxie-Plus quietly (one permission prompt). Completes with the status after. */

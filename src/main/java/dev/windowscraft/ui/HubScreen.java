@@ -666,18 +666,12 @@ public final class HubScreen extends Screen {
 
     private List<MonitorBackend.Win> copies = List.of();
     private String copiesNote;
-    /** A change to a joined monitor's own copies, waiting for "the whole group or just this one". */
-    private record GroupAsk(Display d, java.util.function.Consumer<Display> change) {}
-    private GroupAsk groupAsk;
-
-    /** A change to a monitor's own copies: for a joined monitor, asked first (the group, or just it — then it leaves the group). */
-    private void changeBox(Display d, java.util.function.Consumer<Display> change) {
-        if (InGameMonitors.groupOf(d).size() > 1) groupAsk = new GroupAsk(d, change);
-        else InGameMonitors.changeBox(List.of(d), change);
-    }
     private long resetArmedAt;
 
-    /** "Own copies of apps": this monitor's own Sandboxie box — on/off, set up, another copy, exceptions, reset. */
+    /**
+     * "Own copies of apps": the apps you pick to have their own copy on every monitor (none until
+     * you do), set up once; one more copy of anything here by hand; this monitor's copies reset.
+     */
     private int renderOwnCopies(DrawContext g, int mx, int my, int x, int y, int w) {
         Display d = selected;
         int right = x + w;
@@ -692,77 +686,75 @@ public final class HubScreen extends Screen {
             int bx = right - 3;
             bx -= button(g, mx, my, "Set up", bx, y + 2, 14, UiKit.ACCENT, UiKit.ACCENT_HOVER, () -> {
                 copiesNote = null;
-                dev.windowscraft.monitor.Sandbox.install().thenAccept(s -> copiesNote = s.equals("ok") ? "Ready: open another copy of an app here, or turn its own copies on below."
+                dev.windowscraft.monitor.Sandbox.install().thenAccept(s -> copiesNote = s.equals("ok") ? "Ready: pick the apps that get their own copy on every monitor."
                         : s.equals("cancelled") ? "Not set up (Windows' permission was declined)." : "Couldn't set it up: " + s);
             }) + 4;
-            UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, "Give this monitor its own copies of apps", bx - 4 - (x + 6)), x + 6, y + 5, UiKit.TEXT);
+            UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, "Give apps their own copy on every monitor", bx - 4 - (x + 6)), x + 6, y + 5, UiKit.TEXT);
             y += ROW;
             if (copiesNote != null) y = wrap(g, copiesNote, x, y + 2, w, UiKit.TEXT_2) + 2;
-            return wrap(g, "A second copy of an app that's already open (a second Discord or browser) for this monitor: its own sound, "
-                    + "never mixed with your desk or another monitor. Without it, apps here run normally and each one's sound plays from the "
-                    + "monitor it's on. One-time setup of the free Sandboxie-Plus "
+            return wrap(g, "For apps you have open on several monitors at once (a browser, Discord): each monitor runs its own copy, so its sound "
+                    + "is never mixed with another monitor's or your desk's, and it keeps its own sign-ins. Only the apps you pick: games and "
+                    + "everything else run normally. One-time setup of the free Sandboxie-Plus "
                     + "(Windows asks for permission once; it never shows itself)." + (st.equals("stopped") ? " It's installed but not running: restart your PC." : ""),
                     x, y + 2, w, UiKit.TEXT_MUTED) + 2;
         }
-        List<Display> group = InGameMonitors.groupOf(d);
-        if (groupAsk != null && groupAsk.d() == d) {
-            // joined with others: the change for all of them, or just this one (then it's a PC of its own)
-            GroupAsk ask = groupAsk;
-            int top = y;
-            y = wrap(g, "This monitor is joined with " + (group.size() - 1) + (group.size() == 2 ? " other" : " others")
-                    + ": change all of them, or just this one? (Just this one: it stops being joined with them, a PC of its own.)", x + 6, y + 5, w - 12, UiKit.TEXT);
-            int bx = x + 6;
-            String all = "All " + group.size();
-            bx += button(g, mx, my, all, bx + textRenderer.getWidth(all) + 16, y + 3, 16, UiKit.ACCENT, UiKit.ACCENT_HOVER, () -> {
-                groupAsk = null;
-                InGameMonitors.changeBox(InGameMonitors.groupOf(ask.d()), ask.change());
-            }) + 4;
-            bx += button(g, mx, my, "Just this one", bx + textRenderer.getWidth("Just this one") + 16, y + 3, 16, UiKit.SURFACE_HOVER, UiKit.ACCENT_HOVER, () -> {
-                groupAsk = null;
-                InGameMonitors.changeBox(List.of(ask.d()), ask.change());
-            }) + 4;
-            button(g, mx, my, "Cancel", bx + textRenderer.getWidth("Cancel") + 16, y + 3, 16, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> groupAsk = null);
-            y += 26;
-            g.fill(x, top, x + 2, y - 4, UiKit.ACCENT); // (marks the question)
+        // the apps with their own copy on every monitor (the same list on all of them)
+        List<String> picked = ClientSettings.ownCopyApps();
+        UiKit.text(g, textRenderer, "Their own copy on every monitor" + (picked.isEmpty() ? ": none yet" : ":"), x + 4, y + 4, UiKit.TEXT_2);
+        y += 14;
+        int ax = x + 4;
+        for (String p : picked) {
+            String label = AppNames.of(p) + "  ×";
+            int bw = textRenderer.getWidth(label) + 16;
+            if (ax + bw > right - 4) { ax = x + 4; y += ROW - 4; }
+            button(g, mx, my, label, ax + bw, y, 14, UiKit.SEG_ACTIVE, UiKit.DANGER_HOVER, () -> {
+                List<String> l = new ArrayList<>(ClientSettings.ownCopyApps());
+                l.remove(p);
+                dev.windowscraft.monitor.Sandbox.setOwnCopyApps(l);
+            });
+            ax += bw + 4;
         }
-        y = toggleRow(g, mx, my, x, y, w, "Apps you start here are its own copies",
-                d.ownCopies ? "Its own sound, never mixed with your desk or another monitor. While you sit here, everything that starts goes in its box, "
-                        + "your desk's too: games, their stores and Store apps don't run there." + (group.size() > 1 ? " One box for it and the " + (group.size() - 1) + " joined with it." : "")
-                        : "Off: apps run normally, the same ones as on your desk; each one's sound plays from the monitor it's on (on several, where you last used it).",
-                d.ownCopies, on -> changeBox(d, o -> o.ownCopies = on));
-        if (d.ownCopies) {
-            // quick picks, then the two choices they're made of
-            int pick = d.followDesk && !d.filesHere ? 0 : !d.followDesk && d.filesHere ? 1 : d.followDesk ? 2 : -1;
-            String[] picks = {"Like your desk", "Its own PC", "Leaves no trace"};
-            String pickText = switch (pick) {
-                case 0 -> "Its apps start signed in like your desk, every time; what they change here is forgotten once they've all closed. Files you save go to your own folders.";
-                case 1 -> "Its apps keep their own sign-ins, settings and files here, separate from your desk (a second account just for this monitor).";
-                case 2 -> "Its apps start like your desk, and nothing they do stays: their changes and the files saved here are gone once they've all closed.";
-                default -> "Its apps keep what they change here; files you save go to your own folders.";
-            };
-            y = pickRow(g, mx, my, x, y, w, "Set up like", pickText, picks, pick, i -> changeBox(d, o -> {
-                o.followDesk = i != 1;
-                o.filesHere = i != 0;
-            }));
-            y = pickRow(g, mx, my, x, y, w, "What its apps change (sign-ins, settings)", null,
-                    new String[]{"Forgotten when they close", "Kept here"}, d.followDesk ? 0 : 1, i -> changeBox(d, o -> o.followDesk = i == 0));
-            y = pickRow(g, mx, my, x, y, w, "Files you save there", d.filesHere && d.followDesk ? "(gone with its apps' changes, once they've all closed)" : null,
-                    new String[]{"Your own folders", "This monitor only"}, d.filesHere ? 1 : 0, i -> changeBox(d, o -> o.filesHere = i == 1));
-        }
-        if (!copies.isEmpty()) {
-            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
-            for (MonitorBackend.Win c : copies) names.add(appName(c.pid()));
-            y = wrap(g, "Running as its own: " + String.join(", ", names), x + 4, y, w - 8, UiKit.TEXT_2) + 4;
-        }
-        // another copy of something that's open (a second game, a second Discord…)
+        if (!picked.isEmpty()) y += ROW - 2;
+        // what's open now — on your desk, here, on other monitors — to add
         java.util.LinkedHashMap<String, String> apps = new java.util.LinkedHashMap<>(); // exe → name
         for (MonitorBackend.Win win : desk) addApp(apps, win.pid());
         for (List<MonitorBackend.Win> l : elsewhere.values()) for (MonitorBackend.Win win : l) addApp(apps, win.pid());
         for (MonitorBackend.Win win : onIt) addApp(apps, win.pid());
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (String p : picked) have.add(fileOf(p));
+        // (never a game, a launcher or the game you play in: those always run normally)
+        List<Map.Entry<String, String>> addable = apps.entrySet().stream()
+                .filter(e -> !have.contains(fileOf(e.getKey())) && !dev.windowscraft.monitor.Sandbox.mustRunNormally(e.getKey())).toList();
+        if (!addable.isEmpty()) {
+            UiKit.text(g, textRenderer, "Add one that's open:", x + 4, y + 4, UiKit.TEXT_2);
+            y += 14;
+            ax = x + 4;
+            for (var e : addable) {
+                String label = "+ " + e.getValue(), exe = e.getKey();
+                int bw = textRenderer.getWidth(label) + 16;
+                if (ax + bw > right - 4) { ax = x + 4; y += ROW - 4; }
+                button(g, mx, my, label, ax + bw, y, 14, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> {
+                    List<String> l = new ArrayList<>(ClientSettings.ownCopyApps());
+                    if (l.stream().noneMatch(q -> fileOf(q).equals(fileOf(exe)))) l.add(exe);
+                    dev.windowscraft.monitor.Sandbox.setOwnCopyApps(l);
+                });
+                ax += bw + 4;
+            }
+            y += ROW - 2;
+        }
+        y = wrap(g, "Each monitor runs its own copy of these: its own sound, never mixed with another monitor's or your desk's, and its own "
+                + "sign-ins, kept (the first time, it starts signed in like your desk). It closes with its monitor. Everything else runs normally: "
+                + "games, Steam, Store apps.", x + 4, y + 2, w - 8, UiKit.TEXT_MUTED) + 4;
+        if (!copies.isEmpty()) {
+            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+            for (MonitorBackend.Win c : copies) names.add(appName(c.pid()));
+            y = wrap(g, "Running as this monitor's own: " + String.join(", ", names), x + 4, y, w - 8, UiKit.TEXT_2) + 4;
+        }
+        // one more copy of something that's open, here, by hand (a second game, a second Discord…)
         if (!apps.isEmpty()) {
             UiKit.text(g, textRenderer, "Open another copy here:", x + 4, y + 4, UiKit.TEXT_2);
             y += 14;
-            int ax = x + 4;
+            ax = x + 4;
             for (var e : apps.entrySet()) {
                 int bw = textRenderer.getWidth(e.getValue()) + 16;
                 if (ax + bw > right - 4) { ax = x + 4; y += ROW - 4; }
@@ -773,45 +765,13 @@ public final class HubScreen extends Screen {
             }
             y += ROW - 2;
         }
-        // always normal: apps that must never be a copy (games with anti-cheat and Windows' own tools already are)
-        List<String> normal = ClientSettings.isoPrograms();
-        UiKit.text(g, textRenderer, "Always run normally" + (normal.isEmpty() ? " (games with anti-cheat and Windows' own tools already do):" : ":"), x + 4, y + 4, UiKit.TEXT_2);
-        y += 14;
-        int ax = x + 4;
-        for (String p : normal) {
-            String label = p + "  ×";
-            int bw = textRenderer.getWidth(label) + 16;
-            if (ax + bw > right - 4) { ax = x + 4; y += ROW - 4; }
-            button(g, mx, my, label, ax + bw, y, 14, UiKit.SEG_ACTIVE, UiKit.DANGER_HOVER, () -> {
-                List<String> l = new ArrayList<>(ClientSettings.isoPrograms());
-                l.remove(p);
-                ClientSettings.setIsoPrograms(l);
-                dev.windowscraft.monitor.Sandbox.pushExceptions();
-            });
-            ax += bw + 4;
-        }
-        for (var e : apps.entrySet()) {
-            String file = fileOf(e.getKey());
-            if (file.isEmpty() || normal.contains(file)) continue;
-            String label = "+ " + e.getValue();
-            int bw = textRenderer.getWidth(label) + 16;
-            if (ax + bw > right - 4) { ax = x + 4; y += ROW - 4; }
-            button(g, mx, my, label, ax + bw, y, 14, UiKit.SURFACE, UiKit.SURFACE_HOVER, () -> {
-                List<String> l = new ArrayList<>(ClientSettings.isoPrograms());
-                if (!l.contains(file)) l.add(file);
-                ClientSettings.setIsoPrograms(l);
-                dev.windowscraft.monitor.Sandbox.pushExceptions();
-            });
-            ax += bw + 4;
-        }
-        y += ROW - 2;
         // wipe this monitor's copies (its logins and data)
         boolean armed = System.nanoTime() - resetArmedAt < 4_000_000_000L;
-        int bw = button(g, mx, my, armed ? "Click again: wipe its logins and data" : "Reset this monitor's apps", right - 3, y, 14,
+        int bw = button(g, mx, my, armed ? "Click again: wipe its sign-ins and data" : "Reset this monitor's copies", right - 3, y, 14,
                 armed ? UiKit.DANGER : UiKit.SEG_ACTIVE, UiKit.DANGER_HOVER, () -> {
                     if (System.nanoTime() - resetArmedAt < 4_000_000_000L) {
                         resetArmedAt = 0;
-                        InGameMonitors.resetCopies(d).thenAccept(v -> { copiesNote = "This monitor's apps were reset."; moved(); });
+                        InGameMonitors.resetCopies(d).thenAccept(v -> { copiesNote = "This monitor's copies were reset."; moved(); });
                     } else resetArmedAt = System.nanoTime();
                 });
         if (copiesNote != null) UiKit.text(g, textRenderer, UiKit.ellipsize(textRenderer, copiesNote, w - bw - 12), x + 4, y + 3, UiKit.TEXT_2);

@@ -1,4 +1,8 @@
-WindowsCraft 0.15.33 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.34 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.34: own copies are per app. Pick the apps (a browser, Discord…) that get their own
+copy on every monitor, with its own sound and sign-ins; none until you do, and games and
+everything else always run normally.
 
 New in 0.15.33: in-game monitors don't affect each other. Turning one on or off leaves the
 others as they were (their size, windows and sound), a new one starts empty, and turning one

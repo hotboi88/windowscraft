@@ -1976,9 +1976,11 @@ fn edge_fullscreen(rep: &mut Report, h: &Helper, ra: &RECT, a: &Mon, game: HWND,
 }
 
 /// Own copies of apps, end to end through WindowsCraft's helper: each monitor maps to its own box;
-/// sitting at a monitor, what you start lands in *that* monitor's box, on that monitor; exceptions
-/// stay out; getting up, turning own copies off, stopping the helper, the helper crashing and the
-/// game going away all leave no rule behind that would box your desk's apps.
+/// sitting at a monitor, an app you picked lands in *that* monitor's box, on that monitor; nothing
+/// else does; one you picked that's open on your desk is never boxed by the rule (its desk copy's
+/// new processes would land in the box) — the monitor gets its own copy when it's opened there;
+/// getting up, picking none, stopping the helper, the helper crashing and the game going away all
+/// leave no rule behind.
 fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let vexe = dir.join("wc-vdisplay.exe");
     let Ok(h) = Helper::start(&vexe).map_err(|e| rep.check("helper starts", false, e)) else { return };
@@ -2001,7 +2003,10 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let _ = std::fs::copy(dir.join("wc-selftest.exe"), app(n));
     }
     let tag = std::process::id();
+    // the apps picked to have their own copy on every monitor: a and b (c, x and h weren't)
+    let picked = format!("isoapps\t{}\t{}", app("wcapp_a").display(), app("wcapp_b").display());
     let setup = |h: &Helper, idx: i32, key: &str| {
+        h.send(&picked);
         h.send(&format!("profilekey {idx} {key}"));
         h.send(&format!("isolate {idx} 1"));
     };
@@ -2022,19 +2027,20 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let ini_forced = || -> Vec<String> {
         let b = std::fs::read(std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Sandboxie.ini")).unwrap_or_default();
         let t = if b.len() > 2 && b[0] == 0xFF { String::from_utf16_lossy(&b[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()) } else { String::from_utf8_lossy(&b).into_owned() };
-        // each [WC…] box's force rule: its own ForceFolder lines, and the force template's when it uses it
+        // each [WC…] box's force rule: its own Force… lines, and the force template's when it uses it
         let mut sec = String::new();
         let mut own: Vec<(String, String)> = Vec::new();
         let mut uses: Vec<String> = Vec::new();
         let mut template: Vec<String> = Vec::new();
+        let forcing = |low: &str| low.starts_with("forcefolder") || low.starts_with("forceprocess");
         for l in t.lines() {
             let l = l.trim();
             let low = l.to_lowercase();
             if l.starts_with('[') {
                 sec = l.to_string();
-            } else if sec.eq_ignore_ascii_case("[Template_WCForce]") && low.starts_with("forcefolder") {
+            } else if sec.eq_ignore_ascii_case("[Template_WCForce]") && forcing(&low) {
                 template.push(l.to_string());
-            } else if sec.starts_with("[WC") && low.starts_with("forcefolder") {
+            } else if sec.starts_with("[WC") && forcing(&low) {
                 own.push((sec.clone(), l.to_string()));
             } else if sec.starts_with("[WC") && low == "template=wcforce" {
                 uses.push(sec.clone());
@@ -2091,24 +2097,22 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     finish(w);
     // 2. each monitor its own box: sitting at A → A's box, on A
     let s = seat(&h, ma.idx);
-    // (the folders are worked out in the background — seconds on a slow disk; until then the rule
-    //  covers the app folders that need no carving: wait for the carved one, and note how long)
-    let t_rule = Instant::now();
     let mut rules = ini_forced();
-    let _ = wait_for(20000, || {
+    let _ = wait_for(8000, || {
         rules = ini_forced();
-        // (all three app folders: the rule is written value by value — read mid-way, part of it)
-        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
-            && ["\\wcapps\\a", "\\wcapps\\b", "\\wcapps\\c"].iter().all(|f| rules.iter().any(|l| l.to_lowercase().replace('/', "\\").ends_with(f)))
+        // (both apps: the rule is written value by value — read mid-way, part of it)
+        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
     });
-    rep.note(format!("(the rule at A, carved: {} ms)", t_rule.elapsed().as_millis()));
-    rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {} folders", rules.len()));
-    let mine: Vec<&String> = rules.iter().filter(|l| l.to_lowercase().contains("wcapps")).collect();
-    let low = |l: &String| l.to_lowercase().replace('/', "\\");
-    rep.check("…it covers the ordinary apps' folders, and is carved around the exceptions (not their folders, nor a folder above them)",
-        ["\\wcapps\\a", "\\wcapps\\b", "\\wcapps\\c"].iter().all(|f| mine.iter().any(|l| low(l).ends_with(f)))
-            && !mine.iter().any(|l| { let l = low(l); l.ends_with("\\wcapps") || l.ends_with("\\wcapps\\x") || l.ends_with("\\wcapps\\exc") }),
-        format!("{mine:?}"));
+    rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {rules:?}"));
+    let names = |rules: &Vec<String>| -> Vec<String> {
+        let mut v: Vec<String> = rules.iter().filter_map(|l| l.split_once('=').map(|(_, n)| n.trim().to_lowercase())).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    rep.check("…it names just the apps you picked, by program — no folders, nothing else",
+        names(&rules) == vec!["wcapp_a.exe".to_string(), "wcapp_b.exe".to_string()] && rules.iter().all(|l| l.to_lowercase().contains("forceprocess")),
+        format!("{rules:?}"));
     let wa = start(&app("wcapp_a"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
     rep.check("…an app you start there runs in A's box", wa.is_some() && ina.contains(&wa.map_or(0, pid)) && !inb.contains(&wa.map_or(0, pid)),
@@ -2144,24 +2148,48 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     rep.check("every Chromium browser's elevation service runs in the boxes as SYSTEM (so a boxed browser opens your desk's sign-ins)",
         elevation.iter().all(|e| as_system.iter().any(|x| x.eq_ignore_ascii_case(e)) && shared_has("SandboxService").iter().any(|x| x.eq_ignore_ascii_case(e))),
         format!("on this PC: {elevation:?} · in the boxes: {as_system:?}"));
-    // 3. exceptions stay out, while sitting there
+    // 3. what you didn't pick runs normally, while sitting there (games, their launchers, Store apps…)
+    let wc = start(&app("wcapp_c"));
     let wx = start(&app("wcapp_x"));
-    let wh = start(&app("wcapp_h"));
     let ina = in_box(&h, ma.idx);
-    rep.check("an app on the always-normal list stays out of the box", wx.is_some() && !ina.contains(&wx.map_or(0, pid)), format!("{:?} · A's box {ina:?}", wx.map(pid)));
-    rep.check("an app in an excepted folder (WindowsCraft, the game, anti-cheat games) stays out too", wh.is_some() && !ina.contains(&wh.map_or(0, pid)), format!("{:?}", wh.map(pid)));
+    rep.check("an app you didn't pick runs normally, even started while you sit there", wc.is_some() && !ina.contains(&wc.map_or(0, pid)) && wx.is_some() && !ina.contains(&wx.map_or(0, pid)),
+        format!("{:?} {:?} · A's box {ina:?}", wc.map(pid), wx.map(pid)));
+    finish(wc);
     finish(wx);
-    finish(wh);
+    // 3b. one you picked, open outside a box (your desk's): the rule leaves it out — Sandboxie would
+    //     also box the new processes your desk's copy starts meanwhile, and break it (the Claude
+    //     app's window went gray that way). Opened on the monitor, it's the monitor's own copy.
+    let _ = h.call("unseat", "unseated", 8000);
+    let desk_b = start(&app("wcapp_b"));
+    let s = seat(&h, ma.idx);
+    let mut rules = ini_forced();
+    let _ = wait_for(8000, || {
+        rules = ini_forced();
+        names(&rules) == vec!["wcapp_a.exe".to_string()]
+    });
+    rep.check("one you picked that's open on your desk: the rule leaves it out (its desk copy is never boxed)",
+        desk_b.is_some() && names(&rules) == vec!["wcapp_a.exe".to_string()] && !in_box(&h, ma.idx).contains(&desk_b.map_or(0, pid)),
+        format!("{s:?} · desk copy {:?} · {rules:?}", desk_b.map(pid)));
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let r = h.call(&format!("launch\t{}\t{}\t\twcapp_b.exe", ma.idx, app("wcapp_b").display()), "launched", 20000);
+    let copy_b = find_new(&before, 20000, |w| title(*w).contains("wcapp_b") && class_name(*w) != "ConsoleWindowClass");
+    let on_copy = wait_for(3000, || on(copy_b, &ra));
+    let ina = in_box(&h, ma.idx);
+    rep.check("…and opened on the monitor, it's the monitor's own copy, in its box, on it — your desk's stays as it was",
+        copy_b.is_some_and(|w| ina.contains(&pid(w))) && on_copy && desk_b.is_some_and(|w| !ina.contains(&pid(w)) && !on(Some(w), &ra)),
+        format!("{r:?} · copy {:?} at {} · desk copy {:?} · A's box {ina:?}", copy_b.map(pid), copy_b.map(|w| fmt(&rect_of(w))).unwrap_or_default(), desk_b.map(pid)));
+    finish(copy_b);
+    finish(desk_b);
     // 4. over to B: B's box, on B — and A's app stays A's
     let _ = h.call("unseat", "unseated", 8000);
     let s = seat(&h, mb.idx);
     let mut rules = ini_forced();
     let _ = wait_for(8000, || {
         rules = ini_forced();
-        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
+        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
     });
     rep.check("sitting at monitor B: the rule moved to B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {rules:?}"));
-    let wb = start(&app("wcapp_b"));
+    let wb = start(&app("wcapp_a"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
     // (the helper moves it there as it shows, as on A: give the move a moment to land)
     let on_b = wait_for(3000, || on(wb, &rb));
@@ -2193,7 +2221,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
     });
     rep.check("…and on to B again: B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {} rules", rules.len()));
-    // 5. own copies off everywhere: no rule even while sitting
+    // 5. no apps picked (the game turns every monitor's own copies off then): no rule even while
+    //    sitting, and an app picked before starts normally
+    h.send("isoapps\t");
     h.send(&format!("isolate {} 0", ma.idx));
     h.send(&format!("isolate {} 0", mb.idx));
     sleep(600);
@@ -2202,11 +2232,12 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         rules = ini_forced();
         rules.is_empty()
     });
-    let w = start(&app("wcapp_c"));
-    rep.check("own copies turned off on every monitor: no rule left, even sitting there; apps start normally", rules.is_empty() && w.is_some() && !in_box(&h, mb.idx).contains(&w.map_or(0, pid)),
+    let w = start(&app("wcapp_a"));
+    rep.check("no apps picked: no rule left, even sitting there; apps start normally", rules.is_empty() && w.is_some() && !in_box(&h, mb.idx).contains(&w.map_or(0, pid)),
         format!("rules {rules:?} · {:?}", w.map(pid)));
     finish(w);
     // 6. the helper stopped (the game closing it) while sitting at a monitor with own copies on
+    h.send(&picked);
     h.send(&format!("isolate {} 1", mb.idx));
     sleep(600);
     let mut before = ini_forced();
@@ -2214,7 +2245,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         before = ini_forced();
         !before.is_empty()
     });
-    rep.note(format!("(sitting at B, own copies back on: {} folders)", before.len()));
+    rep.note(format!("(sitting at B, apps picked again: {} rules)", before.len()));
     h.stop();
     sleep(1500);
     let after = ini_forced();
@@ -2232,7 +2263,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         sleep(300);
         let sr = seat(&h2, m.idx);
         let before = ini_forced();
-        rep.note(format!("(sat down for this check: {sr:?} · {} folders)", before.len()));
+        rep.note(format!("(sat down for this check: {sr:?} · {} rules)", before.len()));
         h2.kill();
         sleep(800);
         let stuck = ini_forced();
@@ -2256,7 +2287,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
                 sleep(300);
                 let sr = seat(&h4, m.idx);
                 let before = ini_forced();
-                rep.note(format!("(sat down for this check: {sr:?} · {} folders)", before.len()));
+                rep.note(format!("(sat down for this check: {sr:?} · {} rules)", before.len()));
                 let _ = d.kill();
                 let cleared = wait_for(8000, || ini_forced().is_empty());
                 rep.check("the game going away while you sit there leaves no rule behind", !before.is_empty() && cleared, format!("before {before:?} · cleared {cleared}"));

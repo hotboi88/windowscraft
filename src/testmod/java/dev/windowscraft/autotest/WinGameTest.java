@@ -393,16 +393,9 @@ public final class WinGameTest implements ClientModInitializer {
                 checkDistinct("three screens, three different monitors (never two showing the same one)");
                 checkPictures(mc, "every screen shows its monitor's picture");
                 shot(mc, "3_joined");
-                // joined monitors are one PC: one group (one box for their apps). One set up
-                // differently stops being joined; set up alike again, joined again (both in this
-                // tick: the layout is never asked to change)
+                // joined monitors are one PC: one group (one box for their apps)
                 if (a != null && b != null && mb != null) {
                     check(InGameMonitors.groupOf(a).size() == 2, "joined monitors are one group (one box for their apps)");
-                    InGameMonitors.changeBox(List.of(b), d -> d.filesHere = true);
-                    String split = InGameMonitors.arrangement();
-                    check(InGameMonitors.groupOf(a).size() == 1 && split.contains(mb.index() + ":-1:"), "one set up differently stops being joined (" + split + ")");
-                    InGameMonitors.changeBox(List.of(b), d -> d.filesHere = false);
-                    check(InGameMonitors.groupOf(a).size() == 2, "set up alike again, joined again (" + InGameMonitors.arrangement() + ")");
                 }
                 // sit down at the wall
                 look(mc, 0.5, ground + 1, -1.5, Vec3d.ofCenter(wall(0, 0)));

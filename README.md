@@ -161,15 +161,17 @@ one of your real screens instead, as before.
   another monitor's sound or your desk's. Windows only knows sound per program, so:
   - **Own copies of apps** (U → the monitor → "Own copies of apps"; a one-time setup of the free
     Sandboxie-Plus, which WindowsCraft downloads, checks and installs hidden — Windows asks for
-    permission once, and it never shows itself): every app you start while sitting at a monitor
-    (or pointing at it) runs as that monitor's own copy — its own program, so its own sound, and
-    all its windows and tabs play from that monitor, all at once. Its logins and data are its own
-    and kept (sign in to a site once on that monitor, it stays), and apps that only run once can
-    run there too ("Open another copy here"). The apps on your desk are never touched. Every app
-    is a copy by default — Discord, WhatsApp, launchers, a second Minecraft too; only games with
-    anti-cheat, Windows' own tools and anything you add to "Always run normally" never are. Getting up,
-    turning it off, closing the game or the game crashing leave nothing behind that would affect
-    your desk's apps. "Reset this monitor's apps" wipes its logins and data.
+    permission once, and it never shows itself). You pick the apps — none until you do; "Add one
+    that's open" offers what's running, never games or launchers. Each monitor then runs its own
+    copy of each of them: its own program, so its own sound, never mixed with another monitor's or
+    your desk's, even with the same app open everywhere. Its sign-ins are its own and kept (the
+    first time it starts signed in like your desk). Opened on a monitor while it's open on your
+    desk, the monitor gets its own copy and your desk's stays as it is — your desk's copy is never
+    boxed. Everything you didn't pick runs normally, games, Steam and Store apps included, and so
+    does whatever a copy starts from them (a game from a browser). "Open another copy here" starts
+    one more copy of anything by hand. Turning the monitor off closes its copies; getting up,
+    closing the game or the game crashing leave nothing behind that would affect your desk's apps.
+    "Reset this monitor's copies" wipes their sign-ins and data.
   - Without it, an app open in several places plays from wherever you last used it (never from two
     places).
 - **File Explorer and Task Manager** open on the monitor you open them from, like any app.

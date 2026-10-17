@@ -404,23 +404,7 @@ public final class InGameMonitors {
 
     // ---- own copies of apps (each monitor's own Sandboxie box) ----
 
-    /**
-     * Its own copies' settings changed (on these screens: its joined group, or just it — then it
-     * leaves the group, its settings no longer being the group's). Saved, and every monitor's box
-     * told again (a group's box is its first monitor's: who's in which group may have changed).
-     */
-    public static void changeBox(List<Display> which, Consumer<Display> change) {
-        for (Display d : which) change.accept(d);
-        DisplayManager.get().save();
-        Sandbox.pushAll();
-    }
-
-    /** Joined only when their own copies work alike: a monitor set up differently is a PC of its own. */
-    static boolean sameBox(Display a, Display b) {
-        return a.ownCopies == b.ownCopies && a.followDesk == b.followDesk && a.filesHere == b.filesHere;
-    }
-
-    /** The in-game monitors joined with that one (edge to edge, set up alike), it included. */
+    /** The in-game monitors joined with that one (edge to edge), it included. */
     public static List<Display> groupOf(Display d) {
         List<Display> live = new ArrayList<>();
         for (Display o : DisplayManager.get().all()) if (monitorOf(o) != null && o.isLive()) live.add(o);
@@ -439,13 +423,6 @@ public final class InGameMonitors {
         Display first = d;
         for (Display o : groupOf(d)) if (o.id.toString().compareTo(first.id.toString()) < 0) first = o;
         return first.id.toString().substring(0, 8);
-    }
-
-    public static void setOwnCopies(Display d, boolean on) {
-        d.ownCopies = on;
-        DisplayManager.get().save();
-        Mon m = monitorOf(d);
-        if (m != null) Sandbox.push(m, d);
     }
 
     /** Another copy of that program, in this monitor's box. */
@@ -917,7 +894,6 @@ public final class InGameMonitors {
     /** Where b's screen joins a's, edge to edge in the world (R, L, T, B of a), or 0 if they don't touch. */
     static char joinedSide(Display a, Display b) {
         if (a.tablet || b.tablet || !a.rect.isMonitor() || !b.rect.isMonitor() || !a.dimension.equals(b.dimension)) return 0;
-        if (!sameBox(a, b)) return 0; // (set up differently: not one PC, so not joined)
         var pa = a.rect.pose() != null ? a.rect.pose() : dev.windowscraft.display.MonitorPose.standing(a.rect.turn());
         var pb = b.rect.pose() != null ? b.rect.pose() : dev.windowscraft.display.MonitorPose.standing(b.rect.turn());
         double w = dev.windowscraft.display.MonitorPose.HALF_W, h = dev.windowscraft.display.MonitorPose.HALF_H, f = dev.windowscraft.display.MonitorPose.FRONT;
