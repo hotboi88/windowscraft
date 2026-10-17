@@ -1616,32 +1616,7 @@ fn run(rep: &mut Report, dir: &std::path::Path, real: &[(String, RECT)], prim: R
     play();
     guests(rep, dir, &rb);
 
-    // ---- 14. a browser of its own for one monitor (its own sound)
-    let edge = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"]
-        .into_iter().find(|p| std::path::Path::new(p).exists());
-    match edge {
-        Some(e) => {
-            let profile = std::env::temp_dir().join(format!("wc-selftest-edge-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&profile);
-            let others: HashSet<u32> = top_windows().iter().filter(|w| exe_of(pid(**w)) == "msedge.exe").map(|w| pid(*w)).collect();
-            let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
-            play();
-            let r = h.call(&format!("launch\t{}\t{e}\t--user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank\tmsedge.exe", b.idx, profile.display()), "launched", 10000);
-            match find_new(&before, 20000, |w| exe_of(pid(*w)) == "msedge.exe" && !title(*w).is_empty()) {
-                Some(w) => {
-                    sleep(1500);
-                    let (x, y) = center(&rect_of(w));
-                    rep.check("\"Own browser\": a separate browser opens on that monitor", inside(&rb, x, y) && !others.contains(&pid(w)),
-                        format!("{r:?}: \"{}\" pid {} at {} (other Edge pids {others:?})", title(w), pid(w), fmt(&rect_of(w))));
-                    shot("14-own-browser-on-monitor");
-                    let p = pid(w);
-                    let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output();
-                }
-                None => rep.check("\"Own browser\": a separate browser opens on that monitor", false, format!("{r:?}: no Edge window")),
-            }
-        }
-        None => rep.skip("\"Own browser\"", "Edge isn't installed"),
-    }
+    // ---- 14. (a browser of its own for one monitor: removed with "Own Brave", 0.15.33)
 
     // ---- 16. the monitor's picture: Windows Graphics Capture sees it (what your wall shows)
     let cap = dir.join("wc-capture.exe");

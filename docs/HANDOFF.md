@@ -155,6 +155,20 @@ What changed:
   - `set_mode` sets `want` and lays everything out again, instead of shifting a row.
   - The watcher switches on again a monitor that's listed but off the desktop for about 3 s
     (internal `relayout`).
+  - The first CI run showed what "switched off by Windows" really looks like. When Windows'
+    remembered layout has one of ours off, the monitor drops out of `EnumDisplayDevices`
+    altogether, and its display name can go to the next monitor that comes on (two entries
+    `\\.\DISPLAY3`, then a false "went away by itself").
+    - The driver still has it: `QueryDisplayConfig(QDC_ALL_PATHS)` lists its target, available
+      and inactive (`switched_off`).
+    - `switch_on` activates a path to it from a free source, then
+      `SetDisplayConfig(… SDC_SAVE_TO_DATABASE)`. The fix is saved as Windows' layout for that set
+      of monitors.
+    - `arrange` looks each monitor's name up by its UID (`device_for_index`), not the cached one.
+    - A new monitor that takes a cached name marks the old entry `?`.
+    - The watcher calls a switched-off monitor gone only after about 30 s of failed tries.
+    - The watcher now runs on a thread of its own: the display queries can wait while Windows
+      changes its screens, and the driver's pings must never wait behind them.
   - A monitor really gone (`gone`) first gets an internal `lost`: its box closes, its own apps
     close wherever Windows put their windows (`close_own`: by `owned`/`placed`/box, not by area),
     and the driver lets it go. The game then turns its wall on again, empty.

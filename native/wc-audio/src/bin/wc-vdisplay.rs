@@ -550,6 +550,113 @@ fn offers(device: &str, w: u32, h: u32) -> bool {
     best_mode(&wide(device), w, h, 60).is_some_and(|m| m.dmPelsWidth == w && m.dmPelsHeight == h)
 }
 
+// When Windows switches one of ours off (the layout it remembers for these monitors has it off),
+// it drops out of the list of displays altogether — and its display name can go to the next
+// monitor that comes on — but the driver still has it: Windows' display configuration lists it,
+// plugged in, not in use. From there it's switched on again, as Settings › Display does for one
+// screen.
+
+const PATH_ACTIVE: u32 = 1; // (DISPLAYCONFIG_PATH_ACTIVE)
+const MODE_IDX_INVALID: u32 = 0xffff_ffff;
+
+/// Every display path — in use or not — and the modes they use.
+fn display_paths() -> Option<(Vec<windows::Win32::Devices::Display::DISPLAYCONFIG_PATH_INFO>, Vec<windows::Win32::Devices::Display::DISPLAYCONFIG_MODE_INFO>)> {
+    use windows::Win32::Devices::Display::*;
+    unsafe {
+        for _ in 0..3 {
+            let (mut np, mut nm) = (0u32, 0u32);
+            if GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut np, &mut nm) != ERROR_SUCCESS {
+                return None;
+            }
+            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
+            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
+            let r = QueryDisplayConfig(QDC_ALL_PATHS, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), None);
+            if r == ERROR_INSUFFICIENT_BUFFER {
+                continue; // (it changed meanwhile)
+            }
+            if r != ERROR_SUCCESS {
+                return None;
+            }
+            paths.truncate(np as usize);
+            modes.truncate(nm as usize);
+            return Some((paths, modes));
+        }
+        None
+    }
+}
+
+/// Which target (adapter, id) is our monitor `idx`, among these paths.
+fn our_target(paths: &[windows::Win32::Devices::Display::DISPLAYCONFIG_PATH_INFO], idx: i32) -> Option<((u32, i32), u32)> {
+    use windows::Win32::Devices::Display::*;
+    let uid = format!("UID{}", 256 + idx);
+    let mut seen: Vec<((u32, i32), u32)> = Vec::new();
+    for p in paths {
+        let key = ((p.targetInfo.adapterId.LowPart, p.targetInfo.adapterId.HighPart), p.targetInfo.id);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let mut n = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+        n.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        n.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+        n.header.adapterId = p.targetInfo.adapterId;
+        n.header.id = p.targetInfo.id;
+        if unsafe { DisplayConfigGetDeviceInfo(&mut n.header) } != 0 {
+            continue;
+        }
+        let path = from_wide(&n.monitorDevicePath).to_ascii_uppercase();
+        if path.contains(VDD_DISPLAY_ID) && path.split(|c| c == '#' || c == '&').any(|x| x == uid) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+fn target_key(p: &windows::Win32::Devices::Display::DISPLAYCONFIG_PATH_INFO) -> ((u32, i32), u32) {
+    ((p.targetInfo.adapterId.LowPart, p.targetInfo.adapterId.HighPart), p.targetInfo.id)
+}
+
+/// Our monitor `idx` is plugged in (the driver has it) but not in use: Windows switched it off.
+fn switched_off(idx: i32) -> bool {
+    let Some((paths, _)) = display_paths() else { return false };
+    let Some(t) = our_target(&paths, idx) else { return false };
+    let mine = |p: &&windows::Win32::Devices::Display::DISPLAYCONFIG_PATH_INFO| target_key(p) == t;
+    !paths.iter().filter(mine).any(|p| p.flags & PATH_ACTIVE != 0) && paths.iter().filter(mine).any(|p| p.targetInfo.targetAvailable.as_bool())
+}
+
+/// Switches our monitor `idx` on again (plugged in, switched off by Windows): its path in use, from
+/// a source nothing else uses; Windows gives it a mode and a place, the layout then its own. Saved
+/// as Windows' layout for these monitors, so it doesn't come back off next time.
+fn switch_on(idx: i32) -> bool {
+    use windows::Win32::Devices::Display::*;
+    let Some((paths, modes)) = display_paths() else { return false };
+    let Some(t) = our_target(&paths, idx) else { return false };
+    if paths.iter().any(|p| target_key(p) == t && p.flags & PATH_ACTIVE != 0) {
+        return true; // (on already)
+    }
+    let used: Vec<((u32, i32), u32)> = paths.iter().filter(|p| p.flags & PATH_ACTIVE != 0)
+        .map(|p| ((p.sourceInfo.adapterId.LowPart, p.sourceInfo.adapterId.HighPart), p.sourceInfo.id)).collect();
+    let Some(free) = paths.iter().find(|p| {
+        target_key(p) == t && p.targetInfo.targetAvailable.as_bool()
+            && !used.contains(&((p.sourceInfo.adapterId.LowPart, p.sourceInfo.adapterId.HighPart), p.sourceInfo.id))
+    }) else {
+        eprintln!("info=in-game monitor {idx} is switched off, and there's no free display source to switch it on with");
+        return false;
+    };
+    let mut want: Vec<DISPLAYCONFIG_PATH_INFO> = paths.iter().filter(|p| p.flags & PATH_ACTIVE != 0).copied().collect();
+    let mut p = *free;
+    p.flags |= PATH_ACTIVE;
+    p.sourceInfo.Anonymous.modeInfoIdx = MODE_IDX_INVALID;
+    p.targetInfo.Anonymous.modeInfoIdx = MODE_IDX_INVALID;
+    want.push(p);
+    let r = unsafe { SetDisplayConfig(Some(&want), Some(&modes), SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE) };
+    if r != 0 {
+        eprintln!("info=Windows wouldn't switch in-game monitor {idx} on again ({r})");
+        return false;
+    }
+    true
+}
+
 /// The refresh rate it runs at now (0: not known).
 fn current_hz(device: &str) -> u32 {
     let name = wide(device);
@@ -574,7 +681,6 @@ fn rearrange_with(added: &AddedMap, idx: i32) {
 
 fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
     *LAST_SPEC.lock().unwrap() = spec.to_string();
-    let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
     // each at the size it's meant to be (Windows may have given it another) — and one Windows
     // switched off is laid out too: it's switched on again in its place
     let mut size: HashMap<i32, (String, i32, i32)> = HashMap::new();
@@ -584,12 +690,31 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
         let f: Vec<&str> = e.split(':').collect();
         let (Some(i), Some(p)) = (f.first().and_then(|x| x.parse::<i32>().ok()), f.get(1).and_then(|x| x.parse::<i32>().ok())) else { continue };
         let side = f.get(2).and_then(|x| x.chars().next()).unwrap_or('-');
-        let Some((device, (ww, wh, whz))) = added.lock().unwrap().get(&i).map(|a| (a.device.clone(), a.want)).filter(|(d, _)| !d.is_empty()) else { continue };
-        let now = rect_of(&device);
-        // (off the desktop and not even listed: gone — the keep-alive says so)
-        if now.is_none() && !device_for_index(i).is_some_and(|d| d.eq_ignore_ascii_case(&device)) {
-            continue;
+        let Some((known, (ww, wh, whz))) = added.lock().unwrap().get(&i).map(|a| (a.device.clone(), a.want)).filter(|(d, _)| !d.is_empty()) else { continue };
+        // its display name now, by the monitor itself (Windows can give it another, or give the old
+        // one to the next monitor). Out of the list while the driver has it: Windows switched it
+        // off — switched on again
+        let mut found = device_for_index(i);
+        if found.is_none() && switched_off(i) && switch_on(i) {
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_secs(3) {
+                found = device_for_index(i).filter(|d| rect_of(d).is_some());
+                if found.is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            eprintln!("info=Windows had switched in-game monitor {i} off: switched on again ({})", found.as_deref().unwrap_or("not yet"));
         }
+        let Some(device) = found else { continue }; // (gone: the watcher says so)
+        if !device.eq_ignore_ascii_case(&known) {
+            if let Some(a) = added.lock().unwrap().get_mut(&i) {
+                a.device = device.clone();
+            }
+            eprintln!("info=in-game monitor {i} is {device} now (was {known})");
+            emit("moved");
+        }
+        let now = rect_of(&device);
         // (showing on one of your own screens — Windows duplicating them: never touched here)
         if now.is_some() && mirrored(added, i) {
             continue;
@@ -608,6 +733,7 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
     if size.is_empty() {
         return Ok(());
     }
+    let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
     // your own screens: the groups start off their bottom-right corner
     let (mut cx, mut cy) = (0i32, 0i32);
     for (d, r) in monitors() {
@@ -737,8 +863,8 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
                     took = true;
                     if *resized {
                         fixed.push(match now {
-                            None => format!("{d} switched on again at {w}×{h}"),
-                            Some(n) => format!("{d} {}×{} back to {w}×{h}", n.right - n.left, n.bottom - n.top),
+                            None => format!("{d} switched on at {w}×{h}"),
+                            Some(n) => format!("{d} {}×{} → {w}×{h}", n.right - n.left, n.bottom - n.top),
                         });
                     }
                     break;
@@ -756,7 +882,7 @@ fn arrange(added: &AddedMap, spec: &str) -> Result<(), String> {
         }
     }
     if !fixed.is_empty() {
-        eprintln!("info=put back what Windows changed by itself: {}", fixed.join(", "));
+        eprintln!("info=sizes set: {}", fixed.join(", "));
     }
     let list: Vec<String> = want.iter().map(|(_, d, r)| format!("{d}@{},{}", r.left, r.top)).collect();
     eprintln!("info=arranged the in-game monitors: {}", list.join(" "));
@@ -5208,76 +5334,95 @@ fn main() {
                 let _ = windows::Win32::System::Threading::SetThreadPriority(
                     windows::Win32::System::Threading::GetCurrentThread(), windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL);
             }
-            let mut missing: HashMap<i32, u32> = HashMap::new();
-            let mut off_desk: HashMap<i32, u32> = HashMap::new();
-            let mut last_relayout: Option<Instant> = None;
-            let mut last_look = Instant::now();
             loop {
                 std::thread::sleep(Duration::from_millis(*PING_MS));
                 if added.lock().unwrap().is_empty() {
-                    missing.clear();
                     continue;
                 }
                 let v = vdd.lock().unwrap().clone();
                 if let Some(v) = v {
                     v.ping();
                 }
-                // a monitor of ours that Windows doesn't have any more went away by itself: say so
-                // (never let a new one quietly take its place under the old one's name)
-                if last_look.elapsed() >= Duration::from_millis(700) {
-                    last_look = Instant::now();
-                    let ours: Vec<(i32, String)> = added.lock().unwrap().iter().filter(|(_, a)| !a.device.is_empty()).map(|(i, a)| (*i, a.device.clone())).collect();
-                    off_desk.retain(|i, _| ours.iter().any(|(j, _)| j == i));
-                    for (i, dev) in ours {
-                        let now = device_for_index(i);
-                        if now.as_deref().map_or(false, |d| d.eq_ignore_ascii_case(&dev)) {
-                            missing.remove(&i);
-                            // still there, but Windows switched it off (off the desktop) for a few
-                            // seconds: switched on again in its place, at its size (not left to the
-                            // game to turn off — then its apps would close)
-                            if rect_of(&dev).is_none() {
-                                let n = off_desk.entry(i).or_insert(0);
-                                *n += 1;
-                                if *n >= 4 && last_relayout.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
-                                    last_relayout = Some(Instant::now());
-                                    off_desk.remove(&i);
-                                    eprintln!("info=Windows switched in-game monitor {i} ({dev}) off by itself: switching it on again");
-                                    internal_command("relayout");
-                                }
-                            } else {
-                                off_desk.remove(&i);
-                            }
-                            continue;
-                        }
-                        // Windows gave it another display name (it settles on one a moment after a
-                        // monitor comes): the same monitor — the game picks it up under its new name
+            }
+        });
+    }
+    // the watcher (a thread of its own: what it asks Windows can wait while Windows changes its
+    // screens, and the pings must never wait behind that)
+    {
+        let added = added.clone();
+        std::thread::spawn(move || {
+            let mut missing: HashMap<i32, u32> = HashMap::new();
+            let mut off: HashMap<i32, u32> = HashMap::new();
+            let mut last_relayout: Option<Instant> = None;
+            loop {
+                std::thread::sleep(Duration::from_millis(700));
+                let ours: Vec<(i32, String)> = added.lock().unwrap().iter().filter(|(_, a)| !a.device.is_empty()).map(|(i, a)| (*i, a.device.clone())).collect();
+                missing.retain(|i, _| ours.iter().any(|(j, _)| j == i));
+                off.retain(|i, _| ours.iter().any(|(j, _)| j == i));
+                for (i, dev) in ours {
+                    let now = device_for_index(i);
+                    let listed = now.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(&dev));
+                    // Windows gave it another display name (it settles on one a moment after a
+                    // monitor comes): the same monitor — the game picks it up under its new name
+                    if !listed {
                         if let Some(d) = now.filter(|d| rect_of(d).is_some()) {
                             let mut g = added.lock().unwrap();
                             if let Some(a) = g.get_mut(&i).filter(|a| a.device == dev) {
                                 a.device = d.clone();
                                 drop(g);
                                 missing.remove(&i);
+                                off.remove(&i);
                                 eprintln!("info=in-game monitor {i} is {d} now (was {dev})");
                                 emit("moved");
                                 continue;
                             }
                         }
-                        let n = missing.entry(i).or_insert(0);
+                    }
+                    // Windows switched it off — off the desktop, or out of its list altogether while
+                    // the driver still has it (the layout it remembers for these monitors has it
+                    // off): it's switched on again, at its size, in its place. Not gone: then the
+                    // game would turn it off, and its apps would close
+                    let switched_off = if listed { rect_of(&dev).is_none() } else { switched_off(i) };
+                    let mut given_up = false;
+                    if switched_off {
+                        missing.remove(&i);
+                        let n = off.entry(i).or_insert(0);
                         *n += 1;
-                        if *n >= 4 {
-                            missing.remove(&i);
-                            let mut g = added.lock().unwrap();
-                            if g.get(&i).map_or(false, |a| a.device == dev) {
-                                let since = g.remove(&i).map_or(0, |a| a.since);
-                                drop(g);
-                                let pings = PING_FAILS.load(Ordering::SeqCst);
-                                eprintln!("error=in-game monitor {i} ({dev}) went away by itself (driver {}, Windows has {} screens, {} failed pings so far, last call: {})",
-                                    driver_status(), monitors().len(), pings, LAST_IOCTL.lock().unwrap());
-                                // it's off, and so are its apps — before the game turns its wall on
-                                // again (a fresh monitor, empty)
-                                internal_command(&format!("lost {i} {since}"));
-                                emit(&format!("gone {i}"));
+                        if *n < 45 { // (about half a minute of trying, every 10 s)
+                            if *n >= 4 && last_relayout.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
+                                last_relayout = Some(Instant::now());
+                                eprintln!("info=Windows switched in-game monitor {i} ({dev}) off by itself: switching it on again");
+                                internal_command("relayout");
                             }
+                            continue;
+                        }
+                        // (it won't come back on: gone, like one Windows dropped)
+                        off.remove(&i);
+                        given_up = true;
+                    } else {
+                        off.remove(&i);
+                        if listed {
+                            missing.remove(&i);
+                            continue;
+                        }
+                    }
+                    // a monitor of ours that Windows doesn't have any more went away by itself: say
+                    // so (never let a new one quietly take its place under the old one's name)
+                    let n = missing.entry(i).or_insert(0);
+                    *n += 1;
+                    if *n >= 4 || given_up {
+                        missing.remove(&i);
+                        let mut g = added.lock().unwrap();
+                        if g.get(&i).map_or(false, |a| a.device == dev) {
+                            let since = g.remove(&i).map_or(0, |a| a.since);
+                            drop(g);
+                            let pings = PING_FAILS.load(Ordering::SeqCst);
+                            eprintln!("error=in-game monitor {i} ({dev}) went away by itself (driver {}, Windows has {} screens, {} failed pings so far, last call: {})",
+                                driver_status(), monitors().len(), pings, LAST_IOCTL.lock().unwrap());
+                            // it's off, and so are its apps — before the game turns its wall on
+                            // again (a fresh monitor, empty)
+                            internal_command(&format!("lost {i} {since}"));
+                            emit(&format!("gone {i}"));
                         }
                     }
                 }
@@ -5860,7 +6005,18 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     let since = added.lock().unwrap().get(&idx).map_or_else(now_filetime, |a| a.since);
     // (its size as it came on: the nearest the driver offers to the one asked for)
     let want = ((r.right - r.left) as u32, (r.bottom - r.top) as u32, hz);
-    added.lock().unwrap().insert(idx, Added { device: device.clone(), since, want });
+    {
+        let mut g = added.lock().unwrap();
+        // (the name Windows gave it was another of ours, one Windows switched off meanwhile: that
+        // one's name is worked out again as it's switched back on — never two under one name)
+        for (j, a) in g.iter_mut() {
+            if *j != idx && a.device.eq_ignore_ascii_case(&device) {
+                eprintln!("info=in-game monitor {j}'s name {device} went to the new one: Windows had switched it off");
+                a.device = "?".into();
+            }
+        }
+        g.insert(idx, Added { device: device.clone(), since, want });
+    }
     taskbars_separate(true);
     ensure_placer();
     rearrange_with(added, idx);
