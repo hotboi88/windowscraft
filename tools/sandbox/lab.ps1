@@ -172,6 +172,65 @@ Set-Content C:\lab\sig5 x; Start-Sleep 4
 Say "  through a .cmd (explorer → cmd → launcher → its helper): $(Who 'launcher.exe')"
 Kill launcher.exe
 
+# ==== 6. a game opened from a monitor's taskbar (boxed by the rule above) caught as it starts and
+#         started again normally: how fast, did its window ever show, did it write into the box?
+Say ""; Say "== 6. catch a game boxed by ForceChildren=explorer.exe and start it again outside"
+$game = @"
+using System; using System.IO; using System.Windows.Forms;
+class G { [STAThread] static void Main(string[] a) {
+    // the worst case: writes beside itself and shows its window the moment it starts
+    try { File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "started-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".txt"), "x"); } catch {}
+    var f = new Form { Text = "fastgame", Width = 400, Height = 300 }; Application.Run(f);
+} }
+"@
+Set-Content C:\lab\g.cs $game
+& $csc /nologo /target:winexe /r:System.Windows.Forms.dll /out:C:\lab\games\fastgame.exe C:\lab\g.cs | Out-Null
+$watch = @"
+using System; using System.Collections.Generic; using System.Diagnostics; using System.Runtime.InteropServices; using System.Text; using System.Threading; using System.IO;
+class W {
+    [DllImport(@"C:\Program Files\Sandboxie-Plus\SbieDll.dll", CharSet = CharSet.Unicode)]
+    static extern int SbieApi_QueryProcess(IntPtr pid, StringBuilder box, StringBuilder image, StringBuilder sid, out uint session);
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    static string Box(int pid) { var b = new StringBuilder(64); var i = new StringBuilder(260); var s = new StringBuilder(128); uint ses; return SbieApi_QueryProcess(new IntPtr(pid), b, i, s, out ses) == 0 ? b.ToString() : ""; }
+    static bool Shown(int pid) { bool v = false; EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) v = true; return true; }, IntPtr.Zero); return v; }
+    static void Main(string[] a) {
+        string name = a[0], log = a[1]; var seen = new HashSet<int>(); var end = DateTime.Now.AddSeconds(double.Parse(a[2]));
+        var outp = new List<string>();
+        while (DateTime.Now < end) {
+            foreach (var p in Process.GetProcessesByName(name)) {
+                if (seen.Contains(p.Id)) continue; seen.Add(p.Id);
+                string b = Box(p.Id);
+                double age = -1; try { age = (DateTime.Now - p.StartTime).TotalMilliseconds; } catch {}
+                if (b == "") { outp.Add("outside " + p.Id + " (seen " + age.ToString("0") + " ms after it started)"); continue; }
+                bool shown = Shown(p.Id); string path = ""; try { path = p.MainModule.FileName; } catch { path = @"C:\lab\games\" + name + ".exe"; }
+                try { p.Kill(); } catch (Exception e) { outp.Add("couldn't stop it: " + e.Message); }
+                outp.Add("boxed " + p.Id + " in " + b + ": caught " + age.ToString("0") + " ms after it started, window showing then: " + shown);
+                var n = Process.Start(new ProcessStartInfo(path) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(path) });
+                outp.Add("started again outside: " + n.Id);
+            }
+            Thread.Sleep(2);
+        }
+        File.WriteAllLines(log, outp);
+    }
+}
+"@
+Set-Content C:\lab\w.cs $watch
+& $csc /nologo /target:exe /out:C:\lab\watch.exe C:\lab\w.cs | Out-Null
+Say "  built: game $(Test-Path C:\lab\games\fastgame.exe), watcher $(Test-Path C:\lab\watch.exe)"
+Rules @("ForceChildren=explorer.exe")
+Remove-Item C:\lab\games\started-*.txt -ErrorAction SilentlyContinue
+$w = Start-Process C:\lab\watch.exe -ArgumentList "fastgame", "C:\lab\watch.txt", "25" -PassThru -WindowStyle Hidden
+Start-Sleep 1
+foreach ($k in 1..5) { Start-Process explorer.exe -ArgumentList "C:\lab\games\fastgame.exe"; Start-Sleep 4; Get-Process fastgame -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1 }
+$w.WaitForExit(40000) | Out-Null
+Get-Content C:\lab\watch.txt -ErrorAction SilentlyContinue | ForEach-Object { Say "  $_" }
+Say "  written beside it (outside the box): $((Get-ChildItem C:\lab\games\started-*.txt -ErrorAction SilentlyContinue).Name -join ', ')"
+$boxed = Get-ChildItem C:\Sandbox -Recurse -Filter 'started-*.txt' -ErrorAction SilentlyContinue
+Say "  written into the box: $(@($boxed).Count) ($(($boxed.FullName) -join ', '))"
+
 Rules @()
 & "$dir\Start.exe" /terminate_all | Out-Null
 Say ""; Say "== done"
