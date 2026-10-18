@@ -1,4 +1,7 @@
-WindowsCraft 0.15.40 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.41 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.41: after the game closes, every window on your desk is on your taskbar again (Windows
+sometimes dropped their buttons while the in-game monitors' taskbars went away).
 
 New in 0.15.40: closing the game straight from a world closes every in-game monitor's apps and
 puts your taskbar back as it was (several monitors take a few seconds each; the game used to

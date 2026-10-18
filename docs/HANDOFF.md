@@ -115,6 +115,21 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.41 (18 Oct): the desk's taskbar buttons, again ("fourth or fifth time")
+
+- On 0.15.40 the close-up finished (`wc-vdisplay-exit.log`: two monitors off in 3.5 s,
+  `info=all done`, `MMTaskbarMode` put back) and his desk windows still lost their taskbar
+  buttons. In the log, mid-removal: "an in-game monitor's taskbar ended up on one of your
+  screens: hidden there". The likely path: while a monitor goes (taskbars per display, mode 2),
+  Windows moves that monitor's taskbar onto his screen and re-homes buttons into it; hiding it
+  (`stray_taskbars`) hid them too. Not proven (nothing records which taskbar a button is on).
+- Now: the game sends `quitting` first (a quick command: read at once, though its monitors'
+  `remove`s are still queued), which starts the exit log and stops stray-taskbar hiding for the
+  rest of the run. After the monitors are gone and the taskbar setting is back, `retab_desk`
+  calls `ITaskbarList::AddTab` on every ordinary window (`app_windows`: visible, unowned, not a
+  tool window, titled), 1.5 s and 4.5 s later; one already on the taskbar is unchanged. Checked
+  read-only on his PC first: those windows are the ones his taskbar shows.
+
 ## 0.15.40 (18 Oct): closing the game cut the helper off halfway
 
 - **"i just closed the game and all my monitor tabs went to my desk and my desk windows all went

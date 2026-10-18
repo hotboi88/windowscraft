@@ -384,6 +384,10 @@ public final class VDisplayHelper implements MonitorBackend {
     public synchronized void shutdown() {
         if (process == null) return;
         try {
+            send("quitting"); // (read at once, even with the monitors' removals still queued)
+        } catch (Throwable ignored) {
+        }
+        try {
             stdin.close(); // the helper puts windows back and removes its monitors, then exits
         } catch (IOException ignored) {
         }

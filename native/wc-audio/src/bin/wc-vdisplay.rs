@@ -2518,6 +2518,11 @@ fn quick_command(line: &str) -> bool {
     let p: Vec<&str> = line.split_whitespace().collect();
     let f = |i: usize| p.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     match p.first().copied() {
+        Some("quitting") => {
+            // the game is closing (its monitors' "remove"s may still be queued behind this)
+            QUITTING.store(true, Ordering::SeqCst);
+            output_to_file();
+        }
         Some("ptr") => put_cursor(f(1), f(2)),
         Some("btn") => click(f(1) as u8, p.get(2) == Some(&"down")),
         Some("wheel") => {
@@ -3187,6 +3192,11 @@ static STRAY_TOLD: Mutex<Option<Instant>> = Mutex::new(None);
 /// taskbars: the extra one is hidden (and Windows asked to lay its taskbars out again); it shows
 /// again as soon as it's back on its monitor.
 fn stray_taskbars(ours: &[String], our_rects: &[RECT]) {
+    // (not while the game closes: Windows may have just moved your own windows' buttons onto the
+    //  taskbar it put on your screen, and hiding it took them with it)
+    if QUITTING.load(Ordering::SeqCst) {
+        return;
+    }
     let center_in = |r: &RECT, a: &RECT| {
         let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
         cx >= a.left && cx < a.right && cy >= a.top && cy < a.bottom
@@ -6731,6 +6741,7 @@ fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
     if *done {
         return;
     }
+    QUITTING.store(true, Ordering::SeqCst);
     output_to_file();
     clear_all_force();
     shutdown_monitors(vdd, added, homes);
@@ -6738,6 +6749,7 @@ fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
     unsafe {
         let _ = ClipCursor(None);
     }
+    retab_desk();
     eprintln!("info=all done");
     *done = true;
 }
@@ -6745,8 +6757,41 @@ fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
 /// The game is going away, and with it whatever reads this helper's output (writing to a pipe
 /// nobody reads ends a program): from here on it goes to wc-vdisplay-exit.log beside it, so
 /// the monitors are still closed and your taskbar put back after the game has gone.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// The monitors and their taskbars gone, and your taskbar setting back: Windows sometimes lays
+/// its buttons out again without some of your desk's windows ("they stayed on my alt+tab list so
+/// i had to alt+tab into each of them"). Each ordinary window is put on the taskbar again — one
+/// that's already there stays as it is — once the taskbar has settled, and once more after.
+fn retab_desk() {
+    let t = std::thread::spawn(|| unsafe {
+        use windows::Win32::System::Com::*;
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let Ok(bar) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else { return };
+        if bar.HrInit().is_err() {
+            return;
+        }
+        for (i, wait) in [1500u64, 3000].into_iter().enumerate() {
+            std::thread::sleep(Duration::from_millis(wait));
+            let wins = app_windows();
+            for &h in &wins {
+                let _ = bar.AddTab(h);
+            }
+            if i == 0 {
+                eprintln!("info=your desk's {} windows put on the taskbar again", wins.len());
+            }
+        }
+    });
+    let _ = t.join();
+}
+
 fn output_to_file() {
     use std::os::windows::io::IntoRawHandle;
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    if ONCE.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let Some(path) = std::env::current_exe().ok().map(|e| e.with_file_name("wc-vdisplay-exit.log")) else { return };
     let Ok(f) = std::fs::File::create(&path) else { return };
     use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
