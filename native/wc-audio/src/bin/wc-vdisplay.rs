@@ -3493,8 +3493,9 @@ fn on_window_shown(h: HWND, fresh: bool) {
 //
 // Windows gives sound per program, and many apps refuse a second copy of themselves. For the apps
 // you pick, each in-game monitor runs its own copy in its own Sandboxie box: while you sit at it
-// (or point at it), one of them you start lands in that box — its own sound, its own sign-ins and
-// data, kept. Nothing else ever goes in a box by itself, and your desk's copies are never boxed.
+// (or point at it), one of them you open there lands in that box — its own sound, its own sign-ins
+// and data, kept. Anything else you open there runs normally (see the keeper), and your desk's
+// apps and everything they start are never boxed.
 // Sandboxie's own window never shows, nor does any border or marker; WindowsCraft drives it from
 // here.
 
@@ -4014,12 +4015,17 @@ fn desk_files_settings() -> Vec<(String, String)> {
     s
 }
 
-/// While you sit at (or point at) a monitor, the apps you switched on start in its box, by program
-/// name — as own copies always worked, for just those apps ("EXACTLY how it did before with
-/// sandboxie. BUT not all apps are affected"). Whatever starts one of them meanwhile — your
-/// desk's copy of it too — starts it there.
+/// While you sit at (or point at) a monitor, what you open there — through Explorer: the monitor's
+/// taskbar, Start menu, desktop, a double-click — starts in its box, and the keeper lets only the
+/// apps you switched on stay ("EXACTLY how it did before with sandboxie. BUT not all apps are
+/// affected"). Not by program name: that also boxed what your desk's copy of the app started
+/// meanwhile (measured: a desk app's new helper landed in the box — the Claude app went gray).
+/// What Explorer starts is all it takes (measured: your desk's apps and their helpers stay out).
 fn force_settings() -> Vec<(String, String)> {
-    chosen_names().into_iter().map(|n| ("ForceProcess".to_string(), n)).collect()
+    if chosen_names().is_empty() {
+        return Vec::new();
+    }
+    vec![("ForceChildren".to_string(), "explorer.exe".to_string())]
 }
 
 /// Sandboxie's own window never starts by itself: its service starts it (Sandboxie Control, with
@@ -4183,6 +4189,7 @@ fn set_force(to: Option<String>) {
         return;
     }
     let t0 = Instant::now();
+    *FORCE_SINCE.lock().unwrap() = now_filetime();
     let old = cur.clone();
     *cur = to.clone();
     drop(cur);
@@ -4201,7 +4208,7 @@ fn set_force(to: Option<String>) {
     //  would otherwise slip past)
     let t1 = Instant::now();
     // (its folders, or — if Sandboxie only names the template — the force template)
-    let live = |b: &str| sbie_query(b, "ForceProcess", 0).is_some() || (0..4).any(|i| sbie_query(b, "Template", i).as_deref() == Some(FORCE_TEMPLATE));
+    let live = |b: &str| sbie_query(b, "ForceChildren", 0).is_some() || (0..4).any(|i| sbie_query(b, "Template", i).as_deref() == Some(FORCE_TEMPLATE));
     let took = loop {
         let done = to.as_ref().map_or(true, |b| live(b)) && old.as_ref().filter(|o| Some(*o) != to.as_ref()).map_or(true, |o| !live(o));
         if done {
@@ -4222,6 +4229,7 @@ fn ensure_iso_thread() {
     if ISO_THREAD.swap(true, Ordering::SeqCst) {
         return;
     }
+    ensure_keeper();
     std::thread::spawn(|| {
         let mut ticks = 0u32;
         loop {
@@ -4321,6 +4329,338 @@ fn box_of(pid: u32) -> String {
         return String::new();
     }
     String::from_utf16_lossy(&b[..b.iter().position(|c| *c == 0).unwrap_or(0)])
+}
+
+// ---- the keeper: of what you open at a monitor, only the apps you picked stay in its box -----------
+//
+// While the rule is on (you sit at or point at a monitor with own copies), everything Explorer starts
+// lands in that monitor's box. The keeper looks at the box every couple of milliseconds. A program
+// that just landed there stays if it's one you picked (the monitor's own copy), or if a program
+// already in the box started it (a picked app's own helpers). Anything else — a game, a launcher,
+// any app you didn't pick — is ended as it shows up (measured: within 0–22 ms, before its window
+// showed, nothing written into the box) and started again normally: the same program, command
+// line, folder and start-up details Explorer gave it (which monitor, how it shows, its taskbar
+// identity), so it runs as if no box were there, on the monitor you opened it on.
+
+/// When the rule last changed: what was in the box before that isn't new (FILETIME).
+static FORCE_SINCE: Mutex<u64> = Mutex::new(0);
+static KEEPER: AtomicBool = AtomicBool::new(false);
+
+/// The processes in that box now, from Sandboxie itself (None: it couldn't say).
+fn box_pids(b: &str) -> Option<Vec<u32>> {
+    static ENUM: OnceLock<Option<unsafe extern "system" fn(*const u16, u8, u32, *mut u32, *mut u32) -> i32>> = OnceLock::new();
+    let f = ENUM.get_or_init(|| unsafe {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
+        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_EnumProcessEx"))?;
+        Some(std::mem::transmute::<_, unsafe extern "system" fn(*const u16, u8, u32, *mut u32, *mut u32) -> i32>(p))
+    });
+    let f = (*f)?;
+    let name = wide(b);
+    let mut pids = [0u32; 512];
+    // (with a count: it's how many fit, and comes back as how many there are)
+    let mut n = pids.len() as u32;
+    let r = unsafe { f(name.as_ptr(), 0, u32::MAX, pids.as_mut_ptr(), &mut n) };
+    (r == 0).then(|| pids[..(n as usize).min(pids.len())].to_vec())
+}
+
+/// How a process was started, read from the process itself: its parent, command line and folder,
+/// and the start-up details its starter gave it (STARTUPINFO: flags, how it shows, where, the
+/// monitor Explorer meant and its taskbar identity).
+struct Started {
+    parent: u32,
+    cmd: Vec<u16>,
+    dir: Vec<u16>,
+    flags: u32,
+    show: u16,
+    pos: [u32; 4],
+    shell_data: usize,
+    title: Vec<u16>,
+}
+
+fn read_started(h: HANDLE) -> Option<Started> {
+    type Nqip = unsafe extern "system" fn(HANDLE, u32, *mut std::ffi::c_void, u32, *mut u32) -> i32;
+    type Rpm = unsafe extern "system" fn(HANDLE, *const std::ffi::c_void, *mut std::ffi::c_void, usize, *mut usize) -> i32;
+    static FNS: OnceLock<Option<(Nqip, Rpm)>> = OnceLock::new();
+    let (nqip, rpm) = (*FNS.get_or_init(|| unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        let nt = GetModuleHandleW(windows::core::w!("ntdll.dll")).ok()?;
+        let k = GetModuleHandleW(windows::core::w!("kernel32.dll")).ok()?;
+        Some((std::mem::transmute::<_, Nqip>(GetProcAddress(nt, windows::core::s!("NtQueryInformationProcess"))?),
+            std::mem::transmute::<_, Rpm>(GetProcAddress(k, windows::core::s!("ReadProcessMemory"))?)))
+    }))?;
+    let read = |at: usize, len: usize| -> Option<Vec<u8>> {
+        let mut b = vec![0u8; len];
+        let mut got = 0usize;
+        (unsafe { rpm(h, at as *const _, b.as_mut_ptr() as *mut _, len, &mut got) } != 0 && got == len).then_some(b)
+    };
+    let word = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap()) as usize;
+    let dword = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    // PROCESS_BASIC_INFORMATION: [1] its PEB, [5] its parent
+    let mut pbi = [0usize; 6];
+    if unsafe { nqip(h, 0, pbi.as_mut_ptr() as *mut _, std::mem::size_of_val(&pbi) as u32, std::ptr::null_mut()) } != 0 {
+        return None;
+    }
+    // PEB → RTL_USER_PROCESS_PARAMETERS (64-bit layout; a 32-bit program has it too)
+    let params = word(&read(pbi[1] + 0x20, 8)?, 0);
+    let p = read(params, 0xC0)?;
+    let text = |o: usize| -> Vec<u16> {
+        let len = u16::from_le_bytes([p[o], p[o + 1]]) as usize;
+        let at = word(&p, o + 8);
+        if len == 0 || at == 0 {
+            return Vec::new();
+        }
+        read(at, len).map(|b| b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()).unwrap_or_default()
+    };
+    Some(Started {
+        parent: pbi[5] as u32,
+        dir: text(0x38),
+        cmd: text(0x70),
+        pos: [dword(&p, 0x88), dword(&p, 0x8C), dword(&p, 0x90), dword(&p, 0x94)],
+        flags: dword(&p, 0xA4),
+        show: dword(&p, 0xA8) as u16,
+        shell_data: word(&p, 0x28),
+        title: text(0xB0),
+    })
+}
+
+/// A program's full path (as Windows has it).
+fn image_path(h: HANDLE) -> String {
+    let mut buf = [0u16; 1024];
+    let mut n = buf.len() as u32;
+    unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n) }.map_or(String::new(), |_| String::from_utf16_lossy(&buf[..n as usize]))
+}
+
+/// The command line without its program: what ShellExecute takes as parameters.
+fn args_of(cmd: &str) -> String {
+    let s = cmd.trim_start();
+    let rest = if let Some(q) = s.strip_prefix('"') { q.split_once('"').map_or("", |(_, r)| r) } else { s.split_once([' ', '\t']).map_or("", |(_, r)| r) };
+    rest.trim_start().to_string()
+}
+
+/// Is that program (a full path) one of the apps you picked — the very program, or one in its own
+/// folder (an app's helper or launcher beside it, a newer version of it in a folder of its own)?
+/// (Not a folder many apps share: Windows', Program Files, AppData itself, your Desktop…)
+fn picked_program(exe: &str) -> bool {
+    let e = norm_dir(exe);
+    let name = file_name(exe);
+    let env = |k: &str| std::env::var(k).map(|v| norm_dir(&v)).unwrap_or_default();
+    let shared: Vec<String> = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "PUBLIC", "ProgramData"]
+        .iter().map(|k| env(k)).chain(std::iter::once(format!("{}\\programs", env("LOCALAPPDATA")))).chain(own_folders().iter().map(|d| norm_dir(d)))
+        .filter(|d| !d.is_empty()).collect();
+    let windows = env("WINDIR");
+    ISO_APPS.lock().unwrap().iter().any(|c| {
+        if file_name(c) == name {
+            return true;
+        }
+        let Some(dir) = std::path::Path::new(c).parent().map(|d| norm_dir(&d.display().to_string())).filter(|d| d.contains('\\')) else { return false };
+        !shared.contains(&dir) && !(dir == windows || dir.starts_with(&format!("{windows}\\"))) && e.starts_with(&format!("{dir}\\"))
+    })
+}
+
+fn has_window_showing(pid: u32) -> bool {
+    unsafe extern "system" fn each(h: HWND, data: LPARAM) -> windows::core::BOOL {
+        let (want, found) = unsafe { &mut *(data.0 as *mut (u32, bool)) };
+        let mut p = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut p)) };
+        if p == *want && unsafe { IsWindowVisible(h) }.as_bool() {
+            *found = true;
+            return false.into();
+        }
+        true.into()
+    }
+    let mut d = (pid, false);
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut d as *mut _ as isize));
+    }
+    d.1
+}
+
+/// Starts it again outside any box, as its starter had it. Its new process, if it started.
+fn start_normally(exe: &str, s: &Started) -> Option<u32> {
+    type Ceb = unsafe extern "system" fn(*mut *mut std::ffi::c_void, HANDLE, i32) -> i32;
+    type Deb = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
+    static ENV: OnceLock<Option<(Ceb, Deb)>> = OnceLock::new();
+    let envf = *ENV.get_or_init(|| unsafe {
+        use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+        let u = LoadLibraryW(windows::core::w!("userenv.dll")).ok()?;
+        Some((std::mem::transmute::<_, Ceb>(GetProcAddress(u, windows::core::s!("CreateEnvironmentBlock"))?),
+            std::mem::transmute::<_, Deb>(GetProcAddress(u, windows::core::s!("DestroyEnvironmentBlock"))?)))
+    });
+    let z = |v: &[u16]| -> Vec<u16> { v.iter().copied().chain(std::iter::once(0)).collect() };
+    let (app, mut cmd, dir, mut title) = (wide(exe), z(&s.cmd), z(&s.dir), z(&s.title));
+    unsafe {
+        // your own environment as Windows gives it to a new program (not the game's)
+        let mut env: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut tok = HANDLE::default();
+        let have_env = envf.is_some_and(|(ceb, _)| {
+            OpenProcessToken(GetCurrentProcess(), windows::Win32::Security::TOKEN_QUERY | windows::Win32::Security::TOKEN_DUPLICATE, &mut tok).is_ok() && ceb(&mut env, tok, 0) != 0
+        });
+        if !tok.is_invalid() {
+            let _ = CloseHandle(tok);
+        }
+        let mut si = STARTUPINFOW { cb: std::mem::size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+        // (not its starter's handles or hotkey: those were its starter's)
+        si.dwFlags = STARTUPINFOW_FLAGS(s.flags & !(0x100 | 0x200));
+        si.wShowWindow = s.show;
+        (si.dwX, si.dwY, si.dwXSize, si.dwYSize) = (s.pos[0], s.pos[1], s.pos[2], s.pos[3]);
+        if s.flags & 0x400 != 0 {
+            si.hStdOutput = HANDLE(s.shell_data as *mut _); // (STARTF_HASSHELLDATA: the monitor Explorer meant)
+        }
+        if s.flags & (0x800 | 0x1000) != 0 && title.len() > 1 {
+            si.lpTitle = PWSTR(title.as_mut_ptr()); // (STARTF_TITLEISAPPID / …LINKNAME: its taskbar identity)
+        }
+        let mut pi = PROCESS_INFORMATION::default();
+        let base = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE | CREATE_DEFAULT_ERROR_MODE;
+        let envp = have_env.then_some(env as *const std::ffi::c_void);
+        let dirp = if dir.len() > 1 { PCWSTR(dir.as_ptr()) } else { PCWSTR::null() };
+        // (out of the game's job if it may: it's yours, not the game's)
+        let mut r = CreateProcessW(PCWSTR(app.as_ptr()), Some(PWSTR(cmd.as_mut_ptr())), None, None, false, base | CREATE_BREAKAWAY_FROM_JOB, envp, dirp, &si, &mut pi);
+        if r.is_err() {
+            r = CreateProcessW(PCWSTR(app.as_ptr()), Some(PWSTR(cmd.as_mut_ptr())), None, None, false, base, envp, dirp, &si, &mut pi);
+        }
+        if have_env {
+            if let Some((_, deb)) = envf {
+                deb(env);
+            }
+        }
+        match r {
+            Ok(()) => {
+                let id = pi.dwProcessId;
+                let _ = CloseHandle(pi.hThread);
+                let _ = CloseHandle(pi.hProcess);
+                Some(id)
+            }
+            Err(e) => {
+                // (one that asks for administrator rights: as Explorer would, Windows asks)
+                eprintln!("info=couldn't start {} normally ({e}): through the shell instead", file_name(exe));
+                let params = wide(&args_of(&String::from_utf16_lossy(&s.cmd)));
+                let mut info = SHELLEXECUTEINFOW {
+                    cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+                    fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI,
+                    lpFile: PCWSTR(app.as_ptr()),
+                    lpParameters: PCWSTR(params.as_ptr()),
+                    lpDirectory: dirp,
+                    nShow: if s.flags & 1 != 0 { s.show as i32 } else { SW_SHOWNORMAL.0 },
+                    ..Default::default()
+                };
+                ShellExecuteExW(&mut info).ok()?;
+                let id = if info.hProcess.is_invalid() { 0 } else { GetProcessId(info.hProcess) };
+                if !info.hProcess.is_invalid() {
+                    let _ = CloseHandle(info.hProcess);
+                }
+                (id != 0).then_some(id)
+            }
+        }
+    }
+}
+
+/// One program that just landed in box `b`: stays, or is ended (and, if it was opened there, started
+/// again normally on monitor `idx`). `ended`: what the keeper ended — what one of those started in
+/// the box meanwhile is ended with it (its restarted self starts it again normally).
+fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::HashSet<u32>) {
+    let t0 = Instant::now();
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid) }) else { return };
+    let exe = image_path(h);
+    let started = read_started(h);
+    let parent = started.as_ref().map_or(0, |s| s.parent);
+    let sbie = sbie_dir().map(|d| norm_dir(&d.display().to_string())).unwrap_or_default();
+    let verdict = if exe.is_empty() || (!sbie.is_empty() && norm_dir(&exe).starts_with(&format!("{sbie}\\"))) {
+        "keep" // (Sandboxie's own, running the box)
+    } else if ended.contains(&parent) {
+        "end"
+    } else if parent != 0 && box_of(parent).eq_ignore_ascii_case(b) {
+        "keep" // (started by a program in the box: an own copy's helper)
+    } else if picked_program(&exe) {
+        "keep"
+    } else if started.is_none() {
+        "keep" // (can't be read, so it couldn't be started again as it was: left as it is)
+    } else {
+        "restart"
+    };
+    if verdict == "keep" {
+        unsafe {
+            let _ = CloseHandle(h);
+        }
+        return;
+    }
+    let age_ms = process_info(pid).map_or(-1, |(c, _)| (now_filetime().saturating_sub(c) / 10_000) as i64);
+    let shown = has_window_showing(pid);
+    unsafe {
+        let _ = TerminateProcess(h, 1);
+        let _ = WaitForSingleObject(h, 1000);
+        let _ = CloseHandle(h);
+    }
+    ended.insert(pid);
+    let name = file_name(&exe);
+    if verdict == "end" {
+        eprintln!("info={name} (started in {b} by one the keeper ended) ended too");
+        return;
+    }
+    let s = started.unwrap();
+    ensure_placer();
+    LAUNCHES.lock().unwrap().push(Launch {
+        idx,
+        since: now_filetime().saturating_sub(10_000_000),
+        exe: name.clone(),
+        before: app_windows().into_iter().map(|w| w.0 as isize).collect(),
+        until: Instant::now() + Duration::from_secs(20),
+    });
+    let new = start_normally(&exe, &s);
+    if let Some(n) = new {
+        owned().lock().unwrap().insert(n, idx);
+    }
+    eprintln!("info={name}, opened at monitor {idx}, isn't one of its own copies: started normally ({}; caught {age_ms} ms after it started, window showing then: {shown}; {} ms in all)",
+        new.map_or("couldn't start it".to_string(), |n| format!("process {n}")), t0.elapsed().as_millis());
+}
+
+/// Watches the box the rule is on: see above.
+fn ensure_keeper() {
+    if KEEPER.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let mut watching: Option<String> = None;
+        let mut seen: std::collections::HashSet<u32> = Default::default();
+        let mut ended: std::collections::HashSet<u32> = Default::default();
+        loop {
+            let live = FORCE_LIVE.lock().unwrap().clone();
+            let Some(b) = live else {
+                watching = None;
+                std::thread::sleep(Duration::from_millis(40));
+                continue;
+            };
+            let Some(pids) = box_pids(&b) else {
+                std::thread::sleep(Duration::from_millis(40));
+                continue;
+            };
+            if watching.as_deref() != Some(b.as_str()) {
+                // what was in the box before the rule came on isn't new (started on purpose, or judged before)
+                let since = *FORCE_SINCE.lock().unwrap();
+                seen = pids.iter().copied().filter(|p| process_info(*p).map_or(true, |(c, _)| c < since)).collect();
+                watching = Some(b.clone());
+            }
+            let mut new: Vec<(u64, u32)> = pids.iter().filter(|p| !seen.contains(p)).map(|p| (process_info(*p).map_or(0, |(c, _)| c), *p)).collect();
+            if !new.is_empty() {
+                // (oldest first: a parent is judged before what it started)
+                new.sort();
+                let seat = SEAT_IDX.load(Ordering::SeqCst);
+                let idx = if box_name(seat).eq_ignore_ascii_case(&b) { Some(seat) } else { monitor_of_box(&b) };
+                for (_, p) in new {
+                    seen.insert(p);
+                    if let Some(i) = idx {
+                        keep_or_restart(&b, i, p, &mut ended);
+                    }
+                }
+            }
+            seen.retain(|p| pids.contains(p));
+            if ended.len() > 4096 {
+                ended.clear();
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
 }
 
 /// The monitor a box belongs to.

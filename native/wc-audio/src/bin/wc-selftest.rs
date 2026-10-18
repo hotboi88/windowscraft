@@ -379,6 +379,13 @@ fn test_app(name: &str) {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+            // (the sandbox test's signal: start a helper of its own, as an app on your desk would)
+            let signal = std::path::Path::new("C:\\wcapps").join(format!("spawn-{name}"));
+            if signal.exists() && std::fs::remove_file(&signal).is_ok() {
+                if let Ok(me) = std::env::current_exe() {
+                    let _ = Command::new(me).args(["--window", &format!("{name} helper")]).spawn();
+                }
+            }
             if OPEN_ANOTHER.swap(0, Ordering::SeqCst) == 1 {
                 n += 1;
                 let t2 = wide(&format!("{name} {n}"));
@@ -2032,7 +2039,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let mut own: Vec<(String, String)> = Vec::new();
         let mut uses: Vec<String> = Vec::new();
         let mut template: Vec<String> = Vec::new();
-        let forcing = |low: &str| low.starts_with("forcefolder") || low.starts_with("forceprocess");
+        let forcing = |low: &str| low.starts_with("forcefolder") || low.starts_with("forceprocess") || low.starts_with("forcechildren");
         for l in t.lines() {
             let l = l.trim();
             let low = l.to_lowercase();
@@ -2056,15 +2063,53 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         h.call(&format!("boxapps {idx}"), "windows-end", 10000).unwrap_or_default().iter().filter(|l| l.starts_with("win "))
             .filter_map(|l| l.split(' ').nth(2).and_then(|p| p.parse().ok())).collect()
     };
-    // starts a test app the normal way (as from a monitor's own Start menu); its window
+    // opens a test app through Explorer, as a monitor's taskbar, Start menu or desktop does; its window
     let start = |exe: &std::path::Path| -> Option<HWND> {
         let stem = exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         // (its own new window: another copy of the same app may be open already)
         let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+        let _ = Command::new("explorer.exe").arg(exe).spawn();
+        // (in a box its title could carry Sandboxie's [#] marker: that's checked on its own)
+        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && class_name(*w) != "ConsoleWindowClass")
+    };
+    // started by another program (as an app on your desk starts one), not through Explorer
+    let start_direct = |exe: &std::path::Path| -> Option<HWND> {
+        let stem = exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
         use std::os::windows::process::CommandExt;
         let _ = Command::new(exe).current_dir("C:\\").creation_flags(0x0800_0000).spawn(); // (no console window)
-        // (in a box its title could carry Sandboxie's [#] marker: that's checked on its own)
-        find_new(&before, 12000, |w| title(*w).contains(&stem) && class_name(*w) != "ConsoleWindowClass")
+        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && class_name(*w) != "ConsoleWindowClass")
+    };
+    // every visible window of that program from now on, looked at every millisecond: which processes showed one
+    let watch_shown = |exe_name: &'static str| {
+        let known: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+        let go = Arc::new(AtomicBool::new(true));
+        let shown = Arc::new(Mutex::new(Vec::<u32>::new()));
+        let (g, s) = (go.clone(), shown.clone());
+        let th = std::thread::spawn(move || {
+            let mut looked: HashSet<isize> = known;
+            while g.load(Ordering::SeqCst) {
+                for w in top_windows() {
+                    if looked.contains(&(w.0 as isize)) || !unsafe { IsWindowVisible(w) }.as_bool() {
+                        continue;
+                    }
+                    looked.insert(w.0 as isize);
+                    if exe_of(pid(w)) == exe_name && class_name(w) != "ConsoleWindowClass" {
+                        let mut v = s.lock().unwrap();
+                        if !v.contains(&pid(w)) {
+                            v.push(pid(w));
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        move || -> Vec<u32> {
+            go.store(false, Ordering::SeqCst);
+            let _ = th.join();
+            let v = shown.lock().unwrap().clone();
+            v
+        }
     };
     let finish = |w: Option<HWND>| if let Some(w) = w { let p = pid(w); let _ = Command::new("taskkill").args(["/PID", &p.to_string(), "/T", "/F"]).output(); };
     let rep_times = std::sync::Mutex::new(Vec::<u128>::new());
@@ -2103,7 +2148,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let _ = wait_for(8000, || {
         rules = ini_forced();
         // (both apps: the rule is written value by value — read mid-way, part of it)
-        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
     });
     rep.check("sitting at monitor A: the rule is on for A's box only", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]"))), format!("{s:?} · {rules:?}"));
     let names = |rules: &Vec<String>| -> Vec<String> {
@@ -2112,8 +2157,8 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         v.dedup();
         v
     };
-    rep.check("…it names just the apps you picked, by program — no folders, nothing else",
-        names(&rules) == vec!["wcapp_a.exe".to_string(), "wcapp_b.exe".to_string()] && rules.iter().all(|l| l.to_lowercase().contains("forceprocess")),
+    rep.check("…it takes only what Explorer opens (the monitor's taskbar, Start menu, desktop) — no program names, no folders",
+        names(&rules) == vec!["explorer.exe".to_string()] && rules.iter().all(|l| l.to_lowercase().contains("forcechildren")),
         format!("{rules:?}"));
     let wa = start(&app("wcapp_a"));
     let (ina, inb) = (in_box(&h, ma.idx), in_box(&h, mb.idx));
@@ -2150,26 +2195,64 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     rep.check("every Chromium browser's elevation service runs in the boxes as SYSTEM (so a boxed browser opens your desk's sign-ins)",
         elevation.iter().all(|e| as_system.iter().any(|x| x.eq_ignore_ascii_case(e)) && shared_has("SandboxService").iter().any(|x| x.eq_ignore_ascii_case(e))),
         format!("on this PC: {elevation:?} · in the boxes: {as_system:?}"));
-    // 3. what you didn't pick runs normally, while sitting there (games, their launchers, Store apps…)
+    // 3. what you didn't pick, opened there, runs normally (games, their launchers, any app…): out of
+    //    the box before its window ever shows, started again as Explorer started it, on the monitor
+    let done = watch_shown("wcapp_c.exe");
     let wc = start(&app("wcapp_c"));
+    let on_c = wait_for(3000, || on(wc, &ra));
+    sleep(500);
+    let shown = done();
     let wx = start(&app("wcapp_x"));
     let ina = in_box(&h, ma.idx);
-    rep.check("an app you didn't pick runs normally, even started while you sit there", wc.is_some() && !ina.contains(&wc.map_or(0, pid)) && wx.is_some() && !ina.contains(&wx.map_or(0, pid)),
-        format!("{:?} {:?} · A's box {ina:?}", wc.map(pid), wx.map(pid)));
+    let restarted = HELPER_LOG.lock().unwrap().iter().filter(|l| l.contains("wcapp_c.exe, opened at monitor")).cloned().collect::<Vec<_>>();
+    rep.check("an app you didn't pick, opened while you sit there, runs normally (not in the box)", wc.is_some() && !ina.contains(&wc.map_or(0, pid)) && wx.is_some() && !ina.contains(&wx.map_or(0, pid)),
+        format!("{:?} {:?} · A's box {ina:?} · {restarted:?}", wc.map(pid), wx.map(pid)));
+    rep.check("…its boxed start never showed a window (only the normal one did), and it opened on monitor A",
+        wc.is_some_and(|w| shown == vec![pid(w)]) && on_c && restarted.iter().all(|l| l.contains("window showing then: false")),
+        format!("windows shown by {shown:?} · at {} (A {})", wc.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
     finish(wc);
     finish(wx);
+    // 3a. a quick real program you didn't pick (Windows' Character Map), opened there: the same
+    if std::path::Path::new("C:\\Windows\\System32\\charmap.exe").exists() {
+        let done = watch_shown("charmap.exe");
+        let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+        let _ = Command::new("explorer.exe").arg("C:\\Windows\\System32\\charmap.exe").spawn();
+        let cm = find_new(&before, 12000, |w| exe_of(pid(*w)) == "charmap.exe" && unsafe { IsWindowVisible(*w) }.as_bool());
+        sleep(800);
+        let shown = done();
+        let ina = in_box(&h, ma.idx);
+        let line = HELPER_LOG.lock().unwrap().iter().filter(|l| l.contains("charmap.exe, opened at monitor")).cloned().collect::<Vec<_>>();
+        rep.check("a real program you didn't pick (Character Map), opened there: runs normally, its boxed start never showed",
+            cm.is_some_and(|w| !ina.contains(&pid(w)) && shown == vec![pid(w)]), format!("{:?} · shown by {shown:?} · {line:?}", cm.map(pid)));
+        finish(cm);
+    }
+    // 3c. your desk's copy of an app you picked starting a helper of its own while you sit at the
+    //     monitor (a browser's new tab, the Claude app's pages): stays on your desk, never boxed
+    let _ = h.call("unseat", "unseated", 8000);
+    let _ = wait_for(5000, || h.call("forcestate", "forcestate", 3000).ok().and_then(|l| l.last().cloned()).is_some_and(|l| l == "forcestate -"));
+    let desk = start_direct(&app("wcapp_b"));
+    let _ = seat(&h, ma.idx);
+    let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+    let _ = std::fs::write(apps.join("spawn-wcapp_b"), "x");
+    let helper_w = find_new(&before, 8000, |w| title(*w) == "wcapp_b helper");
+    let ina = in_box(&h, ma.idx);
+    rep.check("your desk's copy of an app you picked, starting a helper of its own while you sit at a monitor: the helper stays on your desk (never boxed)",
+        desk.is_some() && helper_w.is_some_and(|w| !ina.contains(&pid(w))) && desk.is_some_and(|w| !ina.contains(&pid(w))),
+        format!("desk {:?} · helper {:?} · A's box {ina:?}", desk.map(pid), helper_w.map(pid)));
+    finish(helper_w);
+    finish(desk);
     // 3b. one switched on that's open on your desk too: started at the monitor, it's the monitor's
     //     own copy, straight into its box, as own copies always worked — your desk's stays as it was
     let _ = h.call("unseat", "unseated", 8000);
     // (up from the monitor: the rule goes a moment later — what starts before that is still the
     //  monitor's)
     let _ = wait_for(5000, || h.call("forcestate", "forcestate", 3000).ok().and_then(|l| l.last().cloned()).is_some_and(|l| l == "forcestate -"));
-    let desk_b = start(&app("wcapp_b"));
+    let desk_b = start_direct(&app("wcapp_b"));
     let s = seat(&h, ma.idx);
     let mut rules = ini_forced();
     let _ = wait_for(8000, || {
         rules = ini_forced();
-        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{ka}]")))
     });
     let copy_b = start(&app("wcapp_b"));
     let on_copy = wait_for(3000, || on(copy_b, &ra));
@@ -2185,7 +2268,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     let mut rules = ini_forced();
     let _ = wait_for(8000, || {
         rules = ini_forced();
-        rules.len() >= 2 && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
+        !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]")))
     });
     rep.check("sitting at monitor B: the rule moved to B's box", !rules.is_empty() && rules.iter().all(|l| l.contains(&format!("[WC{kb}]"))), format!("{s:?} · {rules:?}"));
     let wb = start(&app("wcapp_a"));
@@ -2409,10 +2492,10 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
                         std::thread::sleep(Duration::from_millis(1));
                     }
                 });
-                // the start from the monitor's taskbar, as Windows runs it (the same program, the
-                // same profile as your desk's)
+                // the start from the monitor's taskbar, as Windows runs it (the same program as
+                // your desk's)
                 let before2: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
-                let _ = Command::new(e).args(args("--new-window")).spawn();
+                let _ = Command::new("explorer.exe").arg(e).spawn(); // (through Explorer, as its taskbar does)
                 let copy = find_new(&before2, 25000, |w| exe_of(pid(*w)) == "msedge.exe" && pid(*w) != desk_pid && on(Some(*w), &rm));
                 sleep(1500);
                 watching.store(false, Ordering::SeqCst);
