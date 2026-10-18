@@ -115,6 +115,29 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.39 (18 Oct): from the first evening on 0.15.38
+
+- **The keeper never ran on the owner's PC.** Sandboxie was installed while the helper ran; every
+  SbieDll lookup sat in a `OnceLock<Option<_>>` filled once at helper start (None forever) — so
+  `SbieApi_QueryConf`/`ReloadConf`/`EnumProcessEx` all "failed" ("Sandboxie didn't take it" on every
+  switch, 1.5 s each), FORCE_LIVE stayed None, the keeper slept, and everything opened at a monitor
+  stayed boxed (Minecraft for Windows died in the box). Now `sbie_fn` keeps the DLL only once found.
+  Measured on his PC (normal user): UpdateConf + ReloadConf visible in ~20 ms — no admin needed.
+- **Packaged apps** (WindowsApps, X:\XboxGames GDK games, the Minecraft Launcher) are restarted by
+  their launch id (`GetApplicationUserModelId`, else AppxManifest.xml → `PackageFamilyNameFromId`)
+  through `IApplicationActivationManager`, not CreateProcess on their file. A program back in the box
+  within 15 s of its restart is left there (never a loop). X:\XboxGames folders are breakout folders.
+  Not testable on CI (no Store apps on the runner): proof is his PC.
+- **Suggestions/menus not clickable**: wc-input held mouse capture on a guest's app (hold_hover) —
+  and kept it after `yield_to_owner` detached (capture lives in the app's queue), so the owner's real
+  clicks all went to the main window, never its pop-ups. Now released when the owner takes the app or
+  the real pointer is on it; guests' clicks go to an owned/caption-less pop-up in front (`popup_at`).
+- **"Connecting…" flicker**: StreamingTexture.allocate blanked the wall on every size change (stream
+  restart, quality step, preview ↔ own capture). The last picture is held until the new size has one.
+- **Lag after adding a monitor**: GPU capture failing while Windows rearranged sent streams to CPU
+  capture for 120 s (game 13–18 fps). Retry now 15 s, and the steps down taken meanwhile try back up 30 s
+  after GPU capture returns.
+
 ## 0.15.38 (18 Oct): only what you open at a monitor is boxed; only picked apps stay
 
 His words: "no extension no gimmicks. real unmixed audio" and, about the plan, "just test however

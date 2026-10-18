@@ -3602,6 +3602,20 @@ fn sbie_dir() -> Option<std::path::PathBuf> {
     d.join("Start.exe").exists().then_some(d)
 }
 
+/// One of Sandboxie's own functions (None: Sandboxie isn't there, yet). Kept only once found: Sandboxie
+/// installed while the helper already ran is found the next time (it had looked once at start, found
+/// nothing and never looked again — the keeper then never ran all evening on a PC).
+fn sbie_fn(name: windows::core::PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
+    static DLL: Mutex<usize> = Mutex::new(0);
+    let mut h = DLL.lock().unwrap_or_else(|e| e.into_inner());
+    if *h == 0 {
+        let d = sbie_dir()?;
+        let dll = wide(&d.join("SbieDll.dll").display().to_string());
+        *h = unsafe { windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())) }.ok()?.0 as usize;
+    }
+    unsafe { windows::Win32::System::LibraryLoader::GetProcAddress(windows::Win32::Foundation::HMODULE(*h as *mut _), name) }
+}
+
 /// "ok", "missing" (not installed) or "stopped" (installed, its service isn't running).
 fn sbie_status() -> &'static str {
     if sbie_dir().is_none() {
@@ -3703,15 +3717,8 @@ static INI_LOCK: Mutex<()> = Mutex::new(());
 /// Sandboxie's service changing one setting: op 's' sets it to this one value (an empty value
 /// removes it), 'a' adds another value. False: not done (or no such interface: an older Sandboxie).
 fn sbie_update(op: char, section: &str, setting: &str, value: &str) -> bool {
-    static UPDATE: OnceLock<Option<unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> i32>> = OnceLock::new();
-    let f = UPDATE.get_or_init(|| unsafe {
-        let d = sbie_dir()?;
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
-        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieDll_UpdateConf"))?;
-        Some(std::mem::transmute::<_, unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> i32>(p))
-    });
-    let Some(f) = *f else { return false };
+    let Some(p) = sbie_fn(windows::core::s!("SbieDll_UpdateConf")) else { return false };
+    let f = unsafe { std::mem::transmute::<_, unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> i32>(p) };
     let (sec, key, val) = (wide(section), wide(setting), wide(value));
     let r = unsafe { f(op as u16, std::ptr::null(), sec.as_ptr(), key.as_ptr(), val.as_ptr()) };
     if r != 0 {
@@ -3721,15 +3728,7 @@ fn sbie_update(op: char, section: &str, setting: &str, value: &str) -> bool {
 }
 
 fn has_sbie_update() -> bool {
-    static HAS: OnceLock<bool> = OnceLock::new();
-    *HAS.get_or_init(|| sbie_dir().map_or(false, |d| {
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        unsafe {
-            windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()
-                .and_then(|h| windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieDll_UpdateConf")))
-                .is_some()
-        }
-    }))
+    sbie_fn(windows::core::s!("SbieDll_UpdateConf")).is_some()
 }
 
 /// A section's settings as the file has them now, in order.
@@ -3827,31 +3826,16 @@ fn set_section_file(name: &str, settings: &[(String, String)]) {
 
 fn reload_conf() -> bool {
     step("asking Sandboxie to reload its settings");
-    static RELOAD: OnceLock<Option<unsafe extern "system" fn(u32, u32) -> i32>> = OnceLock::new();
-    let f = RELOAD.get_or_init(|| unsafe {
-        let d = sbie_dir()?;
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
-        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_ReloadConf"))?;
-        Some(std::mem::transmute::<_, unsafe extern "system" fn(u32, u32) -> i32>(p))
-    });
-    match f {
-        Some(f) => unsafe { f(u32::MAX, 0) == 0 },
+    match sbie_fn(windows::core::s!("SbieApi_ReloadConf")) {
+        Some(p) => unsafe { std::mem::transmute::<_, unsafe extern "system" fn(u32, u32) -> i32>(p)(u32::MAX, 0) == 0 },
         None => false,
     }
 }
 
 /// A setting as Sandboxie itself has it now (what its driver goes by, not the file).
 fn sbie_query(section: &str, setting: &str, index: u32) -> Option<String> {
-    static QUERY: OnceLock<Option<unsafe extern "system" fn(*const u16, *const u16, u32, *mut u16, u32) -> i32>> = OnceLock::new();
-    let f = QUERY.get_or_init(|| unsafe {
-        let d = sbie_dir()?;
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
-        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_QueryConf"))?;
-        Some(std::mem::transmute::<_, unsafe extern "system" fn(*const u16, *const u16, u32, *mut u16, u32) -> i32>(p))
-    });
-    let f = (*f)?;
+    let p = sbie_fn(windows::core::s!("SbieApi_QueryConf"))?;
+    let f = unsafe { std::mem::transmute::<_, unsafe extern "system" fn(*const u16, *const u16, u32, *mut u16, u32) -> i32>(p) };
     let (sec, set) = (wide(section), wide(setting));
     let mut buf = [0u16; 1024];
     let r = unsafe { f(sec.as_ptr(), set.as_ptr(), index, buf.as_mut_ptr(), (buf.len() * 2) as u32) };
@@ -3881,6 +3865,17 @@ fn breakout_exes() -> Vec<String> {
 /// from there belong in its box with it.)
 fn breakout_dirs() -> Vec<String> {
     let mut dirs: Vec<String> = ISO_DIRS.lock().unwrap().clone();
+    // Xbox games (the Xbox app puts them in X:\XboxGames on the drive you chose)
+    let drives = unsafe { windows::Win32::Storage::FileSystem::GetLogicalDrives() };
+    for (i, c) in ('A'..='Z').enumerate() {
+        let root = wide(&format!("{c}:\\"));
+        if drives & (1 << i) != 0 && unsafe { windows::Win32::Storage::FileSystem::GetDriveTypeW(PCWSTR(root.as_ptr())) } == 3 /* DRIVE_FIXED */ {
+            let d = format!("{c}:\\XboxGames");
+            if std::path::Path::new(&d).is_dir() {
+                dirs.push(d);
+            }
+        }
+    }
     if let Ok(me) = std::env::current_exe() {
         if let Some(d) = me.parent() {
             dirs.push(d.display().to_string());
@@ -4313,15 +4308,8 @@ fn clear_all_force() {
 
 /// The box a process runs in ("" if none), from Sandboxie itself.
 fn box_of(pid: u32) -> String {
-    static QUERY: OnceLock<Option<unsafe extern "system" fn(HANDLE, *mut u16, *mut u16, *mut u16, *mut u32) -> i32>> = OnceLock::new();
-    let f = QUERY.get_or_init(|| unsafe {
-        let d = sbie_dir()?;
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
-        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_QueryProcess"))?;
-        Some(std::mem::transmute::<_, unsafe extern "system" fn(HANDLE, *mut u16, *mut u16, *mut u16, *mut u32) -> i32>(p))
-    });
-    let Some(f) = f else { return String::new() };
+    let Some(p) = sbie_fn(windows::core::s!("SbieApi_QueryProcess")) else { return String::new() };
+    let f = unsafe { std::mem::transmute::<_, unsafe extern "system" fn(HANDLE, *mut u16, *mut u16, *mut u16, *mut u32) -> i32>(p) };
     let (mut b, mut i, mut s) = ([0u16; 64], [0u16; 128], [0u16; 128]);
     let mut ses = 0u32;
     let r = unsafe { f(HANDLE(pid as usize as *mut _), b.as_mut_ptr(), i.as_mut_ptr(), s.as_mut_ptr(), &mut ses) };
@@ -4352,15 +4340,8 @@ static KEEPER_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 
 /// The processes in that box now, from Sandboxie itself (None: it couldn't say).
 fn box_pids(b: &str) -> Option<Vec<u32>> {
-    static ENUM: OnceLock<Option<unsafe extern "system" fn(*const u16, u8, u32, *mut u32, *mut u32) -> i32>> = OnceLock::new();
-    let f = ENUM.get_or_init(|| unsafe {
-        let d = sbie_dir()?;
-        let dll = wide(&d.join("SbieDll.dll").display().to_string());
-        let h = windows::Win32::System::LibraryLoader::LoadLibraryW(PCWSTR(dll.as_ptr())).ok()?;
-        let p = windows::Win32::System::LibraryLoader::GetProcAddress(h, windows::core::s!("SbieApi_EnumProcessEx"))?;
-        Some(std::mem::transmute::<_, unsafe extern "system" fn(*const u16, u8, u32, *mut u32, *mut u32) -> i32>(p))
-    });
-    let f = (*f)?;
+    let p = sbie_fn(windows::core::s!("SbieApi_EnumProcessEx"))?;
+    let f = unsafe { std::mem::transmute::<_, unsafe extern "system" fn(*const u16, u8, u32, *mut u32, *mut u32) -> i32>(p) };
     let name = wide(b);
     let mut pids = [0u32; 512];
     // (with a count: it's how many fit, and comes back as how many there are)
@@ -4441,6 +4422,108 @@ fn args_of(cmd: &str) -> String {
     let s = cmd.trim_start();
     let rest = if let Some(q) = s.strip_prefix('"') { q.split_once('"').map_or("", |(_, r)| r) } else { s.split_once([' ', '\t']).map_or("", |(_, r)| r) };
     rest.trim_start().to_string()
+}
+
+/// A packaged app's launch id (Store and Xbox apps: Minecraft for Windows, the Minecraft Launcher…),
+/// or None for an ordinary program. Such a program can't be started from its file: it would run
+/// without being the app (no package, no sign-in) or not at all — Windows starts it by this id.
+fn packaged_id(h: HANDLE, exe: &str) -> Option<String> {
+    type Gaumid = unsafe extern "system" fn(HANDLE, *mut u32, *mut u16) -> i32;
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        if let Some(p) = GetModuleHandleW(windows::core::w!("kernel32.dll")).ok().and_then(|k| GetProcAddress(k, windows::core::s!("GetApplicationUserModelId"))) {
+            let mut buf = [0u16; 512];
+            let mut n = buf.len() as u32;
+            if std::mem::transmute::<_, Gaumid>(p)(h, &mut n, buf.as_mut_ptr()) == 0 {
+                let id = String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(0)]);
+                if !id.is_empty() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    // (a boxed one may not carry its package: its package's own description says)
+    let mut dir = std::path::Path::new(exe).parent();
+    for _ in 0..6 {
+        let d = dir?;
+        let m = d.join("AppxManifest.xml");
+        if m.is_file() {
+            return manifest_id(&std::fs::read_to_string(&m).ok()?, exe, d);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// From a package's AppxManifest.xml: "<family name>!<the app whose program that is>".
+fn manifest_id(xml: &str, exe: &str, root: &std::path::Path) -> Option<String> {
+    let tags = |name: &str| -> Vec<&str> {
+        let open = format!("<{name}");
+        let mut out = Vec::new();
+        let mut rest = xml;
+        while let Some(i) = rest.find(&open) {
+            let after = &rest[i + open.len()..];
+            if after.starts_with(|c: char| c.is_whitespace()) {
+                out.push(&after[..after.find('>').unwrap_or(after.len())]);
+            }
+            rest = after;
+        }
+        out
+    };
+    let attr = |tag: &str, key: &str| -> Option<String> {
+        let mut rest = tag;
+        loop {
+            let i = rest.find(&format!("{key}=\""))?;
+            let ok = i > 0 && rest[..i].ends_with(|c: char| c.is_whitespace());
+            let v = &rest[i + key.len() + 2..];
+            let end = v.find('"')?;
+            if ok {
+                return Some(v[..end].replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"));
+            }
+            rest = &v[end..];
+        }
+    };
+    let ident = *tags("Identity").first()?;
+    let (name, publisher) = (attr(ident, "Name")?, attr(ident, "Publisher")?);
+    let rel = norm_dir(exe).strip_prefix(&format!("{}\\", norm_dir(&root.display().to_string()))).map(str::to_string).unwrap_or_default();
+    let apps: Vec<(String, String)> = tags("Application").iter().filter_map(|t| Some((attr(t, "Id")?, attr(t, "Executable").map(|e| norm_dir(&e)).unwrap_or_default()))).collect();
+    let app = apps.iter().find(|(_, e)| !e.is_empty() && *e == rel)
+        .or_else(|| apps.iter().find(|(_, e)| file_name(e) == file_name(exe)))
+        .or_else(|| apps.first())?;
+    #[repr(C)]
+    struct PackageId { reserved: u32, arch: u32, version: u64, name: *mut u16, publisher: *mut u16, resource: *mut u16, publisher_id: *mut u16 }
+    type Pfn = unsafe extern "system" fn(*const PackageId, *mut u32, *mut u16) -> i32;
+    let (mut n16, mut p16) = (wide(&name), wide(&publisher));
+    let id = PackageId { reserved: 0, arch: 0, version: 0, name: n16.as_mut_ptr(), publisher: p16.as_mut_ptr(), resource: std::ptr::null_mut(), publisher_id: std::ptr::null_mut() };
+    let mut buf = [0u16; 256];
+    let mut len = buf.len() as u32;
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        let p = GetProcAddress(GetModuleHandleW(windows::core::w!("kernel32.dll")).ok()?, windows::core::s!("PackageFamilyNameFromId"))?;
+        if std::mem::transmute::<_, Pfn>(p)(&id, &mut len, buf.as_mut_ptr()) != 0 {
+            return None;
+        }
+    }
+    let family = String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(0)]);
+    Some(format!("{family}!{}", app.0))
+}
+
+/// Starts a packaged app the way Windows does (by its launch id). Its process, if it said.
+fn start_packaged(id: &str, args: &str) -> Option<u32> {
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED};
+    use windows::Win32::UI::Shell::{ApplicationActivationManager, IApplicationActivationManager, AO_NONE};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let m: IApplicationActivationManager = CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_LOCAL_SERVER).ok()?;
+        let (i, a) = (wide(id), wide(args));
+        match m.ActivateApplication(PCWSTR(i.as_ptr()), PCWSTR(a.as_ptr()), AO_NONE) {
+            Ok(pid) => Some(pid),
+            Err(e) => {
+                eprintln!("info=Windows didn't start {id} ({e})");
+                None
+            }
+        }
+    }
 }
 
 /// Is that program (a full path) one of the apps you picked — the very program, or one in its own
@@ -4580,6 +4663,10 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
         "keep"
     } else if started.is_none() {
         "keep" // (can't be read, so it couldn't be started again as it was: left as it is)
+    } else if recently_restarted(&exe) {
+        // (started again a moment ago and back in the box: Windows put it there again — never a loop)
+        eprintln!("info={} came back into {b} right after it was started normally: left in it", file_name(&exe));
+        "keep"
     } else {
         "restart"
     };
@@ -4589,6 +4676,7 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
         }
         return;
     }
+    let pkg = if verdict == "restart" { packaged_id(h, &exe) } else { None };
     // (left alone that long first: see KEEPER_DELAY_MS; tests change it with `keeperdelay`)
     let wait = KEEPER_DELAY_MS.load(Ordering::SeqCst) as i64;
     while wait > 0 && process_info(pid).map_or(false, |(c, _)| ((now_filetime().saturating_sub(c) / 10_000) as i64) < wait) {
@@ -4636,16 +4724,31 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
     LAUNCHES.lock().unwrap().push(Launch {
         idx,
         since: now_filetime().saturating_sub(10_000_000),
-        exe: name.clone(),
+        // (a packaged app's window may come from another of its programs: any program started since)
+        exe: if pkg.is_some() { String::new() } else { name.clone() },
         before: app_windows().into_iter().map(|w| w.0 as isize).collect(),
         until: Instant::now() + Duration::from_secs(20),
     });
-    let new = start_normally(&exe, &s);
+    RESTARTED.lock().unwrap().push((norm_dir(&exe), Instant::now()));
+    let new = match pkg.as_deref() {
+        Some(id) => start_packaged(id, &args_of(&String::from_utf16_lossy(&s.cmd))),
+        None => start_normally(&exe, &s),
+    };
     if let Some(n) = new {
         owned().lock().unwrap().insert(n, idx);
     }
-    eprintln!("info={name}, opened at monitor {idx}, isn't one of its own copies: started normally ({}; caught {age_ms} ms after it started, window showing then: {shown}; {} ms in all)",
-        new.map_or("couldn't start it".to_string(), |n| format!("process {n}")), t0.elapsed().as_millis());
+    eprintln!("info={name}, opened at monitor {idx}, isn't one of its own copies: started normally ({}{}; caught {age_ms} ms after it started, window showing then: {shown}; {} ms in all)",
+        new.map_or("couldn't start it".to_string(), |n| format!("process {n}")), pkg.map_or(String::new(), |id| format!(", as the app {id}")), t0.elapsed().as_millis());
+}
+
+/// Programs the keeper started again normally, and when.
+static RESTARTED: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+
+fn recently_restarted(exe: &str) -> bool {
+    let mut r = RESTARTED.lock().unwrap();
+    r.retain(|(_, t)| t.elapsed() < Duration::from_secs(15));
+    let e = norm_dir(exe);
+    r.iter().any(|(x, _)| *x == e)
 }
 
 /// Watches the box the rule is on: see above.

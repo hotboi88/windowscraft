@@ -1,4 +1,10 @@
-WindowsCraft 0.15.38 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.39 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.39: Store and Xbox games (Minecraft for Windows, the Minecraft Launcher) open on an
+in-game monitor; Sandboxie installed while the game runs is used right away; a sign-in box's
+suggestions and menus can be clicked while a friend points at the same app; a monitor's picture
+no longer flickers "Connecting..." when its stream changes quality; streams get their fast GPU
+capture back 15 s after a monitor is added (was 2 minutes).
 
 New in 0.15.38: own copies of apps no longer reach your desk. Only what you open at a monitor (its
 taskbar, Start menu or desktop) can be its own copy, and only if you switched that app on; your

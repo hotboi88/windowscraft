@@ -166,6 +166,9 @@ impl Input {
     /// it — the guest's input then goes as messages only.
     fn yield_to_owner(&mut self) {
         if self.attached && self.valid() && unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) } == self.thread {
+            // (a hover held for them goes first: held on, your own clicks would all go to that
+            //  window, never to the one under your pointer — a sign-in box's suggestions)
+            self.drop_hover();
             // (the keys the guest holds come up in the shared state first: nothing of theirs stays)
             let mut state = [0u8; 256];
             unsafe {
@@ -193,10 +196,15 @@ impl Input {
     /// Chromium apps (Chrome, Edge, Discord, Spotify…) end a hover as soon as they see the real
     /// mouse isn't over them (it's over Minecraft) — unless the window holds the mouse capture,
     /// the way it does while you drag. So while the pointer hovers the app, it holds the capture
-    /// in the app's own (background) input queue. Real mouse input never goes there: the
-    /// window is never under the real cursor. Never taken from anything else (e.g. an open menu).
+    /// in the app's own (background) input queue. Never taken from anything else (e.g. an open
+    /// menu), and never while your real pointer is on that app: while it's held, your own clicks
+    /// would all go to that window — not to its pop-ups (a sign-in box's suggestions, a menu).
     fn hold_hover(&mut self) {
         if !self.attached || self.buttons != 0 {
+            return;
+        }
+        if self.real_pointer_on_app() {
+            self.drop_hover();
             return;
         }
         unsafe {
@@ -204,6 +212,31 @@ impl Input {
                 let _ = SetCapture(self.top);
                 self.hovering = true;
             }
+        }
+    }
+
+    /// Is the real mouse pointer over one of this app's windows (its own, or a pop-up of it)?
+    fn real_pointer_on_app(&self) -> bool {
+        let mut pt = POINT::default();
+        unsafe { GetCursorPos(&mut pt).is_ok() && GetWindowThreadProcessId(WindowFromPoint(pt), None) == self.thread }
+    }
+
+    /// Lets go of a hover held for them (see hold_hover).
+    fn drop_hover(&mut self) {
+        if self.hovering && self.attached && self.valid() {
+            unsafe {
+                if GetCapture() == self.top {
+                    let _ = ReleaseCapture();
+                }
+            }
+        }
+        self.hovering = false;
+    }
+
+    /// Nothing from them for a moment: your own pointer on that app ends a hover held for them.
+    fn tick(&mut self) {
+        if self.hovering && self.real_pointer_on_app() {
+            self.drop_hover();
         }
     }
 
@@ -234,7 +267,15 @@ impl Input {
         let h = (rc.bottom - rc.top).max(1);
         let px = ((nx.clamp(0.0, 1.0)) * w as f64).floor().min((w - 1) as f64) as i32;
         let py = ((ny.clamp(0.0, 1.0)) * h as f64).floor().min((h - 1) as f64) as i32;
-        let target = self.capture.unwrap_or_else(|| self.child_at(px, py));
+        let target = self.capture.unwrap_or_else(|| {
+            // a pop-up of the app over that spot (a sign-in box's suggestions, a menu, a list) gets it
+            let root = self.popup_at(px, py).unwrap_or(self.top);
+            let mut p = [POINT { x: px, y: py }];
+            if root != self.top {
+                unsafe { MapWindowPoints(Some(self.top), Some(root), &mut p) };
+            }
+            self.child_at(root, p[0].x, p[0].y)
+        });
         let mut pts = [POINT { x: px, y: py }];
         if target != self.top {
             unsafe { MapWindowPoints(Some(self.top), Some(target), &mut pts) };
@@ -242,8 +283,33 @@ impl Input {
         (target, pts[0].x, pts[0].y)
     }
 
-    fn child_at(&self, x: i32, y: i32) -> HWND {
-        let mut parent = self.top;
+    /// The app's own window in front of its main one at that spot (client coordinates), if any.
+    fn popup_at(&self, x: i32, y: i32) -> Option<HWND> {
+        let mut pt = [POINT { x, y }];
+        unsafe { MapWindowPoints(Some(self.top), None, &mut pt) };
+        let mut w = self.top;
+        for _ in 0..64 {
+            w = unsafe { GetWindow(w, GW_HWNDPREV) }.ok()?;
+            if w.0.is_null() {
+                return None;
+            }
+            let mut rc = RECT::default();
+            // (its own pop-up: owned by it, or a caption-less pop-up of the same app — not another of
+            //  its full windows that happens to be in front there)
+            let style = unsafe { GetWindowLongW(w, GWL_STYLE) } as u32;
+            let popup = unsafe { GetWindow(w, GW_OWNER) }.ok() == Some(self.top) || (style & WS_POPUP.0 != 0 && style & WS_CAPTION.0 != WS_CAPTION.0);
+            let mine = popup && unsafe { GetWindowThreadProcessId(w, None) } == self.thread;
+            if mine && unsafe { IsWindowVisible(w) }.as_bool() && unsafe { GetWindowRect(w, &mut rc) }.is_ok()
+                && pt[0].x >= rc.left && pt[0].x < rc.right && pt[0].y >= rc.top && pt[0].y < rc.bottom
+            {
+                return Some(w);
+            }
+        }
+        None
+    }
+
+    fn child_at(&self, top: HWND, x: i32, y: i32) -> HWND {
+        let mut parent = top;
         let mut pt = POINT { x, y };
         for _ in 0..32 {
             let child = unsafe { ChildWindowFromPointEx(parent, pt, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT) };
@@ -554,7 +620,10 @@ fn main() {
                                     }
                                 }
                                 // (nothing from them: still, the moment you use that app yourself, let go)
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => mine.yield_to_owner(),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                    mine.yield_to_owner();
+                                    mine.tick();
+                                }
                                 Err(_) => break,
                             }
                             pad.tick();

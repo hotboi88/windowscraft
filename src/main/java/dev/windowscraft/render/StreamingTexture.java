@@ -179,13 +179,23 @@ public final class StreamingTexture extends AbstractTexture {
     @Override
     public int getGlId() {
         if (plain) return fallback.getGlId();
+        if (!hasContent && held != 0) return held;
         if (textures[front] == 0) return super.getGlId();
         return textures[front];
     }
 
-    public int width() { return plain ? fallback.width() : width; }
-    public int height() { return plain ? fallback.height() : height; }
-    public boolean hasContent() { return plain ? fallback.hasContent() : hasContent; }
+    public int width() { return plain ? fallback.width() : !hasContent && held != 0 ? heldW : width; }
+    public int height() { return plain ? fallback.height() : !hasContent && held != 0 ? heldH : height; }
+    public boolean hasContent() { return plain ? fallback.hasContent() : hasContent || held != 0; }
+
+    /** The last picture before a change of size, shown until the first one in the new size is there
+     *  (a size change used to blank the wall: "Connecting…" flickered on every quality step). */
+    private int held, heldW, heldH;
+
+    private void releaseHeld() {
+        if (held != 0) TextureUtil.releaseTextureId(held);
+        held = 0;
+    }
 
     /**
      * Render thread, once per frame: finish the previous transfer and, if a new frame is waiting,
@@ -364,6 +374,7 @@ public final class StreamingTexture extends AbstractTexture {
             GPU_UPLOAD.end();
             front = back;
             hasContent = true;
+            releaseHeld();
             return;
         }
         GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4);
@@ -375,9 +386,17 @@ public final class StreamingTexture extends AbstractTexture {
         GPU_UPLOAD.end();
         front = back;
         hasContent = true;
+        releaseHeld();
     }
 
     private void allocate(int w, int h, boolean planes) {
+        if (hasContent && textures[front] != 0) { // (kept on the wall until the new size has a picture)
+            releaseHeld();
+            held = textures[front];
+            heldW = width;
+            heldH = height;
+            textures[front] = 0;
+        }
         freeGpu();
         width = w;
         height = h;
@@ -412,6 +431,7 @@ public final class StreamingTexture extends AbstractTexture {
         if (mapped == null) {
             WindowsCraftClient.LOGGER.warn("Couldn't map a streaming buffer ({}×{}); this screen uses plain texture uploads", w, h);
             freeGpu();
+            releaseHeld();
             plain = true;
         }
         front = 0;
@@ -465,6 +485,7 @@ public final class StreamingTexture extends AbstractTexture {
     public void clearGlId() {
         RenderSystem.assertOnRenderThread();
         freeGpu();
+        releaseHeld();
         fallback.clearGlId();
         super.clearGlId();
     }

@@ -94,8 +94,10 @@ public final class StreamPublisher {
     private volatile int streamW, streamH, streamFps; // what the current pipeline encodes (0 = not yet)
     private volatile boolean softwareOnly;              // the GPU encoder failed (e.g. out of sessions)
     private volatile boolean gpuFailed;                 // GPU capture didn't work: use the CPU path (tried again later, see gpuRetry)
-    /** GPU capture that didn't work is tried again at a later start of the stream (2 min, then less often). */
-    private final dev.windowscraft.capture.Backoff gpuRetry = new dev.windowscraft.capture.Backoff(120, 1800);
+    /** GPU capture that didn't work is tried again at a later start of the stream (15 s, then less often:
+     *  mostly it stopped because Windows was rearranging the monitors — a monitor added took all three
+     *  streams to CPU capture for 2 minutes, the game at 13–18 fps and the streams down to their lowest). */
+    private final dev.windowscraft.capture.Backoff gpuRetry = new dev.windowscraft.capture.Backoff(15, 1800);
     /**
      * Which way of feeding the GPU capture to the encoder is being tried: 0 = straight into NVENC
      * (it takes the BGRA pictures itself), 1 = converted on the GPU (scale_d3d11) at a size that's
@@ -840,6 +842,11 @@ public final class StreamPublisher {
         if (gpuFailed && gpuRetry.due(System.nanoTime())) { // (it may have been a passing hiccup: one more go)
             gpuFailed = false;
             gpuAttempt = 0;
+            // (the steps down it took meanwhile were for the slow CPU capture: one up is tried 30 s from now)
+            if (level > 0) {
+                triedUp = false;
+                levelSince = Math.min(levelSince, System.nanoTime() - 270_000_000_000L);
+            }
             WindowsCraftClient.LOGGER.info("Stream '{}': trying GPU capture again", source.title());
         }
         if (gpuFailed || !"true".equals(System.getProperty("windowscraft.gpuCapture", "true"))) return false;
