@@ -2070,7 +2070,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
         let _ = Command::new("explorer.exe").arg(exe).spawn();
         // (in a box its title could carry Sandboxie's [#] marker: that's checked on its own)
-        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && class_name(*w) != "ConsoleWindowClass")
+        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && exe_of(pid(*w)) == format!("{}.exe", stem.to_lowercase()) && class_name(*w) != "ConsoleWindowClass")
     };
     // started by another program (as an app on your desk starts one), not through Explorer
     let start_direct = |exe: &std::path::Path| -> Option<HWND> {
@@ -2078,7 +2078,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
         use std::os::windows::process::CommandExt;
         let _ = Command::new(exe).current_dir("C:\\").creation_flags(0x0800_0000).spawn(); // (no console window)
-        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && class_name(*w) != "ConsoleWindowClass")
+        find_new(&before, 12000, |w| title(*w).contains(&stem) && !title(*w).contains("helper") && exe_of(pid(*w)) == format!("{}.exe", stem.to_lowercase()) && class_name(*w) != "ConsoleWindowClass")
     };
     // every visible window of that program from now on, looked at every millisecond: which processes showed one
     let watch_shown = |exe_name: &'static str| {
@@ -2197,6 +2197,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         format!("on this PC: {elevation:?} · in the boxes: {as_system:?}"));
     // 3. what you didn't pick, opened there, runs normally (games, their launchers, any app…): out of
     //    the box before its window ever shows, started again as Explorer started it, on the monitor
+    let _ = shell_dialogs(); // (none left from before)
     let done = watch_shown("wcapp_c.exe");
     let wc = start(&app("wcapp_c"));
     let on_c = wait_for(3000, || on(wc, &ra));
@@ -2210,6 +2211,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     rep.check("…its boxed start never showed a window (only the normal one did), and it opened on monitor A",
         wc.is_some_and(|w| shown == vec![pid(w)]) && on_c && restarted.iter().all(|l| l.contains("window showing then: false")),
         format!("windows shown by {shown:?} · at {} (A {})", wc.map(|w| fmt(&rect_of(w))).unwrap_or_default(), fmt(&ra)));
+    sleep(1000);
+    let msgs = shell_dialogs();
+    rep.check("…and Windows showed no message about it (nothing popped up on your desk)", msgs.is_empty(), format!("{msgs:?}"));
     finish(wc);
     finish(wx);
     // 3a. a quick real program you didn't pick (Windows' Character Map), opened there: the same
@@ -2224,6 +2228,9 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         let line = HELPER_LOG.lock().unwrap().iter().filter(|l| l.contains("charmap.exe, opened at monitor")).cloned().collect::<Vec<_>>();
         rep.check("a real program you didn't pick (Character Map), opened there: runs normally, its boxed start never showed",
             cm.is_some_and(|w| !ina.contains(&pid(w)) && shown == vec![pid(w)]), format!("{:?} · shown by {shown:?} · {line:?}", cm.map(pid)));
+        sleep(1000);
+        let msgs = shell_dialogs();
+        rep.check("…and Windows showed no message about it", msgs.is_empty(), format!("{msgs:?}"));
         finish(cm);
     }
     // 3c. your desk's copy of an app you picked starting a helper of its own while you sit at the
@@ -2544,6 +2551,32 @@ fn look_sum(ev: &[String]) -> (i64, i64) {
         }
     }
     s
+}
+
+/// Message boxes Explorer is showing (#32770 windows of explorer.exe): each one's title and text,
+/// closed once read.
+fn shell_dialogs() -> Vec<String> {
+    unsafe extern "system" fn each(c: HWND, data: LPARAM) -> windows::core::BOOL {
+        let out = unsafe { &mut *(data.0 as *mut Vec<String>) };
+        let t = title(c);
+        if !t.trim().is_empty() {
+            out.push(t);
+        }
+        true.into()
+    }
+    let mut found = Vec::new();
+    for w in top_windows() {
+        if class_name(w) != "#32770" || exe_of(pid(w)) != "explorer.exe" || !unsafe { IsWindowVisible(w) }.as_bool() {
+            continue;
+        }
+        let mut texts: Vec<String> = Vec::new();
+        unsafe {
+            let _ = EnumChildWindows(Some(w), Some(each), LPARAM(&mut texts as *mut _ as isize));
+        }
+        found.push(format!("{:?}: {}", title(w), texts.join(" / ")));
+        close(w);
+    }
+    found
 }
 
 fn find_new(before: &HashSet<isize>, ms: u64, pick: impl Fn(&HWND) -> bool) -> Option<HWND> {

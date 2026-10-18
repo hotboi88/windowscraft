@@ -4587,10 +4587,34 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
     }
     let age_ms = process_info(pid).map_or(-1, |(c, _)| (now_filetime().saturating_sub(c) / 10_000) as i64);
     let shown = has_window_showing(pid);
-    unsafe {
-        let _ = TerminateProcess(h, 1);
-        let _ = WaitForSingleObject(h, 1000);
-        let _ = CloseHandle(h);
+    // Held still at once (it never gets to show or do anything), ended a few seconds later: ended
+    // straight away, the program Explorer had just started was gone before Explorer was done
+    // starting it, and Explorer said so in a message box on your desk.
+    type Suspend = unsafe extern "system" fn(HANDLE) -> i32;
+    static SUSPEND: OnceLock<Option<Suspend>> = OnceLock::new();
+    let suspend = *SUSPEND.get_or_init(|| unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        let nt = GetModuleHandleW(windows::core::w!("ntdll.dll")).ok()?;
+        Some(std::mem::transmute::<_, Suspend>(GetProcAddress(nt, windows::core::s!("NtSuspendProcess"))?))
+    });
+    let held = suspend.is_some_and(|f| unsafe { f(h) } == 0);
+    let hold = Duration::from_millis(std::env::var("WC_KEEPER_HOLD_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4000));
+    if held && !hold.is_zero() {
+        let hh = h.0 as isize;
+        std::thread::spawn(move || {
+            std::thread::sleep(hold);
+            let h = HANDLE(hh as *mut _);
+            unsafe {
+                let _ = TerminateProcess(h, 0);
+                let _ = CloseHandle(h);
+            }
+        });
+    } else {
+        unsafe {
+            let _ = TerminateProcess(h, 0);
+            let _ = WaitForSingleObject(h, 1000);
+            let _ = CloseHandle(h);
+        }
     }
     ended.insert(pid);
     let name = file_name(&exe);
