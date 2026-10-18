@@ -115,6 +115,35 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.38 (18 Oct): only what you open at a monitor is boxed; only picked apps stay
+
+His words: "no extension no gimmicks. real unmixed audio" and, about the plan, "just test however
+you can". Built on measurements first (tools/sandbox/lab.ps1, the "Sandbox lab" workflow; facts in
+the lab report):
+- **The rule.** While you sit at (or point at) a monitor with own copies, `Template_WCForce` holds
+  `ForceChildren=explorer.exe` (nothing at all while no app is switched on). It replaces 0.15.36's
+  `ForceProcess=<picked apps>`, which also boxed new processes the desk copy of a picked app
+  started (measured; that's how the Claude app went gray). With ForceChildren, what an app on your
+  desk starts stays out of the box (measured with a real Edge: 0 of 16 processes boxed).
+- **The keeper** (`ensure_keeper`, `keep_or_restart` in wc-vdisplay.rs) looks at the forced box
+  every 2 ms (`SbieApi_EnumProcessEx`). A new process stays if it's Sandboxie's own, was started by
+  a program in the box, or is a picked app (`picked_program`: the program, or one in its own folder,
+  not a shared folder like Program Files). Anything else (games, launchers, apps not switched on)
+  is left alone 40 ms, suspended, started again normally (`start_normally`: its command line,
+  folder and STARTUPINFO read from its PEB, including the monitor Explorer meant and its taskbar
+  identity, with your own environment), placed on that monitor, and ended 4 s later. What it
+  started in the box meanwhile is ended with it.
+- **Why 40 ms (measured on CI):** held at once, Explorer sometimes showed a message box on the
+  desk, titled with the program's path; from 10 ms on, never. The boxed start's window never showed
+  by 100 ms (at 200 ms it sometimes did).
+- **The probe:** apps are opened through Explorer (`explorer.exe <path>`, as the taskbar does).
+  - A non-picked app and Windows' Character Map run normally, their boxed start never shows a
+    window (watched every 1 ms), and Explorer shows no message box.
+  - A picked app's desk copy that starts a helper while you're seated keeps the helper out of
+    the box.
+  - Edge is opened through Explorer.
+  - Notes record the 10/40/100 ms delays.
+
 ## 0.15.36 (17 Oct): own copies as before, per app, on a page of its own
 
 Supersedes how 0.15.34/0.15.35 handled a picked app that's also open on the desk. 0.15.35 (the

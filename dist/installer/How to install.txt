@@ -1,4 +1,9 @@
-WindowsCraft 0.15.37 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.38 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.38: own copies of apps no longer reach your desk. Only what you open at a monitor (its
+taskbar, Start menu or desktop) can be its own copy, and only if you switched that app on; your
+desk's apps and everything they open stay as they are. Anything else you open there (games,
+launchers, apps left off) runs normally, on that monitor.
 
 New in 0.15.37: the screen-capture helper rebuilt the clean way (nothing of the PC it was built on inside).
 

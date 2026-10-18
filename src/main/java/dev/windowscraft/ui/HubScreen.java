@@ -1165,11 +1165,10 @@ public final class HubScreen extends Screen {
                         + (st.equals("stopped") ? " It's installed but not running: restart your PC." : ""), x + 4, y + 2, w - 8, UiKit.TEXT_MUTED) + 8;
             }
         }
-        y = wrap(g, "Switched on, an app you start while sitting at (or pointing at) an in-game monitor is that monitor's own copy: its own program, "
-                + "so its own sound, never mixed with another monitor's or your desk's, and its own sign-ins, kept (the first time, it starts signed in "
-                + "like your desk). Off, it runs normally. Store apps can't have their own copy.", x + 4, y, w - 8, UiKit.TEXT_MUTED) + 4;
-        y = wrap(g, "While you sit at a monitor, a switched-on app that's also open on your desk starts what it opens meanwhile — new tabs, windows — "
-                + "in that monitor's box too.", x + 4, y, w - 8, UiKit.TEXT_MUTED) + 8;
+        y = wrap(g, "Switched on, an app you open at an in-game monitor (its taskbar, Start menu or desktop, while sitting at or pointing at it) is "
+                + "that monitor's own copy: its own program, so its own sound, never mixed with another monitor's or your desk's, and its own sign-ins, "
+                + "kept (the first time, it starts signed in like your desk). Off, it runs normally. Your desk's apps are never touched. Store apps "
+                + "can't have their own copy.", x + 4, y, w - 8, UiKit.TEXT_MUTED) + 8;
         // type to find one
         UiKit.round(g, x, y, w, 18, 3, UiKit.INSET);
         String caret = (System.currentTimeMillis() / 500) % 2 == 0 ? "_" : "";
