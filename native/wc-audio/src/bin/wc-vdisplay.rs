@@ -6724,10 +6724,45 @@ fn shutdown_monitors(vdd: &Driver, added: &AddedMap, homes: &Homes) {
 }
 
 fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
+    // (the game closing ends stdin and the game's process at about the same moment: both get
+    //  here, and the second waits for the first instead of exiting halfway through it)
+    static ONCE: Mutex<bool> = Mutex::new(false);
+    let mut done = ONCE.lock().unwrap_or_else(|e| e.into_inner());
+    if *done {
+        return;
+    }
+    output_to_file();
     clear_all_force();
     shutdown_monitors(vdd, added, homes);
     taskbars_separate(false);
     unsafe {
         let _ = ClipCursor(None);
+    }
+    eprintln!("info=all done");
+    *done = true;
+}
+
+/// The game is going away, and with it whatever reads this helper's output (writing to a pipe
+/// nobody reads ends a program): from here on it goes to wc-vdisplay-exit.log beside it, so
+/// the monitors are still closed and your taskbar put back after the game has gone.
+fn output_to_file() {
+    use std::os::windows::io::IntoRawHandle;
+    let Some(path) = std::env::current_exe().ok().map(|e| e.with_file_name("wc-vdisplay-exit.log")) else { return };
+    let Ok(f) = std::fs::File::create(&path) else { return };
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    type SetStd = unsafe extern "system" fn(u32, *mut core::ffi::c_void) -> i32;
+    // (and never left running: if closing up gets stuck, it ends anyway)
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(90));
+        eprintln!("error=closing up took over 90 s: ending");
+        std::process::exit(1);
+    });
+    unsafe {
+        let Ok(k) = GetModuleHandleW(windows::core::w!("kernel32.dll")) else { return };
+        let Some(p) = GetProcAddress(k, windows::core::s!("SetStdHandle")) else { return };
+        let set = std::mem::transmute::<_, SetStd>(p);
+        let h = f.into_raw_handle(); // (kept open until the helper exits)
+        set(-11i32 as u32, h); // STD_OUTPUT_HANDLE
+        set(-12i32 as u32, h); // STD_ERROR_HANDLE
     }
 }

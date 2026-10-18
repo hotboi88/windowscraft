@@ -387,11 +387,13 @@ public final class VDisplayHelper implements MonitorBackend {
             stdin.close(); // the helper puts windows back and removes its monitors, then exits
         } catch (IOException ignored) {
         }
+        // it's never ended from here: several monitors take ~3 s each to go, and one cut off
+        // halfway left their apps on your desk and the taskbar setting changed. It carries on
+        // after the game has gone (its log: wc-vdisplay-exit.log) and ends itself if stuck.
         Process p = process;
         try {
-            if (!p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)) p.destroy();
-        } catch (InterruptedException e) {
-            p.destroy();
+            p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
         }
         process = null;
     }

@@ -1,4 +1,8 @@
-WindowsCraft 0.15.39 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.40 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.40: closing the game straight from a world closes every in-game monitor's apps and
+puts your taskbar back as it was (several monitors take a few seconds each; the game used to
+stop waiting halfway, leaving their windows on your desk and the taskbar missing windows).
 
 New in 0.15.39: Store and Xbox games (Minecraft for Windows, the Minecraft Launcher) open on an
 in-game monitor; Sandboxie installed while the game runs is used right away; a sign-in box's

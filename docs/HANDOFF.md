@@ -115,6 +115,23 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.40 (18 Oct): closing the game cut the helper off halfway
+
+- **"i just closed the game and all my monitor tabs went to my desk and my desk windows all went
+  away … stayed on my alt+tab list"**: he quit from inside a world with four monitors on. The
+  game closes the helper's stdin and waited 4 s before `destroy()`; turning four monitors off
+  takes ~15 s (3 s for the boxes' apps to close, then the driver removes monitors ~3 s apart).
+  The helper died partway: its monitors dropped (no more pings), the boxed Brave windows moved to
+  his desk still open, and `taskbars_separate(false)` never ran, so `MMTaskbarMode` stayed 2
+  (TaskbarBackup still `Saved`) and the taskbar lost his desk windows' buttons until each was
+  activated. Now: the game never ends the helper on exit (waits 2 s, then leaves it); the helper
+  sends its output to `wc-vdisplay-exit.log` beside it once closing up starts (writing to the
+  game's pipe after the game is gone would end it), runs the close-up once even when stdin's end
+  and the game's process ending both trigger it (the second waits for the first), logs
+  `info=all done`, and ends itself after 90 s if stuck.
+- Not verified on his PC yet: whether his launcher ends the game's child processes on exit (it
+  would end the helper anyway). Check `wc-vdisplay-exit.log` after his next quit.
+
 ## 0.15.39 (18 Oct): from the first evening on 0.15.38
 
 - **The keeper never ran on the owner's PC.** Sandboxie was installed while the helper ran; every
