@@ -4345,6 +4345,7 @@ fn box_of(pid: u32) -> String {
 /// When the rule last changed: what was in the box before that isn't new (FILETIME).
 static FORCE_SINCE: Mutex<u64> = Mutex::new(0);
 static KEEPER: AtomicBool = AtomicBool::new(false);
+static KEEPER_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The processes in that box now, from Sandboxie itself (None: it couldn't say).
 fn box_pids(b: &str) -> Option<Vec<u32>> {
@@ -4584,6 +4585,11 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
             let _ = CloseHandle(h);
         }
         return;
+    }
+    // (tests: how long after its start it's left alone first — `keeperdelay`)
+    let wait = KEEPER_DELAY_MS.load(Ordering::SeqCst) as i64;
+    while wait > 0 && process_info(pid).map_or(false, |(c, _)| ((now_filetime().saturating_sub(c) / 10_000) as i64) < wait) {
+        std::thread::sleep(Duration::from_millis(1));
     }
     let age_ms = process_info(pid).map_or(-1, |(c, _)| (now_filetime().saturating_sub(c) / 10_000) as i64);
     let shown = has_window_showing(pid);
@@ -5942,6 +5948,7 @@ fn main() {
                 taskbars_separate(p.get(1) == Some(&"on"));
                 say("taskbar done");
             }
+            Some("keeperdelay") => KEEPER_DELAY_MS.store(n(1) as u64, Ordering::SeqCst),
             Some("forcestate") => {
                 // (tests) the box new programs really start in now
                 say(&format!("forcestate {}", FORCE_LIVE.lock().unwrap().clone().unwrap_or_else(|| "-".into())));

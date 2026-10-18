@@ -2233,6 +2233,27 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
         rep.check("…and Windows showed no message about it", msgs.is_empty(), format!("{msgs:?}"));
         finish(cm);
     }
+    // 3b'. (measured, not checked) left alone for a while before it's held: does Explorer still show
+    //      a message, and does the boxed start get to show its window?
+    for d in [0u64, 10, 25, 50, 100, 200, 400] {
+        h.send(&format!("keeperdelay {d}"));
+        for (exe, name) in [(app("wcapp_c"), "wcapp_c.exe"), (std::path::PathBuf::from("C:\\Windows\\System32\\charmap.exe"), "charmap.exe")] {
+            let _ = shell_dialogs();
+            let done = watch_shown(name);
+            let before: HashSet<isize> = top_windows().iter().map(|w| w.0 as isize).collect();
+            let _ = Command::new("explorer.exe").arg(&exe).spawn();
+            let w = find_new(&before, 8000, |w| exe_of(pid(*w)) == name && class_name(*w) != "ConsoleWindowClass" && unsafe { IsWindowVisible(*w) }.as_bool());
+            sleep(1500);
+            let shown = done();
+            let msgs = shell_dialogs();
+            let line = HELPER_LOG.lock().unwrap().iter().rev().find(|l| l.contains(&format!("{name}, opened at monitor"))).cloned().unwrap_or_default();
+            rep.note(format!("held after {d} ms, {name}: final {:?} · windows shown by {shown:?} · Explorer said {msgs:?} · {}", w.map(pid),
+                line.split_once("started normally").map_or("", |x| x.1)));
+            finish(w);
+            sleep(300);
+        }
+    }
+    h.send("keeperdelay 0");
     // 3c. your desk's copy of an app you picked starting a helper of its own while you sit at the
     //     monitor (a browser's new tab, the Claude app's pages): stays on your desk, never boxed
     let _ = h.call("unseat", "unseated", 8000);
@@ -2558,7 +2579,11 @@ fn look_sum(ev: &[String]) -> (i64, i64) {
 fn shell_dialogs() -> Vec<String> {
     unsafe extern "system" fn each(c: HWND, data: LPARAM) -> windows::core::BOOL {
         let out = unsafe { &mut *(data.0 as *mut Vec<String>) };
-        let t = title(c);
+        // (another program's control: asked for its text, GetWindowText alone doesn't)
+        let mut buf = [0u16; 1024];
+        let mut got = 0usize;
+        let _ = unsafe { SendMessageTimeoutW(c, WM_GETTEXT, WPARAM(buf.len()), LPARAM(buf.as_mut_ptr() as isize), SMTO_ABORTIFHUNG, 500, Some(&mut got)) };
+        let t = String::from_utf16_lossy(&buf[..buf.iter().position(|x| *x == 0).unwrap_or(0)]);
         if !t.trim().is_empty() {
             out.push(t);
         }
