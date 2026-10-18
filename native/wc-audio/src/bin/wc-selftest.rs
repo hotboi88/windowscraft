@@ -2235,7 +2235,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
     }
     // 3b'. (measured, not checked) left alone for a while before it's held: does Explorer still show
     //      a message, and does the boxed start get to show its window?
-    for d in [0u64, 10, 25, 50, 100, 200, 400] {
+    for d in [10u64, 40, 100] {
         h.send(&format!("keeperdelay {d}"));
         for (exe, name) in [(app("wcapp_c"), "wcapp_c.exe"), (std::path::PathBuf::from("C:\\Windows\\System32\\charmap.exe"), "charmap.exe")] {
             let _ = shell_dialogs();
@@ -2253,7 +2253,7 @@ fn sandbox(rep: &mut Report, dir: &std::path::Path) {
             sleep(300);
         }
     }
-    h.send("keeperdelay 0");
+    h.send("keeperdelay 40");
     // 3c. your desk's copy of an app you picked starting a helper of its own while you sit at the
     //     monitor (a browser's new tab, the Claude app's pages): stays on your desk, never boxed
     let _ = h.call("unseat", "unseated", 8000);

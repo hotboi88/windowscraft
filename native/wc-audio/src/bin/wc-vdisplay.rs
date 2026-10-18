@@ -4337,15 +4337,18 @@ fn box_of(pid: u32) -> String {
 // lands in that monitor's box. The keeper looks at the box every couple of milliseconds. A program
 // that just landed there stays if it's one you picked (the monitor's own copy), or if a program
 // already in the box started it (a picked app's own helpers). Anything else — a game, a launcher,
-// any app you didn't pick — is ended as it shows up (measured: within 0–22 ms, before its window
-// showed, nothing written into the box) and started again normally: the same program, command
+// any app you didn't pick — is held still 40 ms after it started (before its window can show;
+// measured), ended a few seconds later, and started again normally right away: the same program, command
 // line, folder and start-up details Explorer gave it (which monitor, how it shows, its taskbar
 // identity), so it runs as if no box were there, on the monitor you opened it on.
 
 /// When the rule last changed: what was in the box before that isn't new (FILETIME).
 static FORCE_SINCE: Mutex<u64> = Mutex::new(0);
 static KEEPER: AtomicBool = AtomicBool::new(false);
-static KEEPER_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How long after its start a program is left alone before it's held (measured on a test PC: held at
+/// once, Explorer could still be starting it and said so in a message box on your desk — not once
+/// from 10 ms on; its window showed at 200 ms at the earliest, never by 100 ms).
+static KEEPER_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(40);
 
 /// The processes in that box now, from Sandboxie itself (None: it couldn't say).
 fn box_pids(b: &str) -> Option<Vec<u32>> {
@@ -4586,7 +4589,7 @@ fn keep_or_restart(b: &str, idx: i32, pid: u32, ended: &mut std::collections::Ha
         }
         return;
     }
-    // (tests: how long after its start it's left alone first — `keeperdelay`)
+    // (left alone that long first: see KEEPER_DELAY_MS; tests change it with `keeperdelay`)
     let wait = KEEPER_DELAY_MS.load(Ordering::SeqCst) as i64;
     while wait > 0 && process_info(pid).map_or(false, |(c, _)| ((now_filetime().saturating_sub(c) / 10_000) as i64) < wait) {
         std::thread::sleep(Duration::from_millis(1));
