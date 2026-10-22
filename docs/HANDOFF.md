@@ -115,6 +115,26 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.42 (22 Oct): wc-audio 0.4.6, music skipping about a second
+
+- **"music keeps doing this thing where it does a 1 second skip"** (a boxed Brave on a monitor,
+  songs changing): `stats=… 73 muted while turning the app down, 0 re-duck(s) … longest wait for
+  a check 211 ms` and `11 muted … 1 re-duck(s)` around his song changes. Two paths, both in
+  `duck.rs`: (1) sound after silence waits for a look at the sessions begun after it; on his busy
+  PC a look took over `MAX_WAIT` (200 ms) and what waited went out silenced; (2) a session that
+  stopped playing got its volume back at once, so the next song was re-ducked and held silent
+  (`HOLD` plus the read-back).
+- Now: a session stays ducked while it's paused (restored when it expires, when the share ends,
+  or by `--restore`); the devices' session managers are kept and listed again every 2 s
+  (`DEVICES_EVERY`) instead of activating every device on every look; a session put back as it
+  expired drops its record (it used to stay in the state file until the next `--restore`).
+- Checked on his PC with tools/duck: safety.py PASS; compare.sh (old 0.4.5 / new, 2 rounds):
+  steady sound longest gap 38–41 ms → 17–28 ms, gaps-with-silence longest 50–60 ms → 30–43 ms; no
+  state file left. Not reproduced: the second-long losses need the PC under real load.
+- A player killed while ducked (expired, not restored by us first) came back at full volume
+  the next time it played: Windows took the volume we set as it expired.
+- wc-audio replaced with his OK only: sha prefix of the new one in the commit.
+
 ## 0.15.41 (18 Oct): the desk's taskbar buttons, again ("fourth or fifth time")
 
 - On 0.15.40 the close-up finished (`wc-vdisplay-exit.log`: two monitors off in 3.5 s,

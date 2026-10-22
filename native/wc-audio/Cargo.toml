@@ -1,6 +1,6 @@
 [package]
 name = "wc-audio"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 description = "WindowsCraft audio capture helper: WASAPI application loopback to raw PCM on stdout"
 license = "LGPL-3.0-or-later"

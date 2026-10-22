@@ -1,4 +1,7 @@
-WindowsCraft 0.15.41 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.42 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.42: music and videos on an in-game monitor no longer skip about a second at a song
+change or after a pause (the app stays turned down in Windows' mixer through the pause).
 
 New in 0.15.41: after the game closes, every window on your desk is on your taskbar again (Windows
 sometimes dropped their buttons while the in-game monitors' taskbars went away).

@@ -21,7 +21,13 @@
 //! is read only when a session we haven't seen before appears, so each new session is told apart
 //! by the app's process tree as it is right then.
 //!
-//! Restoring: a session goes back to its original volume as soon as it stops playing, on any
+//! A pause doesn't give the app its volume back: a session stays turned down until it goes away
+//! or the share ends. (It used to go back up the moment it stopped playing, and the next song
+//! had to wait while it was turned down again, silenced meanwhile: a skip at every song change.)
+//! The devices' session lists are kept between looks (refreshed every DEVICES_EVERY): asking
+//! every device afresh was most of a look's time, and sound that waits past MAX_WAIT is lost.
+//!
+//! Restoring: a session goes back to its original volume when it goes away, on any
 //! exit, and — should this process ever die without cleaning up — from a small state file the
 //! mod replays with `--restore`. (Windows remembers per-app volumes, so this matters.)
 
@@ -44,6 +50,8 @@ const ENUM_EVERY: Duration = Duration::from_millis(250);
 /// Sound that has waited this long for a check goes on silenced (the check thread is stuck).
 const MAX_WAIT: Duration = Duration::from_millis(200);
 const GIVE_UP_AFTER: Duration = Duration::from_millis(2000);
+/// How often the output devices themselves are listed again (one plugged in shows up by then).
+const DEVICES_EVERY: Duration = Duration::from_secs(2);
 
 /// What the checks found, for the sound thread — and what it asks of them.
 struct Found {
@@ -107,6 +115,8 @@ struct Checks {
     /// Written to the state file *before* ducking, cleared only after a verified restore.
     records: HashMap<String, f32>,
     enumerator: Option<IMMDeviceEnumerator>,
+    managers: Vec<IAudioSessionManager2>,
+    managers_at: Option<Instant>,
     state_path: PathBuf,
     last_state: Instant,
     last_enum: Instant,
@@ -165,12 +175,28 @@ fn new_enumerator() -> windows::core::Result<IMMDeviceEnumerator> {
 }
 
 fn all_sessions(en: &IMMDeviceEnumerator) -> windows::core::Result<Vec<IAudioSessionControl2>> {
+    sessions_of(&session_managers(en)?)
+}
+
+/// Each active output device's session manager.
+fn session_managers(en: &IMMDeviceEnumerator) -> windows::core::Result<Vec<IAudioSessionManager2>> {
     let mut out = Vec::new();
     unsafe {
         let devices = en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
         for i in 0..devices.GetCount()? {
             let Ok(device) = devices.Item(i) else { continue };
-            let Ok(mgr) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { continue };
+            if let Ok(mgr) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) {
+                out.push(mgr);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn sessions_of(managers: &[IAudioSessionManager2]) -> windows::core::Result<Vec<IAudioSessionControl2>> {
+    let mut out = Vec::new();
+    unsafe {
+        for mgr in managers {
             let Ok(list) = mgr.GetSessionEnumerator() else { continue };
             for j in 0..list.GetCount().unwrap_or(0) {
                 if let Ok(s) = list.GetSession(j) {
@@ -227,6 +253,8 @@ impl Checks {
             foreign: HashSet::new(),
             records: load_records(&state_path),
             enumerator: None,
+            managers: Vec::new(),
+            managers_at: None,
             state_path,
             last_state: now - STATE_EVERY,
             last_enum: now - ENUM_EVERY,
@@ -285,10 +313,23 @@ impl Checks {
             if self.enumerator.is_none() {
                 self.enumerator = new_enumerator().ok();
             }
-            let list = match self.enumerator.as_ref().map(all_sessions) {
-                Some(Ok(l)) => l,
-                _ => {
-                    self.enumerator = None; // devices changed under us: start over next time
+            if self.managers_at.map_or(true, |t| began - t >= DEVICES_EVERY) {
+                match self.enumerator.as_ref().map(session_managers) {
+                    Some(Ok(m)) => {
+                        self.managers = m;
+                        self.managers_at = Some(began);
+                    }
+                    _ => {
+                        self.enumerator = None; // devices changed under us: start over next time
+                        self.managers.clear();
+                        self.managers_at = None;
+                    }
+                }
+            }
+            let list = match sessions_of(&self.managers) {
+                Ok(l) => l,
+                Err(_) => {
+                    self.managers_at = None;
                     Vec::new()
                 }
             };
@@ -322,6 +363,7 @@ impl Checks {
         let mut changed = false;
         let mut all_ducked = true;
         let mut expired = Vec::new();
+        let mut restored = Vec::new();
         for (key, t) in self.sessions.iter_mut() {
             let state = match unsafe { t.ctl.GetState() } {
                 Ok(s) => s,
@@ -351,16 +393,15 @@ impl Checks {
                     self.shared.lock().hold_until = Instant::now() + HOLD;
                     all_ducked = false; // only trust it once it reads back at DUCK on a later check
                 }
-            } else if t.ducked {
-                // stopped playing (or the app is closing): give it its volume back now, while we still can
-                t.ducked = false;
-                changed = true;
             }
+            // (stopped playing: it stays turned down — the next song plays on at once)
             if state == AudioSessionStateExpired {
                 if t.ducked {
                     // the app went away while ducked: try to put it back (if this fails, the record
                     // stays and the next time this app plays — or `--restore` — fixes it)
-                    let _ = unsafe { t.vol.SetMasterVolume(t.original, std::ptr::null()) };
+                    if unsafe { t.vol.SetMasterVolume(t.original, std::ptr::null()) }.is_ok() {
+                        restored.push(t.ident.clone());
+                    }
                     t.ducked = false;
                     changed = true;
                 }
@@ -369,6 +410,12 @@ impl Checks {
         }
         for k in expired {
             self.sessions.remove(&k);
+        }
+        // (put back as it went: its record goes, unless another of its sessions is still down)
+        for ident in restored {
+            if !ident.is_empty() && !self.sessions.values().any(|t| t.ident == ident && t.ducked) && self.records.remove(&ident).is_some() {
+                save_records(&self.state_path, &self.records);
+            }
         }
         let mut watched: Vec<(String, bool)> = self.sessions.iter().map(|(k, t)| (k.clone(), t.ducked)).collect();
         watched.sort();
