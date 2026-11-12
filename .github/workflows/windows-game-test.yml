@@ -48,7 +48,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo pal1000/mesa-dist-win --pattern '*release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa-dl"
+          # (pinned: 26.2.6 came packed differently and the test lost its OpenGL)
+          gh release download 26.2.4 --repo pal1000/mesa-dist-win --pattern '*release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa-dl"
           $a = Get-ChildItem "$env:RUNNER_TEMP\mesa-dl\*.7z" | Select-Object -First 1
           "Mesa: $($a.Name)"
           7z x $a.FullName "-o$env:RUNNER_TEMP\mesa" | Out-Null
