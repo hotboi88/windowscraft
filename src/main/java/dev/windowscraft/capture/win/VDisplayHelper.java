@@ -151,7 +151,10 @@ public final class VDisplayHelper implements MonitorBackend {
                 case "pointok" -> e.pointOk(p.length > 1 && p[1].equals("seated"));
                 case "pointfail" -> e.pointFail(line.length() > 10 ? line.substring(10) : "?");
                 case "seatmove" -> e.seatMoved(Integer.parseInt(p[1]));
-                case "gone" -> e.monitorGone(Integer.parseInt(p[1]));
+                case "gone" -> {
+                    if (p.length > 2 && p[2].equals("dark")) e.monitorDark(Integer.parseInt(p[1]));
+                    else e.monitorGone(Integer.parseInt(p[1]));
+                }
                 case "adminapp" -> e.adminApp();
                 case "moved" -> e.monitorsMoved();
                 case "gkey" -> e.gameKey(Integer.parseInt(p[1]), Integer.parseInt(p[2]), p[3].equals("1"));

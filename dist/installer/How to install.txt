@@ -1,4 +1,8 @@
-WindowsCraft 0.15.43 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+WindowsCraft 0.15.44 (screens, in-game monitors, gaming monitors and tablets for Cobbleverse)
+
+New in 0.15.44: the 0.15.43 screen guard could itself switch a laptop's screen off. Now it only
+ever switches your screens on; if Windows still won't keep yours on, the in-game monitor stays
+off (no retrying) and you're told which setting to change.
 
 New in 0.15.43: on a laptop (or any PC) that switches its own screen off when a display is
 added, turning on an in-game monitor keeps your screen on: Windows is asked to extend, and if it

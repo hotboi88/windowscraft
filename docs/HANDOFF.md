@@ -115,6 +115,24 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.44 (11 Nov): the 0.15.43 guard switched the laptop's screen off itself
+
+- Laptop log (0.15.43, read by its own session): the first add needed `extend_all`; a second add
+  followed; then `error=your screen \.\DISPLAY7 went off` (DISPLAY7 was the virtual one),
+  `\.\DISPLAY1 was off before: switching it off again` (DISPLAY1 is the built-in panel), the
+  watcher turned the monitor off, and the game turned it straight back on ("went away by
+  itself; turning it on again"), each round with the panel dark.
+- Causes: "your screens" were "on the desktop and not in `added`", so a virtual monitor not yet
+  in `added` (one being given back) counted as yours, and `REAL_BEFORE` was replaced at the first
+  add with whatever was on at that moment; and `extend_all`'s "it was off on purpose: off again"
+  ran after Windows had switched the panel off for the new monitor.
+- Now: yours = not the driver's (`is_virtual`: a monitor of the display carries VDD_DISPLAY_ID;
+  GDI names change between runs); `REAL_BEFORE` is noted at the helper's start and only grows;
+  the guards call `extend_keep` (extend, never switch anything off); `extend_all` never switches
+  off one of `REAL_BEFORE` or a virtual one; the watcher's monitors go with `gone <i> dark`, which
+  the game leaves off with a message (`monitorDark`); an add that switched your screen off is
+  given back without a retry.
+
 ## 0.15.43 (11 Nov): a laptop's own screen went black when a monitor came on
 
 - On the owner's laptop (one built-in screen, 150%, hybrid iGPU + dGPU, 0.15.40), U on a wall:

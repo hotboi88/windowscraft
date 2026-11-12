@@ -32,6 +32,8 @@ public interface MonitorBackend {
         void lost();
         /** That one monitor went away by itself (Windows or the driver dropped it). */
         default void monitorGone(int index) {}
+        /** The helper turned a monitor off to bring your own screen back (Windows had switched it off): it stays off. */
+        default void monitorDark(int index) { monitorGone(index); }
         /** An app running as administrator should go onto a monitor, but Windows won't let it be moved. */
         default void adminApp() {}
         /** Windows moved or renamed a monitor: look where they all are now. */
