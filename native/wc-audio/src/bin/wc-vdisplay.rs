@@ -5764,9 +5764,46 @@ fn main() {
             let mut missing: HashMap<i32, u32> = HashMap::new();
             let mut off: HashMap<i32, u32> = HashMap::new();
             let mut last_relayout: Option<Instant> = None;
+            let mut dark_since: Option<Instant> = None;
+            let mut dark_extended = false;
             loop {
                 std::thread::sleep(Duration::from_millis(700));
                 let ours: Vec<(i32, String)> = added.lock().unwrap().iter().filter(|(_, a)| !a.device.is_empty()).map(|(i, a)| (*i, a.device.clone())).collect();
+                // you're never left with every screen of yours dark for our monitors, whenever
+                // Windows does it ("my screen is black"): asked to extend after 3 s; still off 3 s after that,
+                // every in-game monitor goes (as if Windows had dropped them) and it comes back
+                let before = REAL_BEFORE.lock().unwrap().clone();
+                // (only when none of them is on: one you switch off yourself, with another still
+                //  on, is yours to switch off)
+                let names_now: Vec<String> = ours.iter().map(|(_, d)| d.clone()).collect();
+                let lost = if ours.is_empty() || before.is_empty() || !real_screens(&names_now).is_empty() { Vec::new() } else { before.clone() };
+                if lost.is_empty() {
+                    dark_since = None;
+                    dark_extended = false;
+                } else {
+                    let since = *dark_since.get_or_insert_with(Instant::now);
+                    let names: Vec<String> = ours.iter().map(|(_, d)| d.clone()).collect();
+                    if !dark_extended && since.elapsed() > Duration::from_secs(3) {
+                        dark_extended = true;
+                        eprintln!("error=your screen {} went off while in-game monitors are on: asking Windows to extend", lost.join(", "));
+                        extend_from(&names, "", &before);
+                        dark_since = Some(Instant::now());
+                    } else if dark_extended && since.elapsed() > Duration::from_secs(3) {
+                        eprintln!("error=your screen {} is still off: turning the in-game monitors off", lost.join(", "));
+                        for (i, dev) in &ours {
+                            let mut g = added.lock().unwrap();
+                            if g.get(i).map_or(false, |a| &a.device == dev) {
+                                let since = g.remove(i).map_or(0, |a| a.since);
+                                drop(g);
+                                internal_command(&format!("lost {i} {since}"));
+                                emit(&format!("gone {i}"));
+                            }
+                        }
+                        dark_since = None;
+                        dark_extended = false;
+                        continue;
+                    }
+                }
                 missing.retain(|i, _| ours.iter().any(|(j, _)| j == i));
                 off.retain(|i, _| ours.iter().any(|(j, _)| j == i));
                 for (i, dev) in ours {
@@ -6324,7 +6361,18 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     remove_orphans(v, added);
     let real_before = {
         let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
-        real_screens(&ours)
+        let r = real_screens(&ours);
+        let mut keep = REAL_BEFORE.lock().unwrap();
+        if ours.is_empty() {
+            *keep = r.clone(); // (the first monitor: your screens as they are now)
+        } else {
+            for d in &r {
+                if !keep.iter().any(|k| k.eq_ignore_ascii_case(d)) {
+                    keep.push(d.clone());
+                }
+            }
+        }
+        r
     };
     let spots = window_spots(); // (where every window was: see keep_windows_put)
     // (right after a monitor went away the driver is still busy with it: asking it for a new one
@@ -6810,6 +6858,8 @@ fn shutdown(vdd: &Driver, added: &AddedMap, homes: &Homes) {
 /// nobody reads ends a program): from here on it goes to wc-vdisplay-exit.log beside it, so
 /// the monitors are still closed and your taskbar put back after the game has gone.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+/// Your own screens that were on when in-game monitors came (they must stay on).
+static REAL_BEFORE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The monitors and their taskbars gone, and your taskbar setting back: Windows sometimes lays
 /// its buttons out again without some of your desk's windows ("they stayed on my alt+tab list so

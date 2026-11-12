@@ -127,6 +127,12 @@ full FFmpeg restart on quality change; no guest relative mouse.
   right after it comes on) checks they're all still on, for over a second (`still_lost`); if not,
   it asks Windows to extend (`extend_from`, which keeps off only screens that were off before)
   and, if a screen is still off, gives the monitor back with an error naming the Display setting.
+- And for the whole time monitors are on (the owner: "make sure this doesn't happen to anyone
+  else i distribute this mod to"): the watcher checks every 0.7 s whether any of your real screens
+  (`REAL_BEFORE`, noted as monitors come) is still on. With none on for 3 s it asks Windows to
+  extend; still none 3 s later, every in-game monitor goes the way one Windows dropped does
+  (`lost` + `gone`: its apps close, the game turns its wall off). Only when none is on: one screen
+  you switch off yourself while another stays on is left alone.
 - Not tested on a laptop yet (CI has no screen that switches off).
 
 ## 0.15.42 (22 Oct): wc-audio 0.4.6, music skipping about a second

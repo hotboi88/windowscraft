@@ -2,7 +2,8 @@ WindowsCraft 0.15.43 (screens, in-game monitors, gaming monitors and tablets for
 
 New in 0.15.43: on a laptop (or any PC) that switches its own screen off when a display is
 added, turning on an in-game monitor keeps your screen on: Windows is asked to extend, and if it
-won't, the monitor doesn't turn on (no more black screen).
+won't, the monitor doesn't turn on (no more black screen). Should Windows switch your screen off
+later while monitors are on, it's switched back on the same way, or the monitors turn off.
 
 New in 0.15.42: music and videos on an in-game monitor no longer skip about a second at a song
 change or after a pause (the app stays turned down in Windows' mixer through the pause).
