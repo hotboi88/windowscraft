@@ -977,7 +977,18 @@ fn set_mode(added: &AddedMap, idx: i32, device: &str, w: u32, h: u32, hz: u32) -
     Err(format!("Windows didn't switch it to {w}×{h}"))
 }
 
-fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT, String> {
+fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String], real_before: &[String]) -> Result<RECT, String> {
+    // your own screens must stay on: some PCs (a laptop's single screen, most of all) switch to
+    // "show only on 2" when a display comes, and the built-in screen goes black ("my screen is
+    // black"). Windows is asked to extend instead; if it won't, the new monitor goes again.
+    if !still_lost(real_before, device).is_empty() {
+        extend_from(ours, device, real_before);
+        let lost = real_lost(real_before, device);
+        if !lost.is_empty() {
+            eprintln!("error=Windows switched {} off for the new monitor and wouldn't extend", lost.join(", "));
+            return Err("Windows switched your own screen off for the new monitor (Settings → System → Display: set it to \"Extend these displays\")".into());
+        }
+    }
     let all = monitors();
     let (mut right, mut bottom) = (i32::MIN, i32::MIN);
     let mut next_to: Option<RECT> = None;
@@ -1108,6 +1119,35 @@ fn place(device: &str, w: u32, h: u32, hz: u32, ours: &[String]) -> Result<RECT,
 /// before (it was off on purpose).
 fn extend_all(ours: &[String], device: &str) {
     let before: Vec<String> = monitors().into_iter().map(|(d, _)| d).collect();
+    extend_from(ours, device, &before);
+}
+
+/// Your screens that were on before the new monitor came and aren't now.
+fn real_lost(real_before: &[String], device: &str) -> Vec<String> {
+    let now: Vec<String> = monitors().into_iter().map(|(d, _)| d).collect();
+    real_before.iter().filter(|d| !d.eq_ignore_ascii_case(device) && !now.iter().any(|n| n.eq_ignore_ascii_case(d))).cloned().collect()
+}
+
+/// real_lost, for over a second (while Windows rearranges, a screen can drop out of its list for
+/// a moment and come straight back).
+fn still_lost(real_before: &[String], device: &str) -> Vec<String> {
+    let t0 = Instant::now();
+    loop {
+        let lost = real_lost(real_before, device);
+        if lost.is_empty() || t0.elapsed() > Duration::from_millis(1200) {
+            return lost;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Your screens that are on right now (not in-game monitors).
+fn real_screens(ours: &[String]) -> Vec<String> {
+    monitors().into_iter().map(|(d, _)| d).filter(|d| !ours.iter().any(|o| o.eq_ignore_ascii_case(d))).collect()
+}
+
+/// extend_all, with the screens that were on before (`before`) the ones kept on.
+fn extend_from(ours: &[String], device: &str, before: &[String]) {
     eprintln!("info=asking Windows to extend onto all screens (it didn't switch {device} on by itself)");
     let r = unsafe {
         windows::Win32::Devices::Display::SetDisplayConfig(None, None,
@@ -6282,6 +6322,10 @@ fn uninstaller_exe(cmd: &str) -> String {
 /// One new monitor, placed: the "added …" answer, or why not (and whether a fresh one may work).
 fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<String, (String, bool)> {
     remove_orphans(v, added);
+    let real_before = {
+        let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
+        real_screens(&ours)
+    };
     let spots = window_spots(); // (where every window was: see keep_windows_put)
     // (right after a monitor went away the driver is still busy with it: asking it for a new one
     // too soon can upset it — so a moment's rest first, and gentle retries)
@@ -6354,7 +6398,7 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
     }
     let Some(mut device) = device else { return give_back("Windows didn't show the new monitor".into()) };
     let ours: Vec<String> = added.lock().unwrap().values().map(|a| a.device.clone()).filter(|d| !d.is_empty()).collect();
-    let r = match place(&device, w, h, hz, &ours) {
+    let r = match place(&device, w, h, hz, &ours, &real_before) {
         Ok(r) => r,
         Err(why) => {
             // it may have moved to its real name meanwhile (and be on already)
@@ -6362,7 +6406,7 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
                 Some(d2) => {
                     eprintln!("info=the new monitor is {d2} now (not {device})");
                     device = d2;
-                    match place(&device, w, h, hz, &ours) {
+                    match place(&device, w, h, hz, &ours, &real_before) {
                         Ok(r) => r,
                         Err(why) => return give_back(why),
                     }
@@ -6384,6 +6428,14 @@ fn add_monitor(v: &Vdd, added: &AddedMap, w: u32, h: u32, hz: u32) -> Result<Str
         std::thread::sleep(Duration::from_millis(200));
         let listed = device_for_index(idx).map_or(false, |d| d.eq_ignore_ascii_case(&device));
         let placed_ = rect_of(&device).is_some();
+        let lost = still_lost(&real_before, &device);
+        if !lost.is_empty() {
+            extend_from(&ours, &device, &real_before);
+            if !real_lost(&real_before, &device).is_empty() {
+                eprintln!("error=Windows switched {} off right after the new monitor came on", lost.join(", "));
+                return give_back("Windows switched your own screen off for the new monitor (Settings → System → Display: set it to \"Extend these displays\")".into());
+            }
+        }
         if listed && placed_ {
             if missing_since.take().is_some() {
                 eprintln!("info=the new monitor {device} dropped out of Windows' list for a moment and came back");

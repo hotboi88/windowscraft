@@ -115,6 +115,20 @@ CPU BGRA conversion + 4 copies; hidden walls still decoded; mipmaps every frame 
 pulses; no keyframe cache; input tied to render frames / server thread; duplicate WGC captures;
 full FFmpeg restart on quality change; no guest relative mouse.
 
+## 0.15.43 (11 Nov): a laptop's own screen went black when a monitor came on
+
+- On the owner's laptop (one built-in screen, 150%, hybrid iGPU + dGPU, 0.15.40), U on a wall:
+  the driver added the monitor, then `arranged the in-game monitors: \.\DISPLAY7@0,0`. The
+  arranger starts off the real screens' bottom-right corner, so at 0,0 no real screen was on:
+  Windows had switched the built-in panel off for the new display ("show only on 2"). The overlap
+  guard had no real screen to compare with; everything moved onto the virtual display; the panel
+  went black. (Reported by the laptop's own Claude session, read-only.)
+- Now: `add_monitor` notes your real screens before asking the driver. `place` (and the watch
+  right after it comes on) checks they're all still on, for over a second (`still_lost`); if not,
+  it asks Windows to extend (`extend_from`, which keeps off only screens that were off before)
+  and, if a screen is still off, gives the monitor back with an error naming the Display setting.
+- Not tested on a laptop yet (CI has no screen that switches off).
+
 ## 0.15.42 (22 Oct): wc-audio 0.4.6, music skipping about a second
 
 - **"music keeps doing this thing where it does a 1 second skip"** (a boxed Brave on a monitor,
