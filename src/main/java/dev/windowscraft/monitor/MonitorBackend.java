@@ -34,6 +34,8 @@ public interface MonitorBackend {
         default void monitorGone(int index) {}
         /** The helper turned a monitor off to bring your own screen back (Windows had switched it off): it stays off. */
         default void monitorDark(int index) { monitorGone(index); }
+        /** Windows was set to show only your own screen ("PC screen only" or duplicate): the monitor went, and stays off. */
+        default void monitorYoursOnly(int index) { monitorGone(index); }
         /** An app running as administrator should go onto a monitor, but Windows won't let it be moved. */
         default void adminApp() {}
         /** Windows moved or renamed a monitor: look where they all are now. */

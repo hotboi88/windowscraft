@@ -975,18 +975,26 @@ public final class InGameMonitors {
                     + "Close it and open it again from the monitor (Task Manager: close the one on your desk first).", Formatting.YELLOW));
         }
 
-        @Override public void monitorGone(int index) { gone(index, true); }
+        @Override public void monitorGone(int index) { gone(index, null); }
 
-        @Override public void monitorDark(int index) { gone(index, false); }
+        @Override public void monitorDark(int index) {
+            gone(index, "Windows switched your own screen off for the in-game monitor, so the monitor is off again. "
+                    + "In Windows Settings → System → Display, choose \"Extend these displays\", then press U to try again.");
+        }
 
-        /** `revive`: Windows dropped it, so the wall gets a fresh one; otherwise it stays off. */
-        private void gone(int index, boolean revive) {
+        @Override public void monitorYoursOnly(int index) {
+            gone(index, "Windows is set to show only your own screen, so the in-game monitor turned off. Press U on it to turn it on again.");
+        }
+
+        /** `offWhy` null: Windows dropped it, so the wall gets a fresh one; otherwise it stays off, and you're told why. */
+        private void gone(int index, String offWhy) {
+            boolean revive = offWhy == null;
             onGame(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 for (Display d : List.copyOf(DisplayManager.get().all())) {
                     Mon m = monitorOf(d);
                     if (m == null || m.index() != index) continue;
-                    WindowsCraftClient.LOGGER.warn("In-game monitor {} ({}) went away{}", index, m.device(), revive ? " by itself; turning it on again" : ": turned off to bring your screen back");
+                    WindowsCraftClient.LOGGER.warn("In-game monitor {} ({}) went away{}", index, m.device(), revive ? " by itself; turning it on again" : ": left off (" + offWhy + ")");
                     if (seatedMon != null && seatedMon.index() == index) unseat();
                     if (pointMon != null && pointMon.index() == index) { pointMon = null; pointOn = null; pointMe = false; pointReady = false; }
                     SourceInfo src = d.share().source();
@@ -995,8 +1003,7 @@ public final class InGameMonitors {
                     MISSING_SINCE.remove(src.id());
                     DisplayManager.get().stop(d);
                     if (!revive) {
-                        say(mc, "Windows switched your own screen off for the in-game monitor, so the monitor is off again. "
-                                + "In Windows Settings → System → Display, choose \"Extend these displays\", then press U to try again.", Formatting.YELLOW);
+                        say(mc, offWhy, Formatting.YELLOW);
                         continue;
                     }
                     // the wall/monitor/tablet gets a fresh monitor of its own, as if you pressed U again

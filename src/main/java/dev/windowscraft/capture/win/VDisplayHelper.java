@@ -153,6 +153,7 @@ public final class VDisplayHelper implements MonitorBackend {
                 case "seatmove" -> e.seatMoved(Integer.parseInt(p[1]));
                 case "gone" -> {
                     if (p.length > 2 && p[2].equals("dark")) e.monitorDark(Integer.parseInt(p[1]));
+                    else if (p.length > 2 && p[2].equals("yours")) e.monitorYoursOnly(Integer.parseInt(p[1]));
                     else e.monitorGone(Integer.parseInt(p[1]));
                 }
                 case "adminapp" -> e.adminApp();

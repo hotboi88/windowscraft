@@ -1144,6 +1144,24 @@ fn real_screens() -> Vec<String> {
     monitors().into_iter().map(|(d, _)| d).filter(|d| !is_virtual(d)).collect()
 }
 
+/// Is Windows set to show only your own screen ("PC screen only") or to duplicate it?
+fn shown_only_yours() -> bool {
+    use windows::Win32::Devices::Display::*;
+    unsafe {
+        let (mut np, mut nm) = (0u32, 0u32);
+        if GetDisplayConfigBufferSizes(QDC_DATABASE_CURRENT, &mut np, &mut nm) != ERROR_SUCCESS {
+            return false;
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np.max(1) as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm.max(1) as usize];
+        let mut topo = DISPLAYCONFIG_TOPOLOGY_ID(0);
+        if QueryDisplayConfig(QDC_DATABASE_CURRENT, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), Some(&mut topo)) != ERROR_SUCCESS {
+            return false;
+        }
+        topo == DISPLAYCONFIG_TOPOLOGY_INTERNAL || topo == DISPLAYCONFIG_TOPOLOGY_CLONE
+    }
+}
+
 /// Is that display one of the in-game monitors' driver's?
 fn is_virtual(device: &str) -> bool {
     let name = wide(device);
@@ -5861,7 +5879,15 @@ fn main() {
                     // game would turn it off, and its apps would close
                     let switched_off = if listed { rect_of(&dev).is_none() } else { switched_off(i) };
                     let mut given_up = false;
-                    if switched_off {
+                    let mut yours_only = false;
+                    if switched_off && *off.get(&i).unwrap_or(&0) >= 2 && shown_only_yours() {
+                        // Windows shows only your own screen (Win + P → "PC screen only", or
+                        // duplicate): you chose that — it wins, the monitor goes and stays off
+                        off.remove(&i);
+                        missing.remove(&i);
+                        given_up = true;
+                        yours_only = true;
+                    } else if switched_off {
                         missing.remove(&i);
                         let n = off.entry(i).or_insert(0);
                         *n += 1;
@@ -5899,7 +5925,7 @@ fn main() {
                             // it's off, and so are its apps — before the game turns its wall on
                             // again (a fresh monitor, empty)
                             internal_command(&format!("lost {i} {since}"));
-                            emit(&format!("gone {i}"));
+                            emit(&format!("gone {i}{}", if yours_only { " yours" } else { "" }));
                         }
                     }
                 }

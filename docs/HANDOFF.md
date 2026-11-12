@@ -132,6 +132,11 @@ full FFmpeg restart on quality change; no guest relative mouse.
   off one of `REAL_BEFORE` or a virtual one; the watcher's monitors go with `gone <i> dark`, which
   the game leaves off with a message (`monitorDark`); an add that switched your screen off is
   given back without a retry.
+- Also (the laptop session ran `DisplaySwitch /internal` to get his screen back, and the helper
+  switched the monitor straight on again): when one of ours has been off for two looks and
+  Windows' current topology is INTERNAL or CLONE (`shown_only_yours`: "PC screen only" /
+  duplicate), the choice wins: the monitor goes with `gone <i> yours` and the game leaves it off,
+  saying why (`monitorYoursOnly`). U turns it on again.
 
 ## 0.15.43 (11 Nov): a laptop's own screen went black when a monitor came on
 
